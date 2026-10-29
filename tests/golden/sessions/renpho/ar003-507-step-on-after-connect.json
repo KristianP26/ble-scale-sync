@@ -1,12 +1,12 @@
 {
   "settled": {
     "by": "reading",
-    "atMs": 9000
+    "atMs": 9600
   },
   "reading": {
     "weight": 82.30000000000001,
     "impedance": 0,
-    "timestamp": "2026-10-28T10:53:30.000Z"
+    "timestamp": "2026-10-28T10:53:41.000Z"
   },
   "history": [],
   "subscribes": [
@@ -96,7 +96,7 @@
       "withResponse": true
     }
   ],
-  "rxDropped": 1,
+  "rxDropped": 0,
   "payload": {
     "weight": 82.3,
     "impedance": 0,

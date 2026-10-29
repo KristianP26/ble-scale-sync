@@ -13,6 +13,8 @@ import {
   AR003_ADVERT,
   AR003_ADVERT_NODE_BLE,
   AR003_CHARS,
+  AR003_COMPOSITION,
+  AR003_LIVE,
   AR003_MSD,
   AR003_SERVICES,
   AR003_WEIGH_IN,
@@ -20,6 +22,8 @@ import {
   ar003CharsWithout,
 } from '../helpers/renpho-a-r003.js';
 import { ADVERT_501 } from '../fixtures/qn/cs10g-501.js';
+import { session as ar003 } from '../fixtures/renpho/a-r003.js';
+import { replaySession } from '../helpers/replay/session.js';
 
 const CHR_WEIGHT = uuid16(0x2a9d);
 const CHR_BODYCOMP = uuid16(0x2a9c);
@@ -545,6 +549,49 @@ describe('RenphoScaleAdapter', () => {
       const a = makeAdapter();
       expect(a.isFinal({ weight: 80, impedance: 0 })).toBe(false);
       expect(a.isFinal({ weight: 80, impedance: 332.8 })).toBe(true);
+    });
+  });
+
+  // #507: the hold arms on the first weight above 0. On a step-on long after
+  // the connection the scale was still measuring (0x4E) when the 8 s ran out.
+  describe('isCompositionPending()', () => {
+    it('keeps the link through a step-on after the connection until the second packet', async () => {
+      const trace = ar003.traces['ar003-507-step-on-after-connect'];
+      const r = await replaySession(makeAdapter(), trace, ar003);
+      // t0 = 1000 ms: the hold ran out at t0 + 8.0 s, the second 0x2A9C packet lands at t0 + 8.6 s.
+      expect(r.settled).toEqual({ by: 'reading', atMs: 9600 });
+    });
+
+    it('is pending while the scale measures or reports final, and not once it is done', () => {
+      atAr003Time(() => {
+        const a = makeAdapter();
+        const send = (uuid: string, h: string) => a.parseCharNotification(uuid, hex(h));
+        send(CHR_WEIGHT, AR003_LIVE.settled);
+        expect(a.isCompositionPending()).toBe(false);
+        send(CHR_WEIGHT, AR003_LIVE.measuring);
+        expect(a.isCompositionPending()).toBe(true);
+        send(CHR_WEIGHT, AR003_WEIGH_IN.final);
+        expect(a.isCompositionPending()).toBe(true);
+        send(CHR_BODYCOMP, AR003_COMPOSITION.bcsPacket1);
+        expect(a.isCompositionPending()).toBe(true);
+        send(CHR_BODYCOMP, AR003_COMPOSITION.bcsPacket2);
+        expect(a.isCompositionPending()).toBe(false);
+        // The next weigh-in measures, then its weight moves again.
+        send(CHR_WEIGHT, AR003_LIVE.measuring);
+        expect(a.isCompositionPending()).toBe(true);
+        send(CHR_WEIGHT, AR003_LIVE.settled);
+        expect(a.isCompositionPending()).toBe(false);
+      });
+    });
+
+    it('is not pending once the user steps off while the scale measures', () => {
+      atAr003Time(() => {
+        const a = makeAdapter();
+        a.parseCharNotification(CHR_WEIGHT, hex(AR003_LIVE.measuring));
+        expect(a.isCompositionPending()).toBe(true);
+        a.parseCharNotification(CHR_WEIGHT, hex(AR003_LIVE.empty));
+        expect(a.isCompositionPending()).toBe(false);
+      });
     });
   });
 

@@ -162,7 +162,8 @@
       "onConnected",
       "onSessionStart",
       "parseCharNotification",
-      "isFinal"
+      "isFinal",
+      "isCompositionPending"
     ]
   },
   {

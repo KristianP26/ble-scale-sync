@@ -166,6 +166,13 @@ const SIG_FIELDS: ReadonlyArray<[number, number, 'impedance' | 'weight' | null]>
   [0x0800, 2, null], // height
 ];
 
+// 0x2A9D flags bits 6 and 5, RFU in the SIG spec. On the A-R003 (#507) the
+// scale sets bit 6 while it measures the body composition (0x4E, four to six
+// frames 0.5 s apart) and bit 5 on the final frame that echoes the profile
+// (0x2E); 0x0E frames come while the weight still moves.
+const FLAG_MEASURING = 0x40;
+const FLAG_FINAL = 0x20;
+
 // Body Composition Measurement flag bit 12: the measurement is split across
 // two packets, and the spec sets it in both (BCS 1.0, 3.2.1).
 const BCS_MULTIPLE_PACKET = 0x1000;
@@ -196,6 +203,8 @@ class RenphoSession {
   storedRecord: ScaleReading | null = null;
   /** The weigh-in's second 0x2A9C packet has arrived (parseVendorPacket). */
   compositionDone = false;
+  /** The last 0x2A9D said the scale is measuring (bit 6) or final (bit 5); see isCompositionPending. */
+  measuring = false;
 }
 
 export class RenphoScaleAdapter
@@ -223,6 +232,8 @@ export class RenphoScaleAdapter
 
   // Hold the link open briefly after the weight settles so the two
   // body-composition indications can land; the second ends the hold (isFinal).
+  // The hold arms on the first weight above 0, so a scale still measuring when
+  // it runs out extends it (isCompositionPending).
   readonly completionHoldMs = 8000;
 
   private s = new RenphoSession();
@@ -391,6 +402,9 @@ export class RenphoScaleAdapter
     const raw = data.readUInt16LE(1);
     let weight = raw * (imperial ? LB_PER_UNIT : KG_PER_UNIT);
     if (imperial) weight *= LB_TO_KG;
+    // Before the return below: a 0 kg frame is the user stepping off, and the
+    // hold must not wait for a composition that will not come.
+    this.s.measuring = weight > 0 && (flags & (FLAG_MEASURING | FLAG_FINAL)) !== 0;
     if (!(weight > 0) || !Number.isFinite(weight)) return;
     this.s.cachedWeight = weight;
     this.s.cachedImpedance = 0;
@@ -490,6 +504,17 @@ export class RenphoScaleAdapter
   /** Resolve once the body composition is in: an impedance, or the second 0x2A9C packet. */
   isFinal(reading: ScaleReading): boolean {
     return reading.impedance > 0 || this.s.compositionDone;
+  }
+
+  /**
+   * Whether the scale is still measuring when the hold runs out: its last
+   * 0x2A9D was a 0x4E or the final 0x2E and the second 0x2A9C packet has not
+   * arrived. The hold arms on the first weight above 0 (isComplete), and on a
+   * step-on after the connection the 8 s ran out between the sixth 0x4E and
+   * the final (#507). A 0x0E (the weight moves again) or a 0 kg frame ends it.
+   */
+  isCompositionPending(): boolean {
+    return this.s.measuring && !this.s.compositionDone;
   }
 
   computeMetrics(reading: ScaleReading, profile: UserProfile): BodyComposition {
