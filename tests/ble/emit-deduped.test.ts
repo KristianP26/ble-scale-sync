@@ -1,5 +1,6 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { DedupWindow, emitDeduped } from '../../src/ble/advertisement.js';
+import { bleLog } from '../../src/ble/types.js';
 import type { RawReading } from '../../src/ble/shared.js';
 
 const ADDR = 'AA:BB:CC:DD:EE:FF';
@@ -17,6 +18,10 @@ function raw(weight: number): RawReading {
  * dedup behaviour at all, so a regression in the other two would have passed CI.
  */
 describe('emitDeduped', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it('queues the first reading and reports that it did', () => {
     const queue = { push: vi.fn() };
     const emitted = emitDeduped(new DedupWindow(60_000), queue, ADDR, raw(80), 80);
@@ -72,5 +77,12 @@ describe('emitDeduped', () => {
       if (emitDeduped(dedup, queue, ADDR, raw(80), 80)) sideEffect();
     }
     expect(sideEffect).toHaveBeenCalledTimes(1);
+  });
+
+  it('logs the weight with two decimals', () => {
+    // 823 * 0.1 is 82.30000000000001 in floating point, and the log printed it as is.
+    const info = vi.spyOn(bleLog, 'info').mockImplementation(() => {});
+    emitDeduped(new DedupWindow(60_000), { push: vi.fn() }, ADDR, raw(823 * 0.1), 823 * 0.1);
+    expect(info).toHaveBeenCalledWith('Reading: 82.30 kg');
   });
 });

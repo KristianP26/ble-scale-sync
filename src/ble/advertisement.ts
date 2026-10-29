@@ -577,7 +577,7 @@ export function emitDeduped(
     return false;
   }
   bleLog.info(`Matched: ${raw.adapter.name} (${address})`);
-  bleLog.info(`Reading: ${weight} kg`);
+  bleLog.info(`Reading: ${weight.toFixed(2)} kg`);
   queue.push(raw);
   return true;
 }
