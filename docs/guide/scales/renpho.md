@@ -103,6 +103,17 @@ Without `rmsc04_profile_byte` that is expected; see [Use the scale's own body fa
 
 Some weigh-ins lose the connection about 5 seconds after it opened. The settled weight is still read, but that weigh-in gets no body composition from the scale. On Linux, [debug mode shows why the connection ended](/troubleshooting#connection-ended). Report the lines on [#434](https://github.com/KristianP26/ble-scale-sync/issues/434).
 
+### The R-MSC04 connects again about 30 seconds after a weigh-in
+
+With the host's own Bluetooth adapter, the next scan after [`scan_cooldown`](/guide/configuration#runtime) can find the scale still advertising and connect again. The scale hangs up without a reading, nothing is exported, and the log shows `Scale disconnected before reading completed`. To skip that connection, wait longer after a reading:
+
+```yaml
+runtime:
+  scan_cooldown: 60 # add-on: scan_cooldown
+```
+
+The log then shows `Waiting 60s before next scan...` after a reading. If the extra connection still happens, post the debug log of one weigh-in on [#434](https://github.com/KristianP26/ble-scale-sync/issues/434).
+
 ### An ES-CS20M connects but sends no weight
 
 Check that the log says `Matched adapter: ES-CS20M`. A broadcast-only ES-CS20M or one on the QN protocol is on [QN Scales](./qn). Otherwise open an issue with the debug log of one weigh-in.
