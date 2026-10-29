@@ -81,7 +81,7 @@ drivers/               bundled vendor BLE drivers and helper binaries
 
 Test frames must come from the real scale, copied byte for byte from a capture (btsnoop, PacketLogger) or from a `DEBUG=true` log of ble-scale-sync, which prints the frames it receives. A frame built from your own reading of the format only tests that reading. Edge cases such as a bad checksum can start from a real frame with a few bytes changed; say in the test which ones. A recorded session can also go in `tests/fixtures/<family>/`, where the contract tests in `tests/scales/contracts/` replay it. Include the capture or log in the pull request, or link the issue it comes from.
 
-The collision test keeps one representative advertisement for the generic adapter and for all 41 adapters with their own protocol, and fails when a new or widened `matches()` takes over another adapter's scale.
+The collision test keeps one representative advertisement for the generic adapter and for all 42 adapters with their own protocol, and fails when a new or widened `matches()` takes over another adapter's scale.
 
 A capture can contain your weight, profile and the device address. Use a made-up user (age, height, sex) in your config for the capture session. If you do not want to post it publicly, email it to security@blescalesync.dev and mention the pull request.
 

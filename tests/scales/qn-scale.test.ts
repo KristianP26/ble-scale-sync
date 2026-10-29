@@ -2,8 +2,10 @@ import { describe, it, expect, vi } from 'vitest';
 import { jieliAuthResponseFrame } from '../../src/scales/qn-scale/jieli-auth.js';
 import { QnScaleAdapter } from '../../src/scales/qn-scale/index.js';
 import {
+  buildA2Frame,
   buildConfig,
   buildMeasurementTrigger,
+  buildStoredDataQuery,
   buildTimeSync,
   buildUserProfileFrame,
   decodeStoredRecord,
@@ -209,6 +211,70 @@ const INFO_GE_235 = Buffer.from([
   0xe0, 0x6f, 0x2b, 0x3d,
 ]);
 
+/** #235, a live 0x10 from the GE CS 10 G vendor-app capture: 78.70 kg, user slot 1. */
+const LIVE_GE_235 = Buffer.from([
+  0x10, 0x14, 0x01, 0x00, 0x11, 0x1e, 0xbe, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x12,
+]);
+/** LIVE_GE_235 for user slot 2, as the #501 CS10G streams it: [2] 01 -> 02, [19] recomputed. */
+const LIVE_GE_SLOT2 = derive(LIVE_GE_235, { 2: 0x02 });
+
+/**
+ * #501, an Arboleaf CS10G on the 20-byte extended dialect, byte for byte from
+ * the public DEBUG log of its 23:33 session apart from the MAC (as for #461
+ * above): its 0x12, ready frame, config request and the refusal of openScale's
+ * profile frame for user slot 1.
+ */
+const INFO_501 = Buffer.from([
+  0x12, 0x14, 0xff, 0x01, 0x00, 0x00, 0x00, 0x00, 0x02, 0x0e, 0x0f, 0x4a, 0x00, 0x04, 0x05, 0x03,
+  0xe2, 0x6f, 0x3b, 0x27,
+]);
+const READY_501 = Buffer.from([
+  0x14, 0x0c, 0xff, 0x01, 0x00, 0x01, 0x0a, 0x02, 0x0d, 0x00, 0xfd, 0x37,
+]);
+const CONFIG_REQ_501 = Buffer.from([0x21, 0x07, 0xff, 0x01, 0x64, 0x2d, 0xb9]);
+const REFUSED_501 = Buffer.from([0xa1, 0x06, 0x02, 0x01, 0x00, 0xaa]);
+/** The CS10G's "no stored weigh-ins" of its 23:22 session, from the same log. */
+const NO_STORED_501 = Buffer.from([0x23, ...new Array<number>(18).fill(0), 0x23]);
+
+/**
+ * #501, an Arboleaf CS10G on the 20-byte extended dialect: the 0xB4 and the
+ * 0xB1 of its 23:38 session, byte for byte from the public DEBUG log. The 0xB4
+ * has [2] 03, which this dialect does not read, and no user ([4] f0); the
+ * 0xB1 is the result of user slot 2, 77.95 kg.
+ */
+const B4_501 = Buffer.from(
+  'b42d0301f00401544e7132501e000000000000000000000000000000000000000000000000000000000000008d',
+  'hex',
+);
+const B1_501 = Buffer.from(
+  'b12d030102731e9d0a7209af0a7e09bf09d20870098608aa0061005d0a3309730a4909510a2709240af308d485',
+  'hex',
+);
+
+/**
+ * #463, the Physiq's acceptance of the profile frame for user slot 1 and its
+ * stored record of 2026-10-13: 71.55 kg at 17:59:38Z, slot 1; the record's
+ * [16..17] zeroed, [19] recomputed.
+ */
+const VISIT_OK_463 = Buffer.from([0xa1, 0x06, 0x02, 0x01, 0x01, 0xab]);
+const RECORD_463 = Buffer.from([
+  0x23, 0x14, 0xff, 0x01, 0x01, 0x01, 0x0a, 0x2e, 0x61, 0x32, 0x1b, 0xf3, 0x10, 0xd9, 0x10, 0xfe,
+  0x00, 0x00, 0x00, 0x09,
+]);
+/**
+ * Answers and a record for user slot 2 (#501), derived: no 18-byte scale in
+ * the logs has a user in slot 2. ACCEPTED_SLOT2 is VISIT_OK_463 with [3] 02,
+ * byte for byte the CS10G's acceptance in the reporter's capture;
+ * REFUSED_SLOT2 is REFUSED_501 with [3] 02; RECORD_463_SLOT2 is RECORD_463
+ * with [5] 02.
+ */
+const ACCEPTED_SLOT2 = derive(VISIT_OK_463, { 3: 0x02 });
+/** VISIT_OK_463 with [3] 08, the last slot. */
+const ACCEPTED_SLOT8 = derive(VISIT_OK_463, { 3: 0x08 });
+const REFUSED_SLOT2 = derive(REFUSED_501, { 3: 0x02 });
+const RECORD_463_SLOT2 = derive(RECORD_463, { 5: 0x02 });
+
 /** Every derived frame: [name, frame, source, the indices changed on purpose]. */
 const DERIVED: [string, Buffer, Buffer, number[]][] = [
   ['CLASSIC_8450', CLASSIC_8450, STABLE_CLASSIC, [3, 4]],
@@ -222,6 +288,11 @@ const DERIVED: [string, Buffer, Buffer, number[]][] = [
   ['RECORD_283_131', RECORD_283_131, RECORD_283, [9, 10]],
   ['LIVE_253_2000', LIVE_253_2000, LIVE_253, [5, 6]],
   ['LIVE_253_NOT_ITS_LENGTH', LIVE_253_NOT_ITS_LENGTH, LIVE_253, [1]],
+  ['LIVE_GE_SLOT2', LIVE_GE_SLOT2, LIVE_GE_235, [2]],
+  ['ACCEPTED_SLOT2', ACCEPTED_SLOT2, VISIT_OK_463, [3]],
+  ['ACCEPTED_SLOT8', ACCEPTED_SLOT8, VISIT_OK_463, [3]],
+  ['REFUSED_SLOT2', REFUSED_SLOT2, REFUSED_501, [3]],
+  ['RECORD_463_SLOT2', RECORD_463_SLOT2, RECORD_463, [5]],
 ];
 
 /** Build a fake AABB broadcast buffer with the given weight and stability. */
@@ -1195,6 +1266,32 @@ describe('QnScaleAdapter', () => {
       });
     });
 
+    it('names the user slot of the result in its debug line (#501)', async () => {
+      const debug = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+      try {
+        const results = () =>
+          debug.mock.calls
+            .map((c) => String(c[0]))
+            .filter((l) => l.startsWith('QN: extended result'));
+        await atConnect3(async () => {
+          const adapter = await extendedAdapter();
+          // [2] 03 is not a 0xB4 this dialect reads: dropped without a reading.
+          expect(adapter.parseNotification(B4_501)).toBeNull();
+          expect(adapter.parseNotification(B1_501)).toEqual({ weight: 77.95, impedance: 0 });
+          const fresh = stampB4(B4_PREVIOUS_SESSION, scaleSeconds('2026-08-19T18:06:30.000Z'));
+          expect((await extendedAdapter()).parseNotification(fresh)?.weight).toBe(75.2);
+        });
+        expect(results()).toEqual([
+          'QN: extended result 0xb1 decoded 77.95kg, user slot 2 (impedance sweep not yet ' +
+            'calibrated, emitting weight-only) #235',
+          'QN: extended result 0xb4 decoded 75.2kg, user slot 1 (impedance sweep not yet ' +
+            'calibrated, emitting weight-only) #235',
+        ]);
+      } finally {
+        debug.mockRestore();
+      }
+    });
+
     it('does not decode result frames on a non-extended dialect', async () => {
       await atConnect3(async () => {
         const adapter = makeAdapter(); // no extended 0x12 seen -> classic dialect
@@ -2163,11 +2260,7 @@ describe('AE02 dispatch (#75, #235)', () => {
       0x10, 0x14, 0x01, 0x00, 0x11, 0x1d, 0xc4, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
       0x00, 0x00, 0x00, 0x00, 0x17,
     ]);
-    /** A live 0x10 from the GE CS 10 G vendor-app capture (#235): 78.70 kg. */
-    const GE_LIVE = Buffer.from([
-      0x10, 0x14, 0x01, 0x00, 0x11, 0x1e, 0xbe, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-      0x00, 0x00, 0x00, 0x00, 0x12,
-    ]);
+    const GE_LIVE = LIVE_GE_235;
     const arboleaf2a: HandshakeOptions = {
       ready: ARBOLEAF_2A_READY,
       configReq: ARBOLEAF_2A_CONFIG_REQ,
@@ -2759,10 +2852,8 @@ describe('AE02 dispatch (#75, #235)', () => {
         }
       });
 
-      it.each([
-        ['20-byte extended', makeExtendedScaleInfo()],
-        ['17-byte classic (#283)', INFO_283],
-      ])('changes nothing on the %s dialect', async (_name, info) => {
+      it('changes nothing on the 17-byte classic dialect (#283)', async () => {
+        const info = INFO_283;
         const debug = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
         try {
           const profile = defaultProfile({ age: 51, height: 182, lastKnownWeight: 76 });
@@ -2779,6 +2870,518 @@ describe('AE02 dispatch (#75, #235)', () => {
         } finally {
           debug.mockRestore();
         }
+      });
+
+      // #501: the CS10G app sends the profile frame with key 1000 on this
+      // dialect, no A2 at ready time, and its 0x22 and A2 only after the
+      // scale's answer to the profile frame.
+      describe('on the 20-byte extended dialect (#501)', () => {
+        const P180 = defaultProfile({ age: 40, height: 180, lastKnownWeight: 78 });
+        // 7800 = 0x1e78.
+        const ANCHOR_78 = [0xa2, 0x06, 0x01, 0x1e, 0x78, 0x3f];
+        const START = [0x22, 0x06, 0xff, 0x00, 0x03, 0x2a];
+
+        /** Every write with its time in ms from the connect, after each step's frame and advance. */
+        async function driveTimed(
+          adapter: QnScaleAdapter,
+          steps: Array<{ frame?: Buffer; advance: number }>,
+        ): Promise<{ at: number; data: number[] }[]> {
+          vi.useFakeTimers();
+          try {
+            const t0 = Date.now();
+            const writes: { at: number; data: number[] }[] = [];
+            const ctx = {
+              write: async (_uuid: string, data: Buffer | number[]) => {
+                writes.push({ at: Date.now() - t0, data: [...data] });
+              },
+              read: async () => Buffer.alloc(0),
+              subscribe: async () => {},
+              profile: P180,
+              deviceAddress: '',
+              availableChars: new Set<string>(),
+            } as unknown as ConnectionContext;
+            adapter.onSessionStart?.();
+            await adapter.onConnected(ctx);
+            for (const step of steps) {
+              if (step.frame) adapter.parseNotification(step.frame);
+              await vi.advanceTimersByTimeAsync(step.advance);
+            }
+            return writes;
+          } finally {
+            vi.useRealTimers();
+          }
+        }
+
+        const HANDSHAKE_501 = [
+          { frame: INFO_501, advance: 300 },
+          { frame: READY_501, advance: 300 },
+          { frame: CONFIG_REQ_501, advance: 500 },
+        ];
+        const fff2 = (w: { data: number[] }[]) =>
+          w.map((x) => x.data).filter((d) => d[0] !== 0x20 && d[0] !== 0xfe && d[0] !== 0x02);
+
+        it('sends the vendor profile frame without the ready-time A2', async () => {
+          const debug = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+          try {
+            const adapter = makeAdapter();
+            adapter.configure({ qnUserKey: 1000 });
+            const writes = await driveTimed(adapter, [
+              ...HANDSHAKE_501,
+              { frame: REFUSED_501, advance: 500 },
+            ]);
+            const visit = buildUserProfileFrame(40, 180, 'male', { key: 1000 });
+            expect(profileFrames(writes.map((w) => w.data))).toEqual([visit]);
+            expect(fff2(writes).filter((d) => d[0] !== 0x01)).toEqual([
+              [0x13, 0x09, 0xff, 0x01, 0x10, 0x00, 0x00, 0x00, 0x2c],
+              visit,
+              START,
+              ANCHOR_78,
+              ANCHOR_78,
+            ]);
+            const lines = debug.mock.calls.map((c) => String(c[0]));
+            expect(lines).toContain(
+              'QN: no A2 before START on the 20-byte dialect, as the vendor app ' +
+                '(ble.qn_user_key, #463)',
+            );
+            expect(lines).toContain(
+              'QN: A00D profile frame with key 1000, age 40, height 1800 mm, sex male, athlete ' +
+                'no (ble.qn_user_key, 20-byte dialect, #463)',
+            );
+            expect(lines.filter((l) => l.includes('is not used on this dialect'))).toEqual([]);
+          } finally {
+            debug.mockRestore();
+          }
+        });
+
+        it("sends START and the anchor pair on the scale's answer, not before", async () => {
+          const adapter = makeAdapter();
+          adapter.configure({ qnUserKey: 1000 });
+          const writes = await driveTimed(adapter, [
+            ...HANDSHAKE_501,
+            { frame: REFUSED_501, advance: 500 },
+          ]);
+          const visitAt = writes.find((w) => w.data[0] === 0xa0)!.at;
+          const answerAt = 1100;
+          // Nothing between the profile frame and the answer, 800 ms later.
+          expect(writes.filter((w) => w.at > visitAt && w.at < answerAt)).toEqual([]);
+          const after = writes.filter((w) => w.at >= answerAt);
+          expect(after).toEqual([
+            { at: answerAt, data: START },
+            { at: answerAt, data: ANCHOR_78 },
+            { at: answerAt + 150, data: ANCHOR_78 },
+          ]);
+        });
+
+        it('sends them VISIT_ANSWER_TIMEOUT_MS after the profile frame without an answer', async () => {
+          const debug = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+          try {
+            const adapter = makeAdapter();
+            adapter.configure({ qnUserKey: 1000 });
+            const writes = await driveTimed(adapter, [...HANDSHAKE_501, { advance: 1500 }]);
+            const visitAt = writes.find((w) => w.data[0] === 0xa0)!.at;
+            expect(writes.filter((w) => w.at > visitAt)).toEqual([
+              { at: visitAt + 1000, data: START },
+              { at: visitAt + 1000, data: ANCHOR_78 },
+              { at: visitAt + 1150, data: ANCHOR_78 },
+            ]);
+            expect(debug.mock.calls.map((c) => String(c[0]))).toContain(
+              'QN: no answer to the profile frame within 1000 ms, sending START and the weight ' +
+                'anchor anyway (ble.qn_user_key, #501)',
+            );
+          } finally {
+            debug.mockRestore();
+          }
+        });
+
+        it('drops the ready-time anchor of qn_weight_ack and keeps the pair after START', async () => {
+          const adapter = makeAdapter();
+          adapter.configure({ qnUserKey: 1000, qnWeightAck: true });
+          const writes = (
+            await driveTimed(adapter, [...HANDSHAKE_501, { frame: REFUSED_501, advance: 500 }])
+          ).map((w) => w.data);
+          expect(preStartA2(writes)).toEqual([]);
+          const startIndex = writes.findIndex((w) => w[0] === 0x22);
+          expect(writes.slice(startIndex + 1)).toEqual([ANCHOR_78, ANCHOR_78]);
+        });
+
+        // The wait for the answer spans a whole second, so a session that ends
+        // and reconnects inside it must not get this one's START or anchor.
+        it('does not hand a reconnected session the START held for the answer', async () => {
+          const adapter = makeAdapter();
+          adapter.configure({ qnUserKey: 1000 });
+          const makeCtx = (sink: number[][]): ConnectionContext =>
+            ({
+              write: async (_uuid: string, data: Buffer | number[]) => {
+                sink.push([...data]);
+              },
+              read: async () => Buffer.alloc(0),
+              subscribe: async () => {},
+              profile: P180,
+              deviceAddress: '',
+              availableChars: new Set<string>(),
+            }) as unknown as ConnectionContext;
+          vi.useFakeTimers();
+          try {
+            const first: number[][] = [];
+            const second: number[][] = [];
+            adapter.onSessionStart?.();
+            await adapter.onConnected(makeCtx(first));
+            for (const step of HANDSHAKE_501) {
+              adapter.parseNotification(step.frame);
+              await vi.advanceTimersByTimeAsync(step.advance);
+            }
+            // The profile frame is out, START waits for the answer.
+            expect(first.some((w) => w[0] === 0xa0)).toBe(true);
+            expect(first.some((w) => w[0] === 0x22)).toBe(false);
+            adapter.onSessionEnd!();
+            adapter.onSessionStart?.();
+            await adapter.onConnected(makeCtx(second));
+            // Past the 1 s wait, short of the new session's 2 s fallback.
+            await vi.advanceTimersByTimeAsync(1000);
+            expect(second.filter((w) => w[0] === 0x22 || w[0] === 0xa2)).toEqual([]);
+            expect(first.filter((w) => w[0] === 0x22 || w[0] === 0xa2)).toEqual([]);
+          } finally {
+            vi.useRealTimers();
+          }
+        });
+
+        it("keeps openScale's frames and their timing without the key", async () => {
+          const writes = await driveTimed(makeAdapter(), [
+            ...HANDSHAKE_501,
+            { frame: REFUSED_501, advance: 500 },
+          ]);
+          expect(profileFrames(writes.map((w) => w.data))).toEqual([OPENSCALE_PROFILE]);
+          expect(preStartA2(writes.map((w) => w.data))).toEqual([
+            [0xa2, 0x06, 0x01, 0x32, 0x28, 0x03],
+          ]);
+          const visitAt = writes.find((w) => w.data[0] === 0xa0)!.at;
+          expect(writes.find((w) => w.data[0] === 0x22)!.at).toBe(visitAt + 200);
+        });
+      });
+
+      // #501: the slot of the profile frame, and of every A2 and 0x22 of the
+      // session, on the 18-, 19- and 20-byte dialects with the key. Each call
+      // site that sends an A2 or a 0x22 has its own test.
+      describe('ble.qn_user_slot (#501)', () => {
+        const P180 = defaultProfile({ age: 40, height: 180, lastKnownWeight: 78 });
+        const VISIT_SLOT2 = buildUserProfileFrame(40, 180, 'male', { slot: 2, key: 1000 });
+        // 7800 = 0x1e78.
+        const TRIGGER_SLOT2 = [0xa2, 0x06, 0x02, 0x1e, 0x78, 0x40];
+        const START_SLOT2 = [0x22, 0x06, 0xff, 0x00, 0x05, 0x2c];
+        const HANDSHAKE_501 = [
+          { frame: INFO_501, advance: 300 },
+          { frame: READY_501, advance: 300 },
+          { frame: CONFIG_REQ_501, advance: 500 },
+        ];
+        const slotted = (o: AdapterRuntimeConfig = {}): QnScaleAdapter => {
+          const adapter = makeAdapter();
+          adapter.configure({ qnUserKey: 1000, qnUserSlot: 2, ...o });
+          return adapter;
+        };
+        /** A2 and 0x22 frames for slot 1: `a2 06 01 ..` and the mask `00 03`. */
+        const slotOne = (writes: number[][]): number[][] =>
+          writes.filter(
+            (w) => (w[0] === 0xa2 && w[2] === 0x01) || (w[0] === 0x22 && w[4] === 0x03),
+          );
+
+        it('sends the profile frame, START and the anchor pair for slot 2 on the 20-byte dialect', async () => {
+          const debug = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+          try {
+            const writes = await driveSteps(slotted(), P180, [
+              ...HANDSHAKE_501,
+              { frame: ACCEPTED_SLOT2, advance: 500 },
+            ]);
+            expect(profileFrames(writes)).toEqual([VISIT_SLOT2]);
+            const startIndex = writes.findIndex((w) => w[0] === 0x22);
+            expect(writes.slice(startIndex)).toEqual([START_SLOT2, TRIGGER_SLOT2, TRIGGER_SLOT2]);
+            expect(slotOne(writes)).toEqual([]);
+            const lines = debug.mock.calls.map((c) => String(c[0]));
+            expect(lines).toContain(
+              'QN: A00D profile frame with key 1000, user slot 2, age 40, height 1800 mm, sex ' +
+                'male, athlete no (ble.qn_user_key, 20-byte dialect, #463)',
+            );
+            expect(lines).toContain('QN: the scale accepted the profile for user slot 2 (#331)');
+            expect(lines).toContain(
+              'QN: extended-dialect measurement trigger sent, weight anchor 78.00 kg for user ' +
+                'slot 2 (#235, #75)',
+            );
+          } finally {
+            debug.mockRestore();
+          }
+        });
+
+        it('sets the mask bit of slot 8 in the high byte of the 0x22', async () => {
+          const writes = await driveSteps(slotted({ qnUserSlot: 8 }), P180, [
+            ...HANDSHAKE_501,
+            { frame: ACCEPTED_SLOT8, advance: 500 },
+          ]);
+          expect(profileFrames(writes).map((w) => w[3])).toEqual([0x08]);
+          expect(writes.filter((w) => w[0] === 0x22)).toEqual([
+            [0x22, 0x06, 0xff, 0x01, 0x01, 0x29],
+          ]);
+          expect(writes.filter((w) => w[0] === 0xa2).map((w) => w[2])).toEqual([0x08, 0x08]);
+        });
+
+        it('asks for slot 2 again in the re-query after an empty 0x23', async () => {
+          const writes = await driveSteps(slotted(), P180, [
+            ...HANDSHAKE_501,
+            { frame: ACCEPTED_SLOT2, advance: 500 },
+            { frame: NO_STORED_501, advance: 3500 },
+          ]);
+          expect(writes.filter((w) => w[0] === 0x22)).toEqual([START_SLOT2, START_SLOT2]);
+        });
+
+        it('sends the 0x22 on the acceptance for slot 2 on the 18-byte dialect', async () => {
+          const writes = await driveSteps(slotted(), P180, [
+            { frame: INFO_461, advance: 300 },
+            { frame: READY_461, advance: 300 },
+            { frame: CONFIG_REQ_461, advance: 210 },
+            { frame: ACCEPTED_SLOT2, advance: 1000 },
+          ]);
+          expect(profileFrames(writes).map((w) => w[3])).toEqual([0x02]);
+          // Proto 0x00 on the 18-byte dialect; once, on the acceptance.
+          expect(writes.filter((w) => w[0] === 0x22)).toEqual([
+            [0x22, 0x06, 0x00, 0x00, 0x05, 0x2d],
+          ]);
+        });
+
+        it('sends the anchor pair after START and the weight echo for slot 2 on the 18-byte dialect', async () => {
+          const writes = await driveSteps(slotted({ qnWeightAck: true }), P180, [
+            { frame: INFO_461, advance: 300 },
+            { frame: READY_461, advance: 300 },
+            { frame: CONFIG_REQ_461, advance: 1000 },
+            { frame: LIVE_253, advance: 100 },
+          ]);
+          const a2 = writes.filter((w) => w[0] === 0xa2);
+          // The pair, then the echo of the live frame's own weight (0x2120).
+          expect(a2).toEqual([TRIGGER_SLOT2, TRIGGER_SLOT2, [0xa2, 0x06, 0x02, 0x21, 0x20, 0xeb]]);
+          expect(slotOne(writes)).toEqual([]);
+        });
+
+        it('sends the profile frame, START and the anchor pair for slot 2 on the 19-byte dialect', async () => {
+          const writes = await driveSteps(
+            slotted({ qnWeightAck: true }),
+            defaultProfile({ age: 51, height: 182, lastKnownWeight: 74.05 }),
+            [
+              { frame: ARBOLEAF_2A_INFO, advance: 300 },
+              { frame: ARBOLEAF_2A_READY, advance: 300 },
+              { frame: ARBOLEAF_2A_CONFIG_REQ, advance: 1000 },
+            ],
+          );
+          expect(profileFrames(writes)).toEqual([
+            buildUserProfileFrame(51, 182, 'male', { slot: 2, key: 1000 }),
+          ]);
+          const startIndex = writes.findIndex((w) => w[0] === 0x22);
+          // ANCHOR_2A for slot 2.
+          const anchor = [0xa2, 0x06, 0x02, 0x1c, 0xed, 0xb3];
+          expect(writes.slice(startIndex)).toEqual([START_SLOT2, anchor, anchor]);
+          expect(slotOne(writes)).toEqual([]);
+        });
+
+        // The fallback's ready step sent nothing for a slot and left the
+        // sequence undecided, so a 0x12 before its config request gets the
+        // vendor sequence for slot 2, not openScale's frame for slot 1.
+        it('sends the profile frame for slot 2 when the 0x12 comes after a fallback ready', async () => {
+          const writes = await driveSteps(slotted(), P180, [
+            { advance: 2701 },
+            { frame: INFO_501, advance: 3000 },
+          ]);
+          expect(profileFrames(writes)).toEqual([VISIT_SLOT2]);
+          const startIndex = writes.findIndex((w) => w[0] === 0x22);
+          expect(writes.slice(startIndex)).toEqual([START_SLOT2, TRIGGER_SLOT2, TRIGGER_SLOT2]);
+          expect(slotOne(writes)).toEqual([]);
+        });
+
+        // Without a 0x12 every frame this session could send for a slot is
+        // openScale's, for slot 1; the CS10G took that A2 in such a session.
+        /** Every frame that names a user slot: A00D, A2, A4 and 0x22. */
+        const slotFrames = (writes: number[][]): number[][] =>
+          writes.filter((w) => [0xa0, 0xa2, 0xa4, 0x22].includes(w[0]));
+        const HOLD_LINE =
+          'QN: no frame for a user slot until a scale-info frame (0x12) names the dialect: no ' +
+          'ready-time A2, no profile frame or START on the config request, no weight echo or ' +
+          're-query. ble.qn_user_slot is 2, and without a 0x12 they would be for user slot 1 ' +
+          '(#501)';
+
+        it.each<[string, AdapterRuntimeConfig, Array<{ frame?: Buffer; advance: number }>]>([
+          ['the fallback', {}, [{ advance: 6000 }]],
+          [
+            'the 0x14 and 0x21',
+            {},
+            [
+              { frame: READY_501, advance: 300 },
+              { frame: CONFIG_REQ_501, advance: 6000 },
+            ],
+          ],
+          [
+            'the fallback, with qn_report_byte, qn_weight_ack and qn_a4_prelude',
+            { qnReportByte: 252, qnWeightAck: true, qnA4Prelude: true },
+            [{ advance: 6000 }],
+          ],
+        ])(
+          'sends no frame for a user slot without a 0x12, the handshake driven by %s',
+          async (_name, o, steps) => {
+            const debug = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+            try {
+              const writes = await driveSteps(slotted(o), P180, steps);
+              expect(slotFrames(writes)).toEqual([]);
+              // AE01 init, 0x13, 0x20 and `pass` still go out.
+              expect(writes.filter((w) => w[0] === 0xfe)).toHaveLength(1);
+              expect(writes.some((w) => w[0] === 0x13)).toBe(true);
+              expect(writes.some((w) => w[0] === 0x20)).toBe(true);
+              expect(writes).toContainEqual([0x02, 0x70, 0x61, 0x73, 0x73]);
+              const lines = debug.mock.calls.map((c) => String(c[0]));
+              expect(lines.filter((l) => l === HOLD_LINE)).toHaveLength(1);
+              expect(lines).toContain(
+                'QN: config request: not sending the profile frame until a 0x12 (#501)',
+              );
+            } finally {
+              debug.mockRestore();
+            }
+          },
+        );
+
+        // The skipped step is not marked as sent, so a 0x21 after a late 0x12
+        // still runs it, for slot 2.
+        it('runs the config-request step on a 0x21 that comes after a late 0x12', async () => {
+          const writes = await driveSteps(slotted(), P180, [
+            { advance: 3500 },
+            { frame: INFO_501, advance: 300 },
+            { frame: CONFIG_REQ_501, advance: 300 },
+            { frame: ACCEPTED_SLOT2, advance: 500 },
+          ]);
+          expect(profileFrames(writes)).toEqual([VISIT_SLOT2]);
+          const startIndex = writes.findIndex((w) => w[0] === 0x22);
+          expect(writes.slice(startIndex)).toEqual([START_SLOT2, TRIGGER_SLOT2, TRIGGER_SLOT2]);
+          expect(slotFrames(writes.slice(0, startIndex))).toEqual([VISIT_SLOT2]);
+        });
+
+        it('sends no weight echo before a 0x12', async () => {
+          const writes = await driveSteps(slotted({ qnWeightAck: true }), P180, [
+            { frame: LIVE_253, advance: 100 },
+          ]);
+          expect(writes.filter((w) => w[0] === 0xa2)).toEqual([]);
+          expect(writes.filter((w) => w[0] === 0x1f)).toHaveLength(1);
+        });
+
+        it('sends no stored-data re-query before a 0x12', async () => {
+          const writes = await driveSteps(slotted(), P180, [
+            { frame: NO_STORED_501, advance: 3500 },
+          ]);
+          expect(writes.filter((w) => w[0] === 0x22)).toEqual([]);
+        });
+
+        it('keeps the fallback frames of slot 1 when set to 1', async () => {
+          const steps = [{ advance: 6000 }];
+          const one = await driveSteps(slotted({ qnUserSlot: 1 }), P180, steps);
+          const keyOnly = makeAdapter();
+          keyOnly.configure({ qnUserKey: 1000 });
+          const plain = await driveSteps(keyOnly, P180, steps);
+          expect(profileFrames(one)).toEqual([OPENSCALE_PROFILE]);
+          expect(one.filter((w) => w[0] !== 0x20)).toEqual(plain.filter((w) => w[0] !== 0x20));
+        });
+
+        it('sends openScale frames for slot 1 after a classic 0x12', async () => {
+          const writes = await driveSteps(slotted(), P180, [
+            { frame: INFO_CLASSIC, advance: 300 },
+            { frame: READY_501, advance: 300 },
+            { frame: CONFIG_REQ_501, advance: 1000 },
+          ]);
+          expect(profileFrames(writes)).toEqual([OPENSCALE_PROFILE]);
+          expect(writes.filter((w) => w[0] === 0xa2 && w[2] === 0x01)).toHaveLength(1);
+          expect(writes.filter((w) => w[0] === 0x22 && w[4] === 0x03)).toHaveLength(1);
+        });
+
+        it('is ignored with one warning without ble.qn_user_key', async () => {
+          const warn = vi.spyOn(bleLog, 'warn').mockImplementation(() => {});
+          try {
+            const adapter = makeAdapter();
+            adapter.configure({ qnUserSlot: 2 });
+            expect(warn.mock.calls.map((c) => String(c[0]))).toEqual([
+              'QN: ble.qn_user_slot is set (2) without ble.qn_user_key, so it is ignored and ' +
+                'the profile frame goes to user slot 1. Set ble.qn_user_key too (#501).',
+            ]);
+            const steps = [...HANDSHAKE_501, { frame: REFUSED_501, advance: 500 }];
+            const writes = await driveSteps(adapter, P180, steps);
+            const plain = await driveSteps(makeAdapter(), P180, steps);
+            expect(writes.filter((w) => w[0] !== 0x20)).toEqual(plain.filter((w) => w[0] !== 0x20));
+          } finally {
+            warn.mockRestore();
+          }
+        });
+
+        it('does not send the A4 prelude, which writes slot 1, for another slot', async () => {
+          const warn = vi.spyOn(bleLog, 'warn').mockImplementation(() => {});
+          try {
+            const adapter = slotted({ qnA4Prelude: true });
+            expect(warn.mock.calls.map((c) => String(c[0]))).toEqual([
+              'QN: ble.qn_a4_prelude is not sent with ble.qn_user_slot 2: its frames write user ' +
+                'slot 1 (#501).',
+            ]);
+            const writes = await driveSteps(adapter, P180, [
+              ...HANDSHAKE_501,
+              { frame: ACCEPTED_SLOT2, advance: 1000 },
+            ]);
+            expect(writes.filter((w) => w[0] === 0xa4)).toEqual([]);
+            // Slot 1 itself gets it as before.
+            const one = await driveSteps(slotted({ qnUserSlot: 1, qnA4Prelude: true }), P180, [
+              ...HANDSHAKE_501,
+              { frame: VISIT_OK_463, advance: 1000 },
+            ]);
+            expect(one.filter((w) => w[0] === 0xa4)).toHaveLength(2);
+          } finally {
+            warn.mockRestore();
+          }
+        });
+
+        it('warns when ble.qn_report_byte deletes the slot of ble.qn_user_slot', () => {
+          const warn = vi.spyOn(bleLog, 'warn').mockImplementation(() => {});
+          const lines = () =>
+            warn.mock.calls.map((c) => String(c[0])).filter((l) => l.includes('qn_user_slot'));
+          try {
+            // 252 deletes slots 3 to 8.
+            slotted({ qnUserSlot: 3, qnReportByte: 252 });
+            expect(lines()).toEqual([
+              'QN: ble.qn_report_byte 252 selects user slot 3, the slot of ble.qn_user_slot, so ' +
+                'every QN session deletes that user from the scale before it sends the profile ' +
+                'frame (#461, #501).',
+            ]);
+            warn.mockClear();
+            slotted({ qnUserSlot: 2, qnReportByte: 252 });
+            expect(lines()).toEqual([]);
+          } finally {
+            warn.mockRestore();
+          }
+        });
+
+        it('names both options when the scale refuses the profile for the slot', async () => {
+          const info = vi.spyOn(bleLog, 'info').mockImplementation(() => {});
+          try {
+            await driveSteps(slotted(), P180, [
+              ...HANDSHAKE_501,
+              { frame: REFUSED_SLOT2, advance: 500 },
+            ]);
+            expect(
+              info.mock.calls.map((c) => String(c[0])).filter((l) => l.includes('refused')),
+            ).toEqual([
+              'QN: the scale refused the profile frame sent with ble.qn_user_key 1000 for user ' +
+                'slot 2. Most likely the vendor app set up that slot with another key, or never ' +
+                'set it up. Check ble.qn_user_key and ble.qn_user_slot, and that the first user ' +
+                "in config.yaml is the vendor app's user in that slot (#463, #501).",
+            ]);
+          } finally {
+            info.mockRestore();
+          }
+        });
+
+        it('keeps every frame of slot 1 when set to 1', async () => {
+          const steps = [...HANDSHAKE_501, { frame: VISIT_OK_463, advance: 500 }];
+          const one = await driveSteps(slotted({ qnUserSlot: 1 }), P180, steps);
+          const keyOnly = makeAdapter();
+          keyOnly.configure({ qnUserKey: 1000 });
+          const plain = await driveSteps(keyOnly, P180, steps);
+          expect(one.filter((w) => w[0] !== 0x20)).toEqual(plain.filter((w) => w[0] !== 0x20));
+        });
       });
 
       it('changes nothing on the fallback handshake without a 0x12', async () => {
@@ -3341,6 +3944,29 @@ describe('AE02 dispatch (#75, #235)', () => {
       expect(adapter.parseNotification(GE_LIVE)).toBeNull();
       await Promise.resolve();
       expect(writes.slice(before).filter((w) => w[0] === 0xa2)).toEqual([]);
+    });
+
+    // [2] of the extended dialect's 20-byte live frame is the user slot (#501).
+    it.each([
+      ['user slot 1', GE_LIVE, 'QN: 20-byte live frame, weight 78.7 kg at [5..6], user slot 1, '],
+      [
+        'user slot 2',
+        LIVE_GE_SLOT2,
+        'QN: 20-byte live frame, weight 78.7 kg at [5..6], user slot 2, ',
+      ],
+    ])('names the %s of an extended 20-byte live frame', async (_name, frame, start) => {
+      const debug = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+      try {
+        const adapter = makeAdapter();
+        await driveHandshake(adapter, makeExtendedScaleInfo());
+        expect(adapter.parseNotification(frame)).toBeNull();
+        const lines = debug.mock.calls
+          .map((c) => String(c[0]))
+          .filter((l) => l.startsWith('QN: 20-byte live frame'));
+        expect(lines).toEqual([start + 'not echoed and not yet decoded (#331)']);
+      } finally {
+        debug.mockRestore();
+      }
     });
 
     // The original layout reads [5] as its stability byte, which in this shape
@@ -4020,6 +4646,10 @@ describe('QN per-session reset ordering (#406)', () => {
       'sessionGeneration',
       'sessionStartedScaleSeconds',
       'ae01Chain',
+      // The answer to this session's profile frame (#501): a fresh promise and
+      // its resolver.
+      'visitAnswered',
+      'answerVisit',
       // Keyed by reading object; an earlier session's reading is never handed
       // back, so there is nothing to clear (#331).
       'provisionalReadings',
@@ -4131,6 +4761,39 @@ describe('buildUserProfileFrame (#331)', () => {
     expect(buildUserProfileFrame(26, 193, 'male', { athlete: false })).toEqual(ge);
     expect(buildUserProfileFrame(26, 193, 'male', { athlete: true })).toEqual([
       0xa0, 0x0d, 0x02, 0x01, 0x03, 0xe8, 0x00, 0x1a, 0x07, 0x8a, 0x0e, 0x02, 0x56,
+    ]);
+  });
+});
+
+// #501: the user slot of the A2, 0x22 and profile frames. Slot 1 is every
+// frame captured before #501; slot 2 is the Arboleaf CS10G app's, whose
+// `22 06 ff 00 05 2c` is in the reporter's capture. Every other slot is
+// derived from the vendor's published SDK.
+describe('user slot of the frame builders (#501)', () => {
+  it('keeps the slot-1 frames when no slot is given', () => {
+    expect(buildStoredDataQuery(0xff)).toEqual([0x22, 0x06, 0xff, 0x00, 0x03, 0x2a]);
+    expect(buildStoredDataQuery(0xff, 1)).toEqual(buildStoredDataQuery(0xff));
+    expect(buildA2Frame(0x1ced)).toEqual([0xa2, 0x06, 0x01, 0x1c, 0xed, 0xb2]);
+    expect(buildMeasurementTrigger(74.05, 1)).toEqual(buildMeasurementTrigger(74.05));
+    expect(buildUserProfileFrame(51, 182, 'male', { slot: 1 })).toEqual(
+      buildUserProfileFrame(51, 182),
+    );
+  });
+
+  it('asks the scale for slot 2 with the mask `00 05`, as the CS10G app does', () => {
+    expect(buildStoredDataQuery(0xff, 2)).toEqual([0x22, 0x06, 0xff, 0x00, 0x05, 0x2c]);
+  });
+
+  it('sets the mask bit of slot 8 in the high byte', () => {
+    expect(buildStoredDataQuery(0xff, 8)).toEqual([0x22, 0x06, 0xff, 0x01, 0x01, 0x29]);
+    expect(buildStoredDataQuery(0x00, 8)).toEqual([0x22, 0x06, 0x00, 0x01, 0x01, 0x2a]);
+  });
+
+  it('puts the slot at [2] of an A2 frame and [3] of the profile frame', () => {
+    expect(buildMeasurementTrigger(74.05, 2)).toEqual([0xa2, 0x06, 0x02, 0x1c, 0xed, 0xb3]);
+    expect(buildA2Frame(0x1ced, 8)).toEqual([0xa2, 0x06, 0x08, 0x1c, 0xed, 0xb9]);
+    expect(buildUserProfileFrame(51, 182, 'male', { slot: 2 })).toEqual([
+      0xa0, 0x0d, 0x02, 0x02, 0x03, 0xe8, 0x00, 0x33, 0x07, 0x1c, 0x04, 0x02, 0xf8,
     ]);
   });
 });
@@ -4563,14 +5226,8 @@ describe('QN stored record and impedance (#461)', () => {
       0x12, 0x12, 0xff, 0x01, 0x00, 0x00, 0x00, 0x00, 0x02, 0x13, 0x07, 0x16, 0x00, 0x01, 0x05,
       0x9f, 0x32, 0x2d,
     ]);
-    const VISIT_OK_463 = Buffer.from([0xa1, 0x06, 0x02, 0x01, 0x01, 0xab]);
     const MEASURING_463 = Buffer.from([
       0x10, 0x0f, 0xff, 0x01, 0x01, 0x1b, 0xf8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x33,
-    ]);
-    /** 71.55 kg at 2026-10-13T17:59:38Z, slot 1; [16..17] zeroed, [19] recomputed. */
-    const RECORD_463 = Buffer.from([
-      0x23, 0x14, 0xff, 0x01, 0x01, 0x01, 0x0a, 0x2e, 0x61, 0x32, 0x1b, 0xf3, 0x10, 0xd9, 0x10,
-      0xfe, 0x00, 0x00, 0x00, 0x09,
     ]);
     /** The live result after it, 71.60 kg / 507 Ohm; [11..12] zeroed, [14] recomputed. */
     const LIVE_463 = Buffer.from([
@@ -4989,15 +5646,11 @@ describe('QN stored record and impedance (#461)', () => {
       });
 
       it('does not export a record of another user slot', async () => {
-        // RECORD_463 with its slot [5] set to 2 and the checksum [19]
-        // recomputed: no real record of slot 2 exists, the 0x22 mask asks for
-        // slot 1 and unassigned records only.
-        const slot2 = Buffer.from(RECORD_463);
-        slot2[5] = 2;
-        slot2[19] = [...slot2.subarray(0, 19)].reduce((a, b) => a + b, 0) & 0xff;
+        // No real record of slot 2 exists; the 0x22 mask asks for slot 1 and
+        // unassigned records only.
         const { readings, lines } = await session(
           keyed(),
-          [...HANDSHAKE, slot2],
+          [...HANDSHAKE, RECORD_463_SLOT2],
           '2026-10-13T18:09:00Z',
         );
         expect(readings).toEqual([]);
@@ -5006,6 +5659,68 @@ describe('QN stored record and impedance (#461)', () => {
             'scale assigned it to its user slot 2, and ble-scale-sync sends the profile of ' +
             'slot 1 (#463)',
         );
+      });
+
+      describe('with ble.qn_user_slot (#501)', () => {
+        const SLOT2_HANDSHAKE: Step[] = [INFO_463, READY_461, CONFIG_REQ_461, ACCEPTED_SLOT2, 1000];
+        const slotted = (): QnScaleAdapter => {
+          const adapter = makeAdapter();
+          adapter.configure({ qnUserKey: 1000, qnUserSlot: 2 });
+          return adapter;
+        };
+
+        it('reports a record of that slot as history', async () => {
+          const { readings, lines } = await session(
+            slotted(),
+            [...SLOT2_HANDSHAKE, RECORD_463_SLOT2],
+            '2026-10-13T18:09:00Z',
+          );
+          expect(readings).toEqual([STORED]);
+          expect(lines).toContain(
+            'QN: stored weigh-in 71.55 kg at 2026-10-13T17:59:38.000Z, user slot 2, record 1 ' +
+              'of 1, reported as history (#463)',
+          );
+        });
+
+        it('does not export a record of slot 1', async () => {
+          const { readings, lines } = await session(
+            slotted(),
+            [...SLOT2_HANDSHAKE, RECORD_463],
+            '2026-10-13T18:09:00Z',
+          );
+          expect(readings).toEqual([]);
+          expect(lines).toContain(
+            'QN: a stored weigh-in (71.55 kg at 2026-10-13T17:59:38.000Z) is not exported: the ' +
+              'scale assigned it to its user slot 1, and ble-scale-sync sends the profile of ' +
+              'slot 2 (#463)',
+          );
+        });
+
+        it('does not hold a live weigh-in when the scale accepted another slot', async () => {
+          const adapter = slotted();
+          const { readings, lines } = await session(
+            adapter,
+            [INFO_463, READY_461, CONFIG_REQ_461, 350, VISIT_OK_463, 1000, MEASURING_463, LIVE_463],
+            STARTED_463,
+          );
+          expect(readings).toHaveLength(1);
+          expect(adapter.isFinal(readings[0])).toBe(true);
+          expect(lines.some((l) => l.startsWith('QN: holding the weigh-in'))).toBe(false);
+        });
+
+        it('does not export it when the scale accepted another slot than the one sent', async () => {
+          const { readings, lines } = await session(
+            slotted(),
+            [INFO_463, READY_461, CONFIG_REQ_461, VISIT_OK_463, 1000, RECORD_463_SLOT2],
+            '2026-10-13T18:09:00Z',
+          );
+          expect(readings).toEqual([]);
+          expect(lines).toContain(
+            'QN: a stored weigh-in (71.55 kg at 2026-10-13T17:59:38.000Z) is not exported: the ' +
+              'scale did not accept the profile for user slot 2 in this session, so it is not ' +
+              'known whose it is (#463)',
+          );
+        });
       });
 
       it('does not export it when the scale refused the profile in this session', async () => {

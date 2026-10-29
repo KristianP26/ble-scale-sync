@@ -64,18 +64,34 @@ export class QnSession {
   /**
    * The vendor-app profile sequence: no ready-time A2, and the A00D #2 profile
    * frame from the first user's profile. Sent on the 19-byte dialect with
-   * `ble.qn_weight_ack` (#331, D033), and on the 18- and 19-byte dialects with
-   * `ble.qn_user_key` (#463, D055).
+   * `ble.qn_weight_ack` (#331, D033), on the 18- and 19-byte dialects with
+   * `ble.qn_user_key` (#463, D055), and with it on the 20-byte extended one
+   * too, where the 0x22 START and the weight anchor wait for the scale's
+   * answer to the profile frame (`visitAnswered`, #501).
    * Decided once, by whichever of the ready step and the config-request step
    * runs first, from the 0x12 seen at that point, so the ready-time A2 and the
    * A00D #2 profile frame always come from the same choice. A 0x12 that
    * arrives later (after a fallback handshake) does not change it. Null until
-   * decided.
+   * decided. With `ble.qn_user_slot` on a slot other than 1 nothing decides it
+   * before a 0x12 (holdsSlotFrames, #501).
    */
   appProfileSequence: boolean | null = null;
 
+  /**
+   * Settled by the scale's answer to the profile frame, `a1 06 02 ..`, whatever
+   * it says (`answerVisit`, from onProfileAnswer). The extended dialect's
+   * vendor sequence waits for it before its 0x22 START (#501).
+   */
+  answerVisit: () => void = () => {};
+  readonly visitAnswered = new Promise<void>((resolve) => {
+    this.answerVisit = resolve;
+  });
+
   /** One "refused the profile sent with ble.qn_user_key" line per session (#463). */
   visitRefusedLogged = false;
+
+  /** One "no frame for a user slot until a 0x12" line per session (#501). */
+  slotFramesHeldLogged = false;
 
   /** One anchor-fallback warning per session, reset in onConnected. */
   anchorFallbackWarned = false;
@@ -105,6 +121,20 @@ export class QnSession {
   live20C15: Buffer | null = null;
   visitSent: { slot: number; frame: readonly number[] } | null = null;
   visitReply: { slot: number; ok: boolean } | null = null;
+
+  /** The user slot of the profile frame this session sent, 1 if none (`ble.qn_user_slot`, #501). */
+  get profileSlot(): number {
+    return this.visitSent?.slot ?? 1;
+  }
+
+  /** The scale accepted the profile frame this session sent, for its slot (#501). */
+  get visitAccepted(): boolean {
+    return (
+      this.visitSent !== null &&
+      this.visitReply?.ok === true &&
+      this.visitReply.slot === this.visitSent.slot
+    );
+  }
   readyValueType: number | null = null;
   measuredAfterVisit = false;
   a4PreludeSent = false;

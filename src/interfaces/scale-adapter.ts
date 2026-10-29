@@ -276,7 +276,10 @@ export interface ConnectionContext {
   scaleAuth?: ScaleAuth;
   /**
    * Device identifier used by adapters that derive keys from MAC (e.g. Eufy T9148/T9149).
-   * Uppercase, no separators. Empty string when unavailable (e.g. macOS CoreBluetooth UUID).
+   * Uppercase, no separators. Not always a MAC: on macOS the noble transport hands over
+   * the CoreBluetooth peripheral UUID (32 hex digits) instead, since CoreBluetooth does
+   * not reveal the address. An adapter that needs the MAC checks it with
+   * `ownAddressBytes()` (match-descriptor.ts) and treats anything else as unknown.
    */
   deviceAddress: string;
   /**

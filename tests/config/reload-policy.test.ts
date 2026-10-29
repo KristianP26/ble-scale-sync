@@ -51,6 +51,7 @@ const HOT_RELOADABLE = [
   'ble.qn_report_byte',
   'ble.qn_weight_ack',
   'ble.qn_user_key',
+  'ble.qn_user_slot',
   'ble.qn_a4_prelude',
   'ble.qn_time_sync_long',
   'ble.qn_config_long',

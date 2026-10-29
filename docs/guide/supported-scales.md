@@ -5,7 +5,7 @@ description: Every BLE smart scale brand and model BLE Scale Sync reads, how to 
 
 # Supported Scales
 
-BLE Scale Sync has **41 protocol adapters**, plus a catch-all for any scale that follows the Bluetooth weight-scale specification. Most adapters cover several rebrands.
+BLE Scale Sync has **42 protocol adapters**, plus a catch-all for any scale that follows the Bluetooth weight-scale specification. Most adapters cover several rebrands.
 
 ## Scale List
 
@@ -25,7 +25,8 @@ _Weight only_ means the weight is read and body composition is estimated from BM
 | Renpho ES-CS20M / ES-32MD / Elis 1 / FITINDEX / Sencor (QN-Scale)      | Yes              | The most common protocol; see [QN Scales](./scales/qn) |
 | Arboleaf (QN-Scale, 19-byte dialect)                                   | Yes              | Uses the body composition the scale computes; see [QN Scales](./scales/qn) |
 | Renpho ES-CS20M on service 0x1A10                                      | Yes              | See [Renpho Scales](./scales/renpho) |
-| Renpho ES-WBE28                                                        | Yes              | Standard GATT variant |
+| Renpho ES-WBE28                                                        | Weight only      | Standard GATT variant |
+| Renpho A-R003                                                          | Weight only      | Experimental; advertises no name, so it needs `ble.scale_mac` on the default Linux transport and on macOS |
 | Renpho ES-26BB-B                                                       | Yes              |       |
 | Renpho R-MSC04 (MorphoScan Nova)                                       | Weight only      | The scale's own body fat with `ble.rmsc04_profile_byte`; see [Renpho Scales](./scales/renpho) |
 | 1byone / Eufy C1 / P1                                                  | Yes              |       |
@@ -39,6 +40,7 @@ _Weight only_ means the weight is read and body composition is estimated from BM
 | Sanitas SBF72 / SBF73                                                  | Yes              | Needs user slot 1 in the vendor app |
 | Beurer BF720 / BF105 / BF500 / BF788 / BF915 / BF950                   | Yes              | Needs `users[].beurer_pin` and a bonded link; see [Beurer and Sanitas](./scales/beurer) |
 | A&D UC-352BLE                                                          | Weight only      | Experimental; Linux (BlueZ) only, needs `ble.scale_mac` and a one-time pairing |
+| Huawei CH100 / AH100                                                   | Yes              | Experimental; not on macOS; see [Known Limitations](#huawei-ch100-ah100) |
 | Soehnle Shape200 / Shape100 / Shape50 / Style100                       | Yes              | Needs user slot 1 in the vendor app |
 | Medisana BS430 / BS440 / BS444                                         | Yes              |       |
 | Active Era BS-06 and other `AC 27` scales                              | Yes              | Detected by manufacturer id `0x27AC`; wake it before stepping on |
@@ -157,6 +159,10 @@ Experimental. Linux built-in Bluetooth only, with `ble.scale_mac` set. The scale
 If it does not pair, pair it by hand while the scale shows `Pr`: run `bluetoothctl`, then `agent on`, `default-agent`, `scan on`, `pair <MAC>` and `trust <MAC>`.
 
 In Docker set `TZ`: the scale's clock is set to the host's local time. Report results with a `runtime.debug: true` log on [#408](https://github.com/KristianP26/ble-scale-sync/issues/408).
+
+### Huawei CH100 / AH100
+
+Experimental. The scale encrypts every frame with its Bluetooth address, which macOS does not reveal, so read it from Linux, Windows, an [ESPHome proxy](/guide/esphome-proxy) or the [ESP32 proxy](/guide/esp32-proxy). If the log says `the scale refused this host`, bind the scale once with openScale as its first user, then weigh in again. Each connection sends the first user's profile to the scale. Its body fat is used for a user with that sex, age and height, and estimated for everyone else. Report results with a debug log on [#503](https://github.com/KristianP26/ble-scale-sync/issues/503).
 
 ### Active Era BS-06 and other `AC 27` scales
 

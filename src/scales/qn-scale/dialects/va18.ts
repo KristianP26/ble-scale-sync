@@ -98,11 +98,12 @@ export function readsUnscrambledWithoutAdvert(q: QnScaleAdapter, raw: number): b
  * The window used to drop it without a line, and in #463 the scale did not
  * send it again, not even to the vendor app, so the weigh-in was lost.
  *
- * Reported as history with its own time (`fromMemory`), for user slot 1 and
- * for a record the scale assigned to no user (0xf0), with
- * `ble.qn_user_key`, in a session in which the scale accepted the profile
- * built from the first user with that key (not openScale's fallback one).
- * Slot 1 is then the first configured user, as the option documents. A
+ * Reported as history with its own time (`fromMemory`), for the user slot of
+ * the profile frame (1, or `ble.qn_user_slot`, #501) and for a record the
+ * scale assigned to no user (0xf0), with `ble.qn_user_key`, in a session in
+ * which the scale accepted the profile built from the first user with that
+ * key (not openScale's fallback one) for that slot. That slot is then the
+ * first configured user, as the option documents. A
  * record kept for no user names no slot, so its `userIndex` stays unset and
  * the runtime attributes it by its weight like any stored record without
  * one (D027). Both of the unit's offline weigh-ins of 2026-10-20 were kept
@@ -125,14 +126,16 @@ export function eighteenByteStoredWeighIn(
   const atMs = (recordSeconds + SCALE_EPOCH_OFFSET) * 1000;
   const what = `${weight} kg at ${new Date(atMs).toISOString()}`;
   const slot = data[5];
-  // No user on the scale (0xf0): exported too, under the same gates as slot 1
-  // (#463, D072). It names no user slot, so userIndex stays unset and the
-  // runtime attributes it by its weight like any stored record without one.
+  // No user on the scale (0xf0): exported too, under the same gates as the
+  // profile's slot (#463, D072). It names no user slot, so userIndex stays
+  // unset and the runtime attributes it by its weight like any stored record
+  // without one.
   const unassigned = slot === STORED_UNASSIGNED_SLOT;
-  if (!unassigned && slot !== 1) {
+  const own = q.s.profileSlot;
+  if (!unassigned && slot !== own) {
     bleLog.info(
       `QN: a stored weigh-in (${what}) is not exported: the scale assigned it to its user ` +
-        `slot ${slot}, and ble-scale-sync sends the profile of slot 1 (#463)`,
+        `slot ${slot}, and ble-scale-sync sends the profile of slot ${own} (#463)`,
     );
     return null;
   }
@@ -148,8 +151,8 @@ export function eighteenByteStoredWeighIn(
     return null;
   }
   // A refused profile means the key or the first user does not match what
-  // the vendor app set up, so slot 1 need not be the first configured user.
-  // The profile frame always goes to slot 1, so the answer is for slot 1.
+  // the vendor app set up, so the slot need not be the first configured user.
+  // The answer has to be for the slot the profile frame went to (#501).
   // It has to be the frame built from the first user with the key, too: a
   // 0x12 that came after the handshake leaves the session on openScale's
   // constant profile (key 8), which a scale may accept for a slot 1 that
@@ -170,14 +173,14 @@ export function eighteenByteStoredWeighIn(
     );
     return null;
   }
-  if (q.s.visitReply?.ok !== true) {
+  if (!q.s.visitAccepted) {
     bleLog.info(
       unassigned
         ? `QN: a stored weigh-in (${what}, assigned to no user) is not exported: the scale ` +
-            'did not accept the profile for user slot 1 in this session, and a stored ' +
+            `did not accept the profile for user slot ${own} in this session, and a stored ` +
             'weigh-in goes out only in a connection in which it has (#463)'
         : `QN: a stored weigh-in (${what}) is not exported: the scale did not accept the ` +
-            'profile for user slot 1 in this session, so it is not known whose it is (#463)',
+            `profile for user slot ${own} in this session, so it is not known whose it is (#463)`,
     );
     return null;
   }
@@ -224,8 +227,7 @@ export function waitsForStoredAnswer(q: QnScaleAdapter): boolean {
   return (
     q.s.kind === 'va18' &&
     q.opts.userKey !== null &&
-    q.s.visitSent !== null &&
-    q.s.visitReply?.ok === true &&
+    q.s.visitAccepted &&
     !q.s.storedAnswerLast &&
     !q.s.storedAnswerDone
   );

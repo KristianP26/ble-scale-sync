@@ -292,11 +292,11 @@ global_exporters:
     format: csv
 ```
 
-A CSV file gets a header row on the first write; JSONL gets one JSON object per line. In Docker, put the file on a mounted volume (for example `scale-data:/app/data` and `file_path: './data/measurements.csv'`), or it is lost when the container is re-created.
+A CSV file gets a header row on the first write; JSONL gets one JSON object per line. In Docker, a relative `file_path` is relative to `/app`. Put the file in a mounted host directory, or it is lost when the container is re-created: create it first with UID 1000 as owner (`mkdir data && sudo chown 1000:1000 data`), mount it with `-v ./data:/app/data` and set `file_path: './data/measurements.csv'`.
 
 ## Strava {#strava}
 
-Updates the weight in your Strava athlete profile. Requires a Strava API application.
+Updates the weight in your Strava athlete profile. Requires a Strava API application, which works only while the account that owns it has a Strava subscription; without one, the healthcheck and every update fail with HTTP 403.
 
 | Field           | Required | Default           | Description                                                                      |
 | --------------- | -------- | ----------------- | -------------------------------------------------------------------------------- |

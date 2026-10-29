@@ -423,6 +423,20 @@ describe('BleSchema', () => {
     }
   });
 
+  it('accepts ble.qn_user_slot from 1 to 8 and keeps the value', () => {
+    for (const slot of [1, 2, 8, null]) {
+      const result = BleSchema.safeParse({ qn_user_slot: slot });
+      expect(result.success).toBe(true);
+      expect(result.data?.qn_user_slot).toBe(slot);
+    }
+  });
+
+  it('rejects a ble.qn_user_slot outside 1 to 8 or not an integer', () => {
+    for (const slot of [0, 9, 255, 1.5, -1, '2']) {
+      expect(BleSchema.safeParse({ qn_user_slot: slot }).success).toBe(false);
+    }
+  });
+
   // Kept through the parse, like qn_user_key above (#331).
   it('accepts ble.qn_result_ack as a boolean or null and keeps the value', () => {
     for (const value of [true, false, null]) {

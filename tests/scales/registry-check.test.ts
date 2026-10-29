@@ -138,6 +138,25 @@ describe('registry-check structural guard (#182)', () => {
     ).toBe(true);
   });
 
+  // #507: the nameless A-R003 has 0xFFF2 and no 0xFFF4, Inlife's
+  // characteristic claim, so Inlife above Renpho would take it after discovery.
+  it('flags Inlife outranking Renpho ES-WBE28', () => {
+    const reg = [
+      fake('Inlife', 245, { custom: true }),
+      fake('Renpho ES-WBE28', 240, { custom: true }),
+      new StandardGattScaleAdapter(),
+    ];
+    const { errors } = checkRegistryIntegrity(reg);
+    expect(
+      errors.some(
+        (e) =>
+          e.includes('Ordering invariant violated') &&
+          e.includes('"Renpho ES-WBE28"') &&
+          e.includes('"Inlife"'),
+      ),
+    ).toBe(true);
+  });
+
   it('flags a registered adapter that lacks a match descriptor', () => {
     const reg = [{ name: 'NoMatch' } as unknown as ScaleAdapter, new StandardGattScaleAdapter()];
     const { errors } = checkRegistryIntegrity(reg);

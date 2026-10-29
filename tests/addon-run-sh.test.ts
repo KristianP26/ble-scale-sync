@@ -310,6 +310,26 @@ describe('add-on option no_reading_rescan_delay (#475)', () => {
   });
 });
 
+// A text option like qn_user_key, so that unset stays unset (#501).
+describe('add-on option qn_user_slot', () => {
+  it('is an add-on option, unset by default, validated as text', () => {
+    const { schema } = parse(lf(readFileSync('ble-scale-sync-addon/config.yaml', 'utf8'))) as {
+      schema: Record<string, unknown>;
+    };
+    expect(MANIFEST.options).toHaveProperty('qn_user_slot', '');
+    expect(schema).toHaveProperty('qn_user_slot', 'str?');
+    expect(TRANSLATIONS.configuration).toHaveProperty('qn_user_slot');
+  });
+
+  it('is named as ignored in custom config mode', () => {
+    expect(customConfigBranch()).toMatch(/for _qn in [^;]*\bqn_user_slot\b[^;]*; do/);
+  });
+
+  it('opens the ble block on its own', () => {
+    expect(RUN_SH).toMatch(/\[ -n "\$QN_USER_SLOT" \] \|\|/);
+  });
+});
+
 // A text option like the other QN switches, so that unset stays unset (#331).
 describe('add-on option qn_result_ack', () => {
   it('is an add-on option, unset by default, validated as text', () => {

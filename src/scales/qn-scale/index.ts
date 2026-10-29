@@ -52,6 +52,7 @@ import {
   TRIGGER_REPEATS,
   TRIGGER_WEIGHT_FALLBACK_KG,
   VENDOR_APP_USER_KEY,
+  VISIT_ANSWER_TIMEOUT_MS,
   VISIT_ATHLETE_MIN_AGE,
   WEIGHT_CERTAIN_MAX_KG,
   WEIGHT_CERTAIN_MIN_KG,
@@ -115,6 +116,7 @@ function qnOptions(o: QnRuntimeOptions) {
     reportByte: o.qnReportByte ?? null,
     weightAck: o.qnWeightAck ?? null,
     userKey: o.qnUserKey ?? null,
+    userSlot: o.qnUserSlot ?? null,
     a4Prelude: o.qnA4Prelude === true,
     configLong: o.qnConfigLong === true,
     timeSyncLong: o.qnTimeSyncLong === true,
@@ -177,15 +179,65 @@ export class QnScaleAdapter
 
   /** Whether the 0x12 seen so far and the options call for the vendor-app profile sequence. */
   private wantsAppProfileSequence(): boolean {
+    const { kind } = this.s;
     return (
-      (this.opts.weightAck === true && this.s.kind === 'va19') ||
-      (this.opts.userKey !== null && (this.s.kind === 'va18' || this.s.kind === 'va19'))
+      (this.opts.weightAck === true && kind === 'va19') ||
+      (this.opts.userKey !== null && (kind === 'va18' || kind === 'va19' || kind === 'ext20'))
     );
   }
 
   /** Length of the 0x12 the vendor-app profile sequence was chosen for, for the log. */
   private dialectBytes(): number {
-    return this.s.kind === 'va18' ? 18 : 19;
+    return this.s.kind === 'va18' ? 18 : this.s.kind === 'va19' ? 19 : 20;
+  }
+
+  /**
+   * `ble.qn_user_slot`, when it applies: with `ble.qn_user_key`, on a dialect
+   * the key applies to (#501). Null otherwise, and the frames go to slot 1.
+   */
+  private configuredSlot(): number | null {
+    const { kind } = this.s;
+    if (this.opts.userKey === null || this.opts.userSlot === null) return null;
+    return kind === 'va18' || kind === 'va19' || kind === 'ext20' ? this.opts.userSlot : null;
+  }
+
+  /**
+   * The user slot every A2 and 0x22 of this session is for: `ble.qn_user_slot`
+   * while it applies, which covers the weight echo before the profile frame;
+   * else the slot of the profile frame sent, else 1 (#501). Before a 0x12 none
+   * of these goes out with the option on another slot (holdsSlotFrames).
+   */
+  private writeSlot(): number {
+    return this.configuredSlot() ?? this.s.visitSent?.slot ?? 1;
+  }
+
+  /** ` for user slot N` for a debug line while `ble.qn_user_slot` applies, '' otherwise. */
+  private slotNote(): string {
+    return this.configuredSlot() === null ? '' : ` for user slot ${this.writeSlot()}`;
+  }
+
+  /**
+   * Whether the frames that name a user slot (every A2, the A00D frames, the
+   * 0x22, the A4 prelude) are not sent: with ble.qn_user_key and
+   * ble.qn_user_slot on a slot other than 1, until a 0x12 names the dialect.
+   * Before one the option may not apply (not on the classic dialect), and the
+   * frames this session could send are openScale's, for slot 1, not the
+   * configured user's: the CS10G took that A2 in a session without a 0x12 (#501).
+   */
+  private holdsSlotFrames(): boolean {
+    const slot = this.opts.userSlot;
+    if (this.opts.userKey === null || slot === null || slot === 1) return false;
+    if (this.s.kind !== 'unknown') return false;
+    if (!this.s.slotFramesHeldLogged) {
+      this.s.slotFramesHeldLogged = true;
+      bleLog.debug(
+        'QN: no frame for a user slot until a scale-info frame (0x12) names the dialect: no ' +
+          'ready-time A2, no profile frame or START on the config request, no weight echo or ' +
+          `re-query. ble.qn_user_slot is ${slot}, and without a 0x12 they would be for user ` +
+          'slot 1 (#501)',
+      );
+    }
+    return true;
   }
 
   /**
@@ -240,6 +292,28 @@ export class QnScaleAdapter
           'the frame that deletes the user slots its bits select on the scale. Remove the ' +
           'setting unless your scale stopped reporting without it (#461).',
       );
+    }
+    const slot = this.opts.userSlot;
+    if (slot !== null && this.opts.userKey === null) {
+      bleLog.warn(
+        `QN: ble.qn_user_slot is set (${slot}) without ble.qn_user_key, so it is ignored ` +
+          'and the profile frame goes to user slot 1. Set ble.qn_user_key too (#501).',
+      );
+    } else if (slot !== null) {
+      // Bit i-1 of the mask deletes slot i (USER_DELETE_SUBCOMMAND).
+      if (this.opts.reportByte !== null && (this.opts.reportByte >> (slot - 1)) & 1) {
+        bleLog.warn(
+          `QN: ble.qn_report_byte ${this.opts.reportByte} selects user slot ${slot}, the ` +
+            'slot of ble.qn_user_slot, so every QN session deletes that user from the scale ' +
+            'before it sends the profile frame (#461, #501).',
+        );
+      }
+      if (this.opts.a4Prelude && slot !== 1) {
+        bleLog.warn(
+          `QN: ble.qn_a4_prelude is not sent with ble.qn_user_slot ${slot}: its frames write ` +
+            'user slot 1 (#501).',
+        );
+      }
     }
     this.userWeights = opts.userWeights ?? [];
   }
@@ -396,7 +470,9 @@ export class QnScaleAdapter
 
   /**
    * Fallback handshake for Linux node-ble where 0x12 may be lost.
-   * Sends AE01 init first, then the full handshake sequence.
+   * Sends AE01 init first, then the full handshake sequence. With
+   * ble.qn_user_slot on a slot other than 1 that is only the frames without a
+   * user slot (holdsSlotFrames, #501).
    */
   private async runFallbackHandshake(): Promise<void> {
     if (!this.ctx) return;
@@ -730,6 +806,7 @@ export class QnScaleAdapter
     if (data[0] !== 0xa1 || data.length !== 6 || data[1] !== 0x06 || data[2] !== 0x02) return;
     if (!hasValidSumChecksum(data)) return;
     this.s.visitReply = { slot: data[3], ok: data[4] === 0x01 };
+    this.s.answerVisit();
     if (this.s.visitReply.ok && this.s.visitAcceptedAtMs === null) {
       this.s.visitAcceptedAtMs = Date.now();
     }
@@ -744,10 +821,9 @@ export class QnScaleAdapter
     // the first user with the key, as the export of a stored weigh-in
     // needs it; the handshake then skips its 0x22.
     if (
-      this.s.visitReply.ok &&
+      this.s.visitAccepted &&
       this.s.kind === 'va18' &&
       this.opts.userKey !== null &&
-      this.s.visitSent !== null &&
       this.s.storedQuerySentAtMs === null
     ) {
       bleLog.debug(
@@ -755,7 +831,7 @@ export class QnScaleAdapter
           'the vendor app does (#463)',
       );
       this.s.storedQuerySentAtMs = Date.now();
-      void this.writeCmd(buildStoredDataQuery(this.s.seenProtocolType));
+      void this.writeCmd(buildStoredDataQuery(this.s.seenProtocolType, this.writeSlot()));
     }
     // Only a frame sent with the option gets this: an install without it
     // sees the same log as before (#463). Info, not a warning, because the
@@ -773,8 +849,12 @@ export class QnScaleAdapter
       bleLog.info(
         `QN: the scale refused the profile frame sent with ble.qn_user_key ${sentKey} ` +
           `for user slot ${data[3]}. Most likely the vendor app set up that slot with ` +
-          'another key, or never set it up. Check ble.qn_user_key, and that the first ' +
-          'user in config.yaml is the first user in the vendor app (#463).',
+          'another key, or never set it up. ' +
+          (this.configuredSlot() === null
+            ? 'Check ble.qn_user_key, and that the first user in config.yaml is the first ' +
+              'user in the vendor app (#463).'
+            : 'Check ble.qn_user_key and ble.qn_user_slot, and that the first user in ' +
+              "config.yaml is the vendor app's user in that slot (#463, #501)."),
       );
     }
   }
@@ -852,12 +932,15 @@ export class QnScaleAdapter
     // 19-byte dialect decodes it in its handler. Elsewhere its [4] 0x11 puts it
     // in the original layout, which reads 0x0011, and whether the GE frame
     // shares the Arboleaf status and part bytes is not known, so it is logged
-    // once per session with the weight where the captures put it.
+    // once per session with the weight where the captures put it. On the
+    // extended dialect [2] is the user slot, as on the 19-byte one: the CS10G
+    // streams `10 14 02 ..` for the user its app registered in slot 2 (#501).
     const twentyByteLive = data.length === 20 && data[1] === 0x14;
     if (twentyByteLive && !this.s.twentyByteFrameLogged) {
       this.s.twentyByteFrameLogged = true;
       bleLog.debug(
         `QN: 20-byte live frame, weight ${data.readUInt16BE(5) / 100} kg at [5..6], ` +
+          (this.s.kind === 'ext20' ? `user slot ${data[2]}, ` : '') +
           'not echoed and not yet decoded (#331)',
       );
     }
@@ -875,8 +958,8 @@ export class QnScaleAdapter
     // 20-byte frame: through the original layout it handed the scale 0.17 kg on
     // every frame, and the 19-byte dialect writes nothing back (#331). Sent
     // before the stability gate, fire and forget, like the 0x1F stable ACK below.
-    if (this.weightAckEnabled() && this.ctx && !twentyByteLive) {
-      void this.writeCmd(buildA2Frame(rawWeight));
+    if (this.weightAckEnabled() && this.ctx && !twentyByteLive && !this.holdsSlotFrames()) {
+      void this.writeCmd(buildA2Frame(rawWeight, this.writeSlot()));
     }
 
     if (!stable) return null;
@@ -1174,13 +1257,16 @@ export class QnScaleAdapter
 
   /**
    * Respond to 0x14 (ready) with 0x20 time sync + A2 user profile + AE01 auth.
-   * No A2 under the vendor-app profile sequence (see appProfileSequence).
+   * No A2 under the vendor-app profile sequence (see appProfileSequence), nor
+   * while the frames for a user slot are held (holdsSlotFrames), which also
+   * leaves the sequence undecided.
    */
   private async handleReady(): Promise<void> {
     if (this.s.timeSyncSent) return;
     this.s.timeSyncSent = true;
     const gen = this.sessionGeneration;
-    const appProfile = this.decideAppProfileSequence();
+    const held = this.holdsSlotFrames();
+    const appProfile = !held && this.decideAppProfileSequence();
     // 0x20 time sync: seconds since 2000-01-01, little-endian. See
     // TIME_SYNC_TRAILER for the 9-byte form and why it is opt-in. Its extra
     // byte is the host's UTC offset now, daylight saving included.
@@ -1202,7 +1288,11 @@ export class QnScaleAdapter
     // `0x32 <age>` puts that at over 128 kg (#331, #75). Kept by default: every
     // QN scale in the registry reads with it today. Not sent at all under the
     // vendor-app profile sequence: neither the Arboleaf nor the Feelfit app
-    // sends an A2 before START (D033, #463).
+    // sends an A2 before START (D033, #463), and the CS10G app sends none at
+    // ready time (#501). On the extended dialect that drops the ready-time
+    // anchor of `ble.qn_weight_ack` too; its anchor pair follows START. Nor
+    // before a 0x12 with ble.qn_user_slot on another slot: this A2 is for
+    // slot 1 (holdsSlotFrames, #501).
     if (appProfile) {
       bleLog.debug(
         this.opts.userKey === null
@@ -1211,7 +1301,7 @@ export class QnScaleAdapter
           : `QN: no A2 before START on the ${this.dialectBytes()}-byte dialect, as the ` +
               'vendor app (ble.qn_user_key, #463)',
       );
-    } else if (this.ctx) {
+    } else if (this.ctx && !held) {
       // The anchor goes here ONLY on the 20-byte extended dialect. Everywhere
       // else `handleConfigRequest` sends it twice right after START instead,
       // which is where both Android captures of the Arboleaf app put it (#331,
@@ -1236,9 +1326,18 @@ export class QnScaleAdapter
     await this.writeAe01([0x02, 0x70, 0x61, 0x73, 0x73]);
   }
 
-  /** Respond to 0x21 (config request) with the A00D profile frame + 0x22 start measurement. */
+  /**
+   * Respond to 0x21 (config request) with the A00D profile frame + 0x22 start
+   * measurement. Skipped whole while the frames for a user slot are held
+   * (holdsSlotFrames); left unsent, the step still runs on a 0x21 that comes
+   * after a 0x12 in the same session.
+   */
   private async handleConfigRequest(): Promise<void> {
     if (this.s.historyResponseSent) return;
+    if (this.holdsSlotFrames()) {
+      bleLog.debug('QN: config request: not sending the profile frame until a 0x12 (#501)');
+      return;
+    }
     this.s.historyResponseSent = true;
     const appProfile = this.decideAppProfileSequence();
     // See sessionGeneration. The whole sequence spans several timers, and
@@ -1269,9 +1368,9 @@ export class QnScaleAdapter
     // age 33, 1720 mm) everywhere except the vendor-app profile sequence, which
     // gets the first user's age, height and sex the way the vendor apps send
     // them: the 19-byte dialect with `ble.qn_weight_ack` (#331, D033), and the
-    // 18- and 19-byte ones with `ble.qn_user_key`, which also sets the user key
-    // at [4..5] (#463, D055). The athlete step in [10] is the Feelfit app's on
-    // the 18-byte dialect only; see VISIT_ALGORITHM.
+    // 18-, 19- and 20-byte ones with `ble.qn_user_key`, which also sets the user
+    // key at [4..5] (#463, D055, #501). The athlete step in [10] is the Feelfit
+    // app's on the 18-byte dialect only; see VISIT_ALGORITHM.
     let msg2 = withChecksum([
       0xa0, 0x0d, 0x02, 0x01, 0x00, 0x08, 0x00, 0x21, 0x06, 0xb8, 0x04, 0x02,
     ]);
@@ -1280,29 +1379,55 @@ export class QnScaleAdapter
       const key = this.opts.userKey ?? VENDOR_APP_USER_KEY;
       const athlete =
         this.s.kind === 'va18' && profile.isAthlete && profile.age >= VISIT_ATHLETE_MIN_AGE;
-      msg2 = buildUserProfileFrame(profile.age, profile.height, profile.gender, { key, athlete });
+      const slot = this.configuredSlot() ?? 1;
+      msg2 = buildUserProfileFrame(profile.age, profile.height, profile.gender, {
+        slot,
+        key,
+        athlete,
+      });
       this.s.visitSent = { slot: msg2[3], frame: msg2 };
       const sent =
         `age ${msg2[7]}, height ${(msg2[8] << 8) | msg2[9]} mm, ` +
         `sex ${msg2[6] === 0x01 ? 'female' : 'male'}`;
+      // The slot is named only with ble.qn_user_slot, so a slot-1 line reads
+      // as it always has.
+      const slotPart = this.configuredSlot() === null ? '' : `user slot ${slot}, `;
       bleLog.debug(
         this.opts.userKey === null
           ? `QN: A00D profile frame with ${sent} (ble.qn_weight_ack, 19-byte dialect, #331)`
-          : `QN: A00D profile frame with key ${key}, ${sent}, athlete ${athlete ? 'yes' : 'no'} ` +
-              `(ble.qn_user_key, ${this.dialectBytes()}-byte dialect, #463)`,
+          : `QN: A00D profile frame with key ${key}, ${slotPart}${sent}, athlete ` +
+              `${athlete ? 'yes' : 'no'} (ble.qn_user_key, ${this.dialectBytes()}-byte dialect, #463)`,
       );
     } else if (!appProfile && this.opts.userKey !== null && !this.wantsAppProfileSequence()) {
-      // An 18- or 19-byte 0x12 that came after the decision has its own line
-      // in parseNotification, so this one is only for a dialect without it.
+      // A 0x12 of 18 bytes or longer that came after the decision has its own
+      // line in onScaleInfo, so this one is only for a dialect without it.
       bleLog.debug(
         "QN: ble.qn_user_key is not used on this dialect, sending openScale's profile frame " +
-          '(18- and 19-byte scale-info frames only, #463)',
+          '(18-, 19- and 20-byte scale-info frames only, #463)',
       );
     }
     await this.writeCmd(msg2);
 
-    await wait(200);
-    if (!live()) return;
+    // The extended dialect's vendor sequence sends its START and anchor only
+    // once the scale has answered the profile frame, as the CS10G app does
+    // (#501) and the 18-byte dialect does with its 0x22 (D065). An answer that
+    // never comes holds them for VISIT_ANSWER_TIMEOUT_MS. Elsewhere, 200 ms.
+    if (appProfile && this.s.kind === 'ext20') {
+      const answered = await Promise.race([
+        this.s.visitAnswered.then(() => true),
+        wait(VISIT_ANSWER_TIMEOUT_MS).then(() => false),
+      ]);
+      if (!live()) return;
+      if (!answered) {
+        bleLog.debug(
+          `QN: no answer to the profile frame within ${VISIT_ANSWER_TIMEOUT_MS} ms, sending ` +
+            'START and the weight anchor anyway (ble.qn_user_key, #501)',
+        );
+      }
+    } else {
+      await wait(200);
+      if (!live()) return;
+    }
 
     // 0x22 start measurement / stored-data query with echoed protocol type.
     // Its send time is what the scale's first answer is measured against. On
@@ -1312,7 +1437,7 @@ export class QnScaleAdapter
     // weigh-in is held for the answer.
     if (this.s.storedQuerySentAtMs === null) {
       this.s.storedQuerySentAtMs = Date.now();
-      await this.writeCmd(buildStoredDataQuery(this.s.seenProtocolType));
+      await this.writeCmd(buildStoredDataQuery(this.s.seenProtocolType, this.writeSlot()));
       if (!live()) return;
     }
 
@@ -1327,14 +1452,14 @@ export class QnScaleAdapter
     // transport may deliver late or not at all. Bound to the session (`live()`).
     if (this.opts.weightAck === true && this.s.kind !== 'ext20') {
       const anchorKg = this.resolveAnchorKg();
-      const anchor = buildMeasurementTrigger(anchorKg);
+      const anchor = buildMeasurementTrigger(anchorKg, this.writeSlot());
       for (let i = 0; i < TRIGGER_REPEATS; i++) {
         await wait(i === 0 ? POST_START_ANCHOR_DELAY_MS : TRIGGER_GAP_MS);
         if (!live()) return;
         await this.writeCmd([...anchor]);
       }
       bleLog.debug(
-        `QN: weight anchor ${anchorKg.toFixed(2)} kg sent twice after START ` +
+        `QN: weight anchor ${anchorKg.toFixed(2)} kg sent twice after START${this.slotNote()} ` +
           `(ble.qn_weight_ack, sequence from the #331/#75 Android captures)`,
       );
     }
@@ -1342,7 +1467,15 @@ export class QnScaleAdapter
     // Opt-in only. See A4_PRELUDE for why these bytes are a replay rather than
     // something built from this user's profile, and why that keeps it off by
     // default.
-    if (this.opts.a4Prelude) {
+    // Not with ble.qn_user_slot on another slot: the replayed frames write
+    // slot 1 (`a4 0f 01 ..`), and with the option nothing goes there (#501).
+    const preludeSlot = this.configuredSlot();
+    if (this.opts.a4Prelude && preludeSlot !== null && preludeSlot !== 1) {
+      bleLog.debug(
+        `QN: the two 0xA4 0x0F prelude frames are not sent: they write user slot 1, and ` +
+          `ble.qn_user_slot is ${preludeSlot} (#501)`,
+      );
+    } else if (this.opts.a4Prelude) {
       this.s.a4PreludeSent = true;
       for (let i = 0; i < A4_PRELUDE.length; i++) {
         if (i > 0) await wait(A4_PRELUDE_GAP_MS);
@@ -1366,7 +1499,7 @@ export class QnScaleAdapter
     // the echo off must not lose the frame that makes their scale stream at all.
     if (this.s.kind !== 'ext20') return;
     const anchorKg = this.resolveAnchorKg();
-    const trigger = buildMeasurementTrigger(anchorKg);
+    const trigger = buildMeasurementTrigger(anchorKg, this.writeSlot());
     for (let i = 0; i < TRIGGER_REPEATS; i++) {
       if (i > 0) await wait(TRIGGER_GAP_MS);
       if (!live()) return;
@@ -1374,7 +1507,7 @@ export class QnScaleAdapter
     }
     bleLog.debug(
       `QN: extended-dialect measurement trigger sent, weight anchor ` +
-        `${anchorKg.toFixed(2)} kg (#235, #75)`,
+        `${anchorKg.toFixed(2)} kg${this.slotNote()} (#235, #75)`,
     );
   }
 
@@ -1443,6 +1576,7 @@ export class QnScaleAdapter
    */
   scheduleStoredDataRetry(): void {
     if (!this.ctx || this.s.storedQueryAttempts >= MAX_STORED_QUERY_ATTEMPTS) return;
+    if (this.holdsSlotFrames()) return;
     if (this.s.storedRetryTimer) clearTimeout(this.s.storedRetryTimer);
     this.s.storedRetryTimer = setTimeout(() => {
       this.s.storedRetryTimer = null;
@@ -1451,7 +1585,7 @@ export class QnScaleAdapter
       bleLog.debug(
         `QN: stored-data re-query ${this.s.storedQueryAttempts}/${MAX_STORED_QUERY_ATTEMPTS}`,
       );
-      void this.writeCmd(buildStoredDataQuery(this.s.seenProtocolType));
+      void this.writeCmd(buildStoredDataQuery(this.s.seenProtocolType, this.writeSlot()));
     }, STORED_QUERY_RETRY_MS);
   }
 

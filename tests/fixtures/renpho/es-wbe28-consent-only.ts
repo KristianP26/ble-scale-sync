@@ -4,7 +4,8 @@ import type { SessionFixture } from '../../helpers/replay/session.js';
  * An ES-WBE28 firmware without the vendor 0xFFE2 write and the profile
  * characteristics (#267 review): consent alone is written, then the
  * measurement subscribes. Frames as in es-wbe28.ts (#267 capture, spacing
- * invented), with the same capture-time clock.
+ * invented), with the same capture-time clock; the 0x2A9C is packet 2, in
+ * Renpho's own layout, so the weigh-in gets no impedance (#507).
  */
 export const session: SessionFixture = {
   adapter: 'Renpho ES-WBE28',

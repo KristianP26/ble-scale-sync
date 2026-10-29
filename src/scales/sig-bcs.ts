@@ -16,8 +16,9 @@ import { parseSigDateTime, parseSigWeightMeasurement, trustedScaleTime } from '.
  * the #229 captures. `SigMeasurementPairing` at the bottom pairs this
  * characteristic with 0x2A9D for the two adapters that speak plain SIG.
  * `renpho.ts` has a fourth walk over the same characteristic
- * and is deliberately NOT folded in: it keeps the first impedance across a
- * split indication and ignores the fat outright, so its rules genuinely differ.
+ * and is deliberately NOT folded in: it ignores the second packet of a split
+ * indication, which is in Renpho's own layout, not SIG, keeps the first
+ * impedance and ignores the fat outright, so its rules genuinely differ.
  *
  * Layout, per the SIG specification:
  *   Bytes 0-1 : Flags (uint16 LE)

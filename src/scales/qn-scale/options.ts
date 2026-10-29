@@ -64,14 +64,33 @@ export const QN_BLE_OPTIONS = {
    * that refuses openScale's frame (`a1 06 02 01 00`) shows only the weight,
    * and no scale in the logs has streamed a live weight after a refusal.
    *
-   * Set, the 18- and 19-byte dialects send the vendor-app profile frame with
-   * this key, the first user's age, height and sex, and on the 18-byte one the
-   * athlete setting, and skip openScale's ready-time A2. On the 19-byte
-   * dialect that happens without `qn_weight_ack` too. A wrong key leaves the
-   * scale refusing the frame, as without the option. The 20-byte and classic
-   * dialects ignore it. Left unset it changes nothing.
+   * Set, the 18-, 19- and 20-byte dialects send the vendor-app profile frame
+   * with this key, the first user's age, height and sex, and on the 18-byte
+   * one the athlete setting, and skip openScale's ready-time A2. On the
+   * 19-byte dialect that happens without `qn_weight_ack` too. On the 20-byte
+   * one the START and the weight anchor wait for the scale's answer to the
+   * profile frame, as the CS10G app sends them (#501), and the ready-time
+   * anchor of `qn_weight_ack` is not sent. A wrong key leaves the scale
+   * refusing the frame, as without the option. The classic dialect ignores
+   * it. Left unset it changes nothing.
    */
   qn_user_key: z.number().int().min(1).max(9999).optional().nullable(),
+  /**
+   * User slot the QN profile frame, the weight anchor and the 0x22 stored-data
+   * query are for, 1 to 8 (#501). Only with `qn_user_key`; without it this is
+   * ignored with a warning.
+   *
+   * Per the vendor's published SDK the scale keeps up to 8 users, each in a
+   * slot with the key the vendor app registered it with. ble-scale-sync sends
+   * slot 1 unless this is set; the Arboleaf CS10G app of #501 registered its
+   * user in slot 2, and the scale accepts key 1000 only for that slot. The
+   * slot cannot be read from the scale: set the one the debug log names for
+   * the scale's own results (`user slot N`). On the 18-, 19- and 20-byte
+   * dialects; the first configured user's profile goes to that slot, nothing
+   * is written to slot 1 then, and nothing for a user slot goes out before the
+   * scale's 0x12 (#501). Left unset it changes nothing.
+   */
+  qn_user_slot: z.number().int().min(1).max(8).optional().nullable(),
   /**
    * Send the two 0xA4 0x0F frames an Arboleaf vendor app sends between START
    * and the first live 0x10 weight frame (#331).

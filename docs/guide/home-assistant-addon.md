@@ -52,7 +52,7 @@ The add-on writes `/data/config.yaml` from these options on every start, so a ch
 | `ble_adapter`                     | empty             | `ble.adapter`, `local` only                                                    |
 | `reset_bluetooth`                 | `true`            | Add-on only: power-cycles the adapter at startup, `local` only                 |
 | `force_scale_adapter`             | empty             | `ble.force_scale_adapter`, needs `scale_mac`                                   |
-| `qn_protocol_byte`, `qn_report_byte`, `qn_weight_ack`, `qn_user_key`, `qn_a4_prelude`, `qn_time_sync_long`, `qn_config_long`, `qn_result_ack` | empty | `ble.qn_*`, [QN scales](/guide/scales/qn) |
+| `qn_protocol_byte`, `qn_report_byte`, `qn_weight_ack`, `qn_user_key`, `qn_user_slot`, `qn_a4_prelude`, `qn_time_sync_long`, `qn_config_long`, `qn_result_ack` | empty | `ble.qn_*`, [QN scales](/guide/scales/qn) |
 | `rmsc04_profile_byte`             | empty             | `ble.rmsc04_profile_byte`, [Renpho scales](/guide/scales/renpho)               |
 | `auto_clear_stale_bond`           | `false`           | `ble.auto_clear_stale_bond`, [Beurer scales](/guide/scales/beurer)             |
 | `preemptive_adapter_reset`        | `true`            | `ble.preemptive_adapter_reset`, `local` only                                   |

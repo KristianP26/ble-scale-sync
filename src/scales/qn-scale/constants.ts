@@ -33,7 +33,8 @@ import { uuid16 } from '../body-comp-helpers.js';
  *   0x12 (scale info) -> AE01 init (if AE00) -> 0x13 config
  *   0x14 (ready ACK)  -> 0x20 time sync + A2 user profile + "pass" auth
  *                        (no A2 on the 19-byte dialect with ble.qn_weight_ack,
- *                        nor on the 18- and 19-byte ones with ble.qn_user_key)
+ *                        nor on the 18-, 19- and 20-byte ones with
+ *                        ble.qn_user_key)
  *   0x21 (config req)  -> A00D profile frame + 0x22 start measurement
  *   0x10 (weight)      -> parse weight + 0x1F acknowledge stable reading
  *                        (19-byte dialect: nothing; with ble.qn_result_ack a
@@ -205,14 +206,16 @@ export const USER_DELETE_SUBCOMMAND = 0x04;
  *
  * Per the vendor's published SDK the key is a secret the app chooses when it
  * registers a user on the scale (1 to 9999), and the scale keeps it per user
- * slot. Three vendor apps send 1000 here: the GE app (#235), the Arboleaf app
- * (#331) and the Feelfit app on a Physiq (#463). openScale sends 8, which the
- * 18-byte Renpho in #213 and #253 accepts (`a1 06 02 01 01`) and which the
- * Physiq (#461), a never-paired Renpho Elis 1 (#75), two Arboleafs (#75, #331)
- * and the GE CS 10 G (#235) refuse (`a1 06 02 01 00`). Every refused unit that
- * was weighed during the connection then streamed no live weight, and every
- * accepting one streamed; that the refusal is the cause is a hypothesis, as
- * other frames always differed too.
+ * slot. Four vendor apps send 1000 here: the GE app (#235), the Arboleaf app
+ * (#331), the Feelfit app on a Physiq (#463) and the Arboleaf app on a 20-byte
+ * CS10G, which accepts it for the slot that app registered (#501). openScale
+ * sends 8, which the 18-byte Renpho in #213 and #253 accepts
+ * (`a1 06 02 01 01`) and which the Physiq (#461), a never-paired Renpho Elis 1
+ * (#75), two Arboleafs (#75, #331), the GE CS 10 G (#235) and the CS10G (#501)
+ * refuse (`a1 06 02 01 00`). Every refused unit that was weighed during the
+ * connection then streamed no live weight, and every accepting one streamed;
+ * that the refusal is the cause is a hypothesis, as other frames always
+ * differed too.
  *
  * Neither value can be the default for the whole family, and the scale's own
  * record of the key is only readable over a characteristic the Physiq lacks.
@@ -462,6 +465,20 @@ export const TRIGGER_GAP_MS = 150;
  * straight after START, which is what was confirmed on that hardware.
  */
 export const POST_START_ANCHOR_DELAY_MS = 75;
+
+/**
+ * How long the 20-byte extended dialect waits for the scale's answer to the
+ * profile frame before it sends the 0x22 START and the weight anchor anyway,
+ * with `ble.qn_user_key` (#501).
+ *
+ * The Arboleaf CS10G app sends both only once the scale has answered the
+ * profile frame (`a1 06 02 ..`), as the vendor's published SDK does, and the
+ * 18-byte dialect already sends its 0x22 on that answer (D065). Through the
+ * ESP32 proxy the CS10G's answer reached the host 0.26 to 0.40 s after the
+ * frame was written (#501), so 1 s leaves room for a slower link; an answer
+ * lost in transit costs that second and nothing else.
+ */
+export const VISIT_ANSWER_TIMEOUT_MS = 1000;
 
 /**
  * Completed-weigh-in result frames on the extended dialect (#235).

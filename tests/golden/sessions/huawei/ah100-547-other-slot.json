@@ -1,0 +1,34 @@
+{
+  "settled": {
+    "by": "error",
+    "atMs": 69757,
+    "error": "Scale disconnected before reading completed"
+  },
+  "reading": null,
+  "history": [],
+  "subscribes": [
+    {
+      "seq": 0,
+      "atMs": 0,
+      "uuid": "faa2"
+    }
+  ],
+  "writes": [
+    {
+      "seq": 1,
+      "atMs": 457,
+      "uuid": "faa1",
+      "hex": "db082417876987698607",
+      "withResponse": true
+    },
+    {
+      "seq": 2,
+      "atMs": 1222,
+      "uuid": "faa1",
+      "hex": "dc0e09144d262e71648224f724bf13bc996146",
+      "withResponse": true
+    }
+  ],
+  "rxDropped": 0,
+  "payload": null
+}

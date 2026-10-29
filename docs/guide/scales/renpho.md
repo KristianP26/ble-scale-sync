@@ -5,7 +5,7 @@ description: Setup, the rmsc04_profile_byte option and fixes for Renpho scales o
 
 # Renpho Scales
 
-The Renpho R-MSC04 (MorphoScan Nova) and newer ES-CS20M revisions on service 0x1A10 speak Renpho's own protocol; the ES-WBE28 and ES-26BB-B need no setup. Most other Renpho models use the QN protocol and are on [QN Scales](./qn).
+The Renpho R-MSC04 (MorphoScan Nova) and newer ES-CS20M revisions on service 0x1A10 speak Renpho's own protocol, and most other Renpho models use the QN protocol and are on [QN Scales](./qn). The ES-WBE28 and ES-26BB-B need no setup, and the A-R003 needs `ble.scale_mac` on the default Linux transport and on macOS because it advertises no name.
 
 ## Supported Models
 
@@ -13,7 +13,8 @@ The Renpho R-MSC04 (MorphoScan Nova) and newer ES-CS20M revisions on service 0x1
 | --- | --- | --- |
 | R-MSC04 (MorphoScan Nova) | `Renpho R-MSC04` | BMI estimate; the scale's own with `ble.rmsc04_profile_byte` |
 | ES-CS20M on service 0x1A10 | `ES-CS20M` | From the measured resistance |
-| ES-WBE28 | `Renpho ES-WBE28` | From the measured impedance |
+| ES-WBE28 | `Renpho ES-WBE28` | BMI estimate |
+| A-R003 (Experimental) | `Renpho ES-WBE28` | BMI estimate |
 | ES-26BB-B | `Renpho ES-26BB` | From the measured impedance |
 
 ## Setup

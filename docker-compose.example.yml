@@ -36,8 +36,9 @@ services:
       # For multi-user setups, uncomment and use separate volumes:
       # - garmin-tokens-alice:/home/node/.garmin_tokens_alice
       # - garmin-tokens-bob:/home/node/.garmin_tokens_bob
-      # File exporter (persist CSV/JSONL across container restarts):
-      # - scale-data:/app/data
+      # File exporter (persist CSV/JSONL across container restarts). Create
+      # ./data first and chown it to 1000:1000, or the app can't write it:
+      # - ./data:/app/data
 
     environment:
       - CONTINUOUS_MODE=true
@@ -63,5 +64,3 @@ volumes:
   # Uncomment for multi-user setups:
   # garmin-tokens-alice:
   # garmin-tokens-bob:
-  # Uncomment for file exporter:
-  # scale-data:

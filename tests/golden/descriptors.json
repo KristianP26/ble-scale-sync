@@ -423,6 +423,26 @@
     ]
   },
   {
+    "name": "Huawei CH100/AH100",
+    "match": {
+      "priority": 218,
+      "names": {
+        "exact": [
+          "ch100",
+          "ah100"
+        ]
+      }
+    },
+    "charNotifyUuid": "0000faa200001000800000805f9b34fb",
+    "charWriteUuid": "0000faa100001000800000805f9b34fb",
+    "hooks": [
+      "onConnected",
+      "onSessionStart",
+      "onSessionEnd",
+      "buildAck"
+    ]
+  },
+  {
     "name": "Xiaomi Mi Scale 2",
     "match": {
       "priority": 210,
