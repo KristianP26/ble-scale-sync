@@ -4,6 +4,33 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.38.0](https://github.com/KristianP26/ble-scale-sync/compare/v1.37.0...v1.38.0) (2026-10-29)
+
+
+### Added
+
+* **addon:** expose qn_user_slot as an add-on option ([af9cfef](https://github.com/KristianP26/ble-scale-sync/commit/af9cfefbb6ae32394d2700cb39e47bb0d2dab8de)), closes [#501](https://github.com/KristianP26/ble-scale-sync/issues/501)
+* **qn:** ble.qn_user_slot sets the user slot of the profile frame ([732b0d6](https://github.com/KristianP26/ble-scale-sync/commit/732b0d6ad786df09d7f0aa48be8725c4e79285ef)), closes [#501](https://github.com/KristianP26/ble-scale-sync/issues/501)
+* **qn:** send the vendor app's profile frame on the 20-byte dialect with ble.qn_user_key ([8b040f4](https://github.com/KristianP26/ble-scale-sync/commit/8b040f42c55c3e0f3e8e12dc8271f99b30f6b142)), closes [#501](https://github.com/KristianP26/ble-scale-sync/issues/501)
+* **renpho:** recognise the A-R003 advertisement before connecting ([bf1da60](https://github.com/KristianP26/ble-scale-sync/commit/bf1da60f59d468322ccbb0d7bfe409a25b00f790)), closes [#507](https://github.com/KristianP26/ble-scale-sync/issues/507)
+* **renpho:** recognise the nameless Renpho A-R003 by its characteristics ([e74ddea](https://github.com/KristianP26/ble-scale-sync/commit/e74ddea369a3eabda24401a113b9ac733221f257)), closes [#507](https://github.com/KristianP26/ble-scale-sync/issues/507)
+* **scales:** add the Huawei CH100 / AH100 adapter ([9f1b9b7](https://github.com/KristianP26/ble-scale-sync/commit/9f1b9b7646b27cfffab17003b0ba17e9ae2562cb)), closes [#503](https://github.com/KristianP26/ble-scale-sync/issues/503)
+
+
+### Fixed
+
+* **deps:** bump garminconnect from 0.3.19 to 0.3.20 ([1afee2f](https://github.com/KristianP26/ble-scale-sync/commit/1afee2f3c429b14916f1ee0eb92218aeae342d1e))
+* **qn:** keep a session without a 0x12 off slot 1 with ble.qn_user_slot ([b68ecc2](https://github.com/KristianP26/ble-scale-sync/commit/b68ecc2eba2227688756a4d685317b5021dada00)), closes [#501](https://github.com/KristianP26/ble-scale-sync/issues/501)
+* **renpho:** stop computing ES-WBE28 body fat from a misread impedance ([252af9c](https://github.com/KristianP26/ble-scale-sync/commit/252af9cc83def5398eba0794d7978192ec36c796)), closes [#507](https://github.com/KristianP26/ble-scale-sync/issues/507)
+
+
+### Docs
+
+* **exporters:** note that a Strava API app needs a subscription ([3fadce5](https://github.com/KristianP26/ble-scale-sync/commit/3fadce5a4a3b15efb5a3c4fab4671693721842cc)), closes [#498](https://github.com/KristianP26/ble-scale-sync/issues/498)
+* **exporters:** use a bind mount owned by UID 1000 for the File exporter in Docker ([01bc715](https://github.com/KristianP26/ble-scale-sync/commit/01bc715c270f9e33294a3242e93c0580b88ecb43))
+* **interfaces:** deviceAddress is the CoreBluetooth UUID on macOS, not empty ([eafe8e9](https://github.com/KristianP26/ble-scale-sync/commit/eafe8e9f236ae4f152c164e6d3bd62e5dfebad8f)), closes [#503](https://github.com/KristianP26/ble-scale-sync/issues/503)
+* **scales:** list the Renpho A-R003 ([cb2e4e5](https://github.com/KristianP26/ble-scale-sync/commit/cb2e4e513e3a0354ac9adfeb01def136dd10531e)), closes [#507](https://github.com/KristianP26/ble-scale-sync/issues/507)
+
 ## [1.37.0](https://github.com/KristianP26/ble-scale-sync/compare/v1.36.0...v1.37.0) (2026-10-25)
 
 
