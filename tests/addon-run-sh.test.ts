@@ -907,6 +907,24 @@ describe.skipIf(!SHELL)('run.sh restarts the app after it exits', () => {
     expect(r.stdout.match(/Starting BLE Scale Sync/g)).toHaveLength(4);
   }, 30_000);
 
+  it('does not restart after a clean exit 0 (a finished single run)', () => {
+    const r = run([COUNT, 'exit 0'].join('\n'), supervisorBlock());
+    expect(r.starts).toBe(1);
+    expect(r.stdout).toMatch(/finished \(exit code 0\); not restarting/);
+    expect(r.stdout).not.toMatch(/restart #1/);
+    expect(r.status).toBe(0);
+  }, 30_000);
+
+  it('still restarts after a non-zero exit following no clean exit', () => {
+    const block = supervisorBlock().replace(/^RESTART_DELAY_MIN=\d+$/m, 'RESTART_DELAY_MIN=1');
+    // Exit 1 twice (an empty single run), then 0: stops there, no third restart.
+    const r = run([COUNT, '[ "$n" -ge 3 ] || exit 1', 'exit 0'].join('\n'), block);
+    expect(r.starts).toBe(3);
+    expect(r.stdout).toMatch(/exited with code 1 after \d+s; restart #2/);
+    expect(r.stdout).toMatch(/finished \(exit code 0\); not restarting/);
+    expect(r.status).toBe(0);
+  }, 30_000);
+
   it('stops without another start when SIGTERM arrives during the delay', () => {
     // The real 5 s delay: the stop must cut it short.
     const stub = [COUNT, '(sleep 0.5; kill -TERM "$PPID") &', 'exit 1'].join('\n');

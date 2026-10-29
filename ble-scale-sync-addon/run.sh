@@ -1115,6 +1115,14 @@ fi
 # exiting soon after it starts, and drops back to 5 s after a run of 10 minutes
 # or more.
 #
+# An exit with code 0 that nobody asked for is not a failure: it is a single run
+# (`runtime.continuous_mode: false` in a custom config) that finished its sync.
+# It ends the add-on instead of starting another run, so an automation can start
+# the add-on once a day and find it stopped afterwards. Continuous mode never
+# gets there: every exit it makes on its own (scan watchdog, proxy liveness) is
+# non-zero, and a stop is handled below. A single run that found nothing exits 1
+# and is retried like any other failure.
+#
 # Stopping the add-on is different. The Supervisor sends SIGTERM, which tini
 # (PID 1 here, or the child of Docker's own init) passes to this script only, so
 # the trap below passes it on to the app, waits for the app's own shutdown and
@@ -1172,6 +1180,11 @@ while :; do
   if [ "$STOPPING" = "true" ]; then
     log "Add-on stopping: BLE Scale Sync exited with code $APP_RC, not restarting."
     exit "$APP_RC"
+  fi
+  # Exit 0 on its own: a single run that finished its sync (see above).
+  if [ "$APP_RC" -eq 0 ]; then
+    log "BLE Scale Sync finished (exit code 0); not restarting. Start the add-on again for the next run."
+    exit 0
   fi
 
   RAN=$(($(date +%s) - STARTED))
