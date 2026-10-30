@@ -9,7 +9,7 @@ import type {
 } from '../interfaces/scale-adapter.js';
 import { buildPayload, uuid16 } from './body-comp-helpers.js';
 import { matchesDescriptor, type MatchDescriptor } from './match-descriptor.js';
-import { isHistoricalReading } from '../interfaces/reading-time.js';
+import { bleLog } from '../ble/types.js';
 
 const CLOUD_HEADER = Buffer.from('100000c5', 'hex');
 const LIVE_WEIGHT_FRAME = 0x80;
@@ -42,7 +42,6 @@ export interface IfB2HealthRecord {
   boneKg: number;
   bmr: number;
   bodyAge?: number;
-  division?: number;
   elapsedSeconds: number;
   profilePin: string;
   raw: string;
@@ -89,7 +88,7 @@ export class IfB2Reassembler {
       if (start) this.pending = this.pending.subarray(start);
       if (this.pending.length < 5) break;
       const length = this.pending[4];
-      if (length !== 11 && length !== 14 && length !== 29 && length !== 30) {
+      if (length !== 11 && length !== 14 && length !== 29) {
         const nextHeader = this.pending.indexOf(CLOUD_HEADER, 4);
         this.pending =
           nextHeader >= 0
@@ -161,12 +160,10 @@ export function decodeIfB2Frame(frame: Buffer, profile?: UserProfile): IfB2Frame
     if (result.weightKg < 0) throw new Error('invalid weight');
     return result;
   }
-  if (frame[6] !== HEALTH_RECORD_FRAME || ![29, 30].includes(frame.length))
+  if (frame[6] !== HEALTH_RECORD_FRAME || frame.length !== 29)
     throw new Error('unsupported IF_B2 frame type or length');
   if (frame[7] === 0xff) throw new Error('rejected record end marker');
-  const division = frame.length === 30 ? frame[28] >> 4 : undefined;
-  if (division !== undefined && division > 2) throw new Error('unsupported division');
-  const weightKg = u16(frame, 10) / (division === 1 || division === 2 ? 100 : 10);
+  const weightKg = u16(frame, 10) / 10;
   const result: IfB2HealthRecord = {
     frameType: 'health_record',
     recordSlot: frame[7],
@@ -179,7 +176,6 @@ export function decodeIfB2Frame(frame: Buffer, profile?: UserProfile): IfB2Frame
     boneKg: u16(frame, 20) / 10,
     bmr: u16(frame, 22),
     elapsedSeconds: frame.readUInt32BE(24),
-    ...(division === undefined ? {} : { division }),
     raw: frame.toString('hex'),
   };
   for (const [name, value] of Object.entries(result))
@@ -321,8 +317,8 @@ export class SenssunIfB2Adapter implements ScaleAdapterCore {
   private commandTimer: NodeJS.Timeout | undefined;
   private commandWindowTimer: NodeJS.Timeout | undefined;
   private profileWriteInFlight = false;
-  private pendingRecord:
-    { record: IfB2HealthRecord; transmittedFatTenths: number; timestamp: Date } | undefined;
+  private pendingRecord: IfB2Composition | undefined;
+  private ignoredRecordLogged = false;
   private pendingCommandError: Error | undefined;
   private sessionToken = 0;
 
@@ -366,6 +362,7 @@ export class SenssunIfB2Adapter implements ScaleAdapterCore {
     this.profileWriteInFlight = false;
     this.pendingCommandError = undefined;
     this.pendingRecord = undefined;
+    this.ignoredRecordLogged = false;
   }
 
   private clearSelectionCandidate(): void {
@@ -466,7 +463,7 @@ export class SenssunIfB2Adapter implements ScaleAdapterCore {
     if (!this.pendingRecord || !this.selected || !this.profileAcknowledged || this.completed)
       return null;
 
-    const { record: decoded, transmittedFatTenths, timestamp } = this.pendingRecord;
+    const { record: decoded, transmittedFatTenths } = this.pendingRecord;
     this.pendingRecord = undefined;
     this.completed = true;
     this.clearTimers();
@@ -474,7 +471,6 @@ export class SenssunIfB2Adapter implements ScaleAdapterCore {
     const reading: ScaleReading<IfB2Composition> = {
       weight: decoded.weightKg,
       impedance: decoded.impedanceOhms,
-      timestamp,
       scaleComposition: { record: decoded, transmittedFatTenths },
     };
     return reading;
@@ -523,29 +519,35 @@ export class SenssunIfB2Adapter implements ScaleAdapterCore {
         continue;
       }
 
+      // Only this weigh-in's record: slot 0, the PIN every write uses, no age.
+      // No log has shown any other, so what the rest would mean is unproven.
+      if (
+        decoded.profilePin !== '0001' ||
+        decoded.recordSlot !== 0 ||
+        decoded.elapsedSeconds !== 0
+      ) {
+        if (!this.ignoredRecordLogged)
+          bleLog.debug('Senssun IF_B2: ignoring a record that is not this weigh-in');
+        this.ignoredRecordLogged = true;
+        continue;
+      }
+
       if (!this.selected && !this.ctx && profile) {
         const reading: ScaleReading<IfB2Composition> = {
           weight: decoded.weightKg,
           impedance: decoded.impedanceOhms,
-          timestamp: new Date(Date.now() - decoded.elapsedSeconds * 1_000),
           scaleComposition: { record: decoded, transmittedFatTenths: u16(frame, 12) },
         };
         emitted = reading;
         continue;
       }
 
-      if (decoded.profilePin !== '0001' || decoded.recordSlot !== 0 || decoded.elapsedSeconds > 600)
-        continue;
       if (!this.selected || this.stableWeight === undefined)
         throw new Error('IF_B2 final record arrived before safe profile selection');
       if (this.completed) continue;
 
       if (!this.pendingRecord) {
-        this.pendingRecord = {
-          record: decoded,
-          transmittedFatTenths: u16(frame, 12),
-          timestamp: new Date(Date.now() - decoded.elapsedSeconds * 1_000),
-        };
+        this.pendingRecord = { record: decoded, transmittedFatTenths: u16(frame, 12) };
       }
       const reading = this.completePendingRecord();
       if (reading) emitted = reading;
@@ -562,18 +564,14 @@ export class SenssunIfB2Adapter implements ScaleAdapterCore {
     const pinned = reading.scaleComposition as IfB2Composition | undefined;
     if (!pinned) return buildPayload(reading.weight, reading.impedance, {}, profile);
     const record = pinned.record;
-    // Stored readings are attributed independently at export time. Recompute
-    // their profile-dependent values for that user, not the live session user.
-    const comp = isHistoricalReading(reading)
-      ? deriveComposition(reading.weight, reading.impedance, profile, pinned.transmittedFatTenths)
-      : {
-          fat: record.fatPercent,
-          water: record.waterPercent,
-          muscle: record.musclePercent,
-          bone: record.boneKg,
-          bmr: record.bmr,
-          bodyAge: record.bodyAge,
-        };
+    const comp = {
+      fat: record.fatPercent,
+      water: record.waterPercent,
+      muscle: record.musclePercent,
+      bone: record.boneKg,
+      bmr: record.bmr,
+      bodyAge: record.bodyAge,
+    };
     const payload = buildPayload(reading.weight, reading.impedance, comp, profile);
     if (comp.bmr !== undefined) payload.bmr = comp.bmr;
     if (comp.bodyAge !== undefined) payload.metabolicAge = comp.bodyAge;

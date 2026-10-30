@@ -10,7 +10,7 @@ import { uuid16 } from '../../src/scales/body-comp-helpers.js';
 import type { UserProfile } from '../../src/interfaces/scale-adapter.js';
 import { buildAdapterRuntimeConfig } from '../../src/config/resolve.js';
 import type { AppConfig, UserConfig } from '../../src/config/schema.js';
-import { isHistoricalReading } from '../../src/interfaces/reading-time.js';
+import { bleLog } from '../../src/ble/types.js';
 
 // These frames and profiles are synthetic and contain no hardware-captured measurements.
 // Expected composition values were calculated independently from the protocol equations.
@@ -19,8 +19,10 @@ const historicalHealth = Buffer.from(
   '100000c51d03820f000102d600d00208023001a4001e05dc00000078b2',
   'hex',
 );
+// Derived: the current slot and no age, as every record in the reporter's log has.
 const health = Buffer.from(historicalHealth);
 health[7] = 0x00;
+health.writeUInt32BE(0, 24);
 health[28] = health.subarray(4, 28).reduce((sum, value) => (sum + value) & 0xff, 0);
 const alternateLive = Buffer.from('100000c50e038002ac05e401a0c9', 'hex');
 const alternateHealth = Buffer.from(
@@ -559,32 +561,27 @@ describe('Senssun IF_B2 session state', () => {
     });
   });
 
-  it.each([
-    [0, false],
-    [300, false],
-    [301, true],
-    [600, true],
-  ] as const)(
-    'preserves measurement age %s for history classification',
-    async (age, historical) => {
+  it('emits a record with no age without a timestamp', async () => {
+    const adapter = await acknowledgedAdapter();
+    const reading = adapter.parseNotification(health)!;
+    expect(reading).toMatchObject({ weight: 72.6 });
+    expect(reading.timestamp).toBeUndefined();
+  });
+
+  it.each([1, 301, 600])(
+    'ignores a record whose bytes 24-27 carry %s, with one debug line per session',
+    async (age) => {
+      const debug = vi.spyOn(bleLog, 'debug');
       const adapter = await acknowledgedAdapter();
-      const receivedAt = Date.now();
-      const reading = adapter.parseNotification(
-        currentRecord((frame) => frame.writeUInt32BE(age, 24)),
-      )!;
-      expect(reading.timestamp?.getTime()).toBe(receivedAt - age * 1_000);
-      expect(isHistoricalReading(reading)).toBe(historical);
+      // Derived from health: bytes 24-27 set, checksum recomputed.
+      const aged = currentRecord((frame) => frame.writeUInt32BE(age, 24));
+      expect(adapter.parseNotification(aged)).toBeNull();
+      expect(adapter.parseNotification(aged)).toBeNull();
+      const lines = debug.mock.calls.filter(([msg]) => String(msg).includes('not this weigh-in'));
+      expect(lines).toHaveLength(1);
+      debug.mockRestore();
     },
   );
-
-  it('does not shift measurement time by the acknowledgement delay', async () => {
-    const adapter = await selectedAdapter();
-    const receivedAt = Date.now();
-    adapter.parseNotification(currentRecord((frame) => frame.writeUInt32BE(301, 24)));
-    await vi.advanceTimersByTimeAsync(1_500);
-    const reading = adapter.parseNotification(profileUpdated)!;
-    expect(reading.timestamp?.getTime()).toBe(receivedAt - 301_000);
-  });
 
   it.each([100, 1_300])(
     'uses the BMI estimate after the processor rejects %s ohm impedance',
@@ -602,19 +599,6 @@ describe('Senssun IF_B2 session state', () => {
       expect(adapter.computeMetrics(reading, profile)).toEqual(weightOnlyEstimate);
     },
   );
-
-  it('recomputes historical composition for the independently attributed user', async () => {
-    const adapter = await acknowledgedAdapter();
-    const frame = currentRecord((record) => record.writeUInt32BE(301, 24));
-    const reading = adapter.parseNotification(frame)!;
-    adapter.onSessionEnd();
-    const recipient: UserProfile = { ...profile, height: 165, age: 62, gender: 'female' };
-    const reference = new SenssunIfB2Adapter();
-    const attributedReading = reference.parseNotification(frame, recipient)!;
-    expect(adapter.computeMetrics(reading, recipient)).toEqual(
-      reference.computeMetrics(attributedReading, recipient),
-    );
-  });
 
   it('emits the final record instead of an earlier live frame in the same notification', async () => {
     const adapter = await selectedAdapter();
@@ -718,23 +702,14 @@ describe('Senssun IF_B2 session state', () => {
     ).toBeNull();
   });
 
-  it('accepts the elapsed boundary and rejects a record beyond it', async () => {
-    const elapsedAccepted = await acknowledgedAdapter();
-    expect(
-      elapsedAccepted.parseNotification(
-        currentRecord((frame) => {
-          frame.writeUInt32BE(600, 24);
-        }),
-      ),
-    ).toMatchObject({ weight: 72.6 });
-    const elapsedRejected = await acknowledgedAdapter();
-    expect(
-      elapsedRejected.parseNotification(
-        currentRecord((frame) => {
-          frame.writeUInt32BE(601, 24);
-        }),
-      ),
-    ).toBeNull();
+  it('ignores a 30-byte record', async () => {
+    const adapter = await acknowledgedAdapter();
+    // Derived from health: one byte appended, length and checksum recomputed.
+    const long = Buffer.concat([health.subarray(0, 28), Buffer.from([0x10, 0])]);
+    long[4] = 30;
+    long[29] = long.subarray(4, 29).reduce((sum, value) => (sum + value) & 0xff, 0);
+    expect(adapter.parseNotification(long)).toBeNull();
+    expect(adapter.parseNotification(health)).toMatchObject({ weight: 72.6 });
   });
 
   it('emits one fragmented current record and keeps its composition pinned across sessions', async () => {
