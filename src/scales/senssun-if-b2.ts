@@ -522,7 +522,15 @@ export class SenssunIfB2Adapter implements ScaleAdapterCore, HoldForComposition 
       // users[0]: the ack answers a write, and no log shows a weigh-in without
       // one, so skipping it could leave no reading. The processor decides who
       // the reading belongs to.
-      s.selected = this.profileForWeight?.(weight) ?? s.ctx.profile;
+      const matched = this.profileForWeight?.(weight);
+      // Which way the choice went, for a home with more than one user; no
+      // name and no value.
+      bleLog.debug(
+        matched
+          ? 'Senssun IF_B2: writing the profile of the user this weight matches'
+          : "Senssun IF_B2: no user matches this weight, writing the first user's profile",
+      );
+      s.selected = matched ?? s.ctx.profile;
       // Without configure() only the transport profile is known: one user.
       s.multiUser = (this.userWeights?.length ?? 1) > 1;
       // Until this write is acked, nobody knows which profile the scale holds.

@@ -93,6 +93,8 @@ const REASON = {
     'with more than one user, the scale did not confirm this same profile before this weigh-in in this run, and it may have used the one it had',
 };
 const NO_ESTIMATE = 'exporting no body composition (estimate_body_composition is off)';
+const MATCHED = 'Senssun IF_B2: writing the profile of the user this weight matches';
+const NO_MATCH = "Senssun IF_B2: no user matches this weight, writing the first user's profile";
 const notUsed = (why: string, note = 'using the estimate'): string =>
   `Senssun IF_B2: the scale's body fat is not used for this weigh-in: ${why}; ${note}`;
 
@@ -377,6 +379,24 @@ describe('Senssun IF_B2 session state', () => {
     await connect(adapter, writes, () => undefined);
     await settleSelection(adapter);
     expect(writes[0]?.data).toEqual(profileCommand);
+  });
+
+  it.each([
+    ['a user matches', (): UserProfile | undefined => profile, MATCHED],
+    ['nobody matches', (): UserProfile | undefined => undefined, NO_MATCH],
+    ['no lookup is configured', undefined, NO_MATCH],
+  ])('logs one debug line on the profile choice when %s', async (_, lookup, expected) => {
+    const debug = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+    const adapter = new SenssunIfB2Adapter();
+    await connect(adapter, [], lookup);
+    await settleSelection(adapter);
+    adapter.parseNotification(quietLive);
+    await vi.advanceTimersByTimeAsync(2_000);
+    const lines = debug.mock.calls
+      .map(([msg]) => String(msg))
+      .filter((msg) => msg === MATCHED || msg === NO_MATCH);
+    expect(lines).toEqual([expected]);
+    debug.mockRestore();
   });
 
   it('calls the real matcher once and logs nothing while the weight ramps up', async () => {
@@ -1134,8 +1154,11 @@ describe('Senssun IF_B2 session state', () => {
         /^Senssun IF_B2: profile confirmed after \d+ write\(s\), \d+ ms after the first$/,
       ];
       expect(lines).toContain(USED);
+      expect(lines).toContain(MATCHED);
       for (const line of lines) {
-        expect(line === USED || allowed.some((re) => re.test(line)), line).toBe(true);
+        expect(line === USED || line === MATCHED || allowed.some((re) => re.test(line)), line).toBe(
+          true,
+        );
         for (const w of r.writes) expect(line).not.toContain(w.hex);
       }
     });
