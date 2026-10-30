@@ -5,7 +5,13 @@
   },
   "reading": {
     "weight": 94.3,
-    "impedance": 0
+    "impedance": 0,
+    "scaleComposition": {
+      "fat": 27.9,
+      "recordInRange": true,
+      "sent": null,
+      "multiUser": null
+    }
   },
   "history": [],
   "subscribes": [

@@ -5,7 +5,20 @@
   },
   "reading": {
     "weight": 94.2,
-    "impedance": 0
+    "impedance": 0,
+    "scaleComposition": {
+      "fat": 5402.6,
+      "recordInRange": false,
+      "sent": {
+        "gender": "male",
+        "height": 176,
+        "age": 42,
+        "isAthlete": false,
+        "birthDate": null,
+        "clamped": false
+      },
+      "multiUser": null
+    }
   },
   "history": [],
   "subscribes": [

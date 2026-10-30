@@ -5,7 +5,20 @@
   },
   "reading": {
     "weight": 94.3,
-    "impedance": 0
+    "impedance": 0,
+    "scaleComposition": {
+      "fat": 27.9,
+      "recordInRange": true,
+      "sent": {
+        "gender": "male",
+        "height": 176,
+        "age": 42,
+        "isAthlete": false,
+        "birthDate": null,
+        "clamped": false
+      },
+      "multiUser": null
+    }
   },
   "history": [],
   "subscribes": [
@@ -92,11 +105,11 @@
     "weight": 94.3,
     "impedance": 0,
     "bmi": 30.44,
-    "bodyFatPercent": 29.99,
-    "waterPercent": 51.11,
-    "boneMass": 2.77,
-    "muscleMass": 63.25,
-    "visceralFat": 15,
+    "bodyFatPercent": 27.9,
+    "waterPercent": 52.63,
+    "boneMass": 2.86,
+    "muscleMass": 65.13,
+    "visceralFat": 14,
     "physiqueRating": 1,
     "bmr": 1838,
     "metabolicAge": 47

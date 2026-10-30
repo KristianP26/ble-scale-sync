@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 import {
   SenssunIfB2Adapter,
   IfB2Reassembler,
@@ -7,11 +7,12 @@ import {
   IF_B2_MAX_PROFILE_WRITES,
   IF_B2_RECORD_WAIT_MS,
 } from '../../src/scales/senssun-if-b2.js';
-import { buildPayload, uuid16 } from '../../src/scales/body-comp-helpers.js';
-import type { UserProfile } from '../../src/interfaces/scale-adapter.js';
-import { buildAdapterRuntimeConfig } from '../../src/config/resolve.js';
+import { buildPayload, r2, uuid16 } from '../../src/scales/body-comp-helpers.js';
+import type { ScaleReading, UserProfile } from '../../src/interfaces/scale-adapter.js';
+import { buildAdapterRuntimeConfig, resolveUserProfile } from '../../src/config/resolve.js';
 import type { AppConfig, UserConfig } from '../../src/config/schema.js';
 import { bleLog } from '../../src/ble/types.js';
+import { freshAdapter, replaySession } from '../helpers/replay/session.js';
 import { session as LOGGED } from '../fixtures/senssun/if-b2.js';
 
 // Frames come from the DEBUG logs of tests/fixtures/senssun/if-b2.ts. A derived
@@ -59,6 +60,10 @@ function profileAcknowledgement(status: number, pin = 1): Buffer {
 /** The made-up profile the reporter used, as in the fixture. */
 const profile = { height: 176, age: 42, gender: 'male' as const, isAthlete: false };
 const profileCommand = buildCloudProfileCommand(profile, W);
+/** That profile as the pin carries it once the scale acked it. */
+const SENT = { ...profile, birthDate: null, clamped: false };
+/** The body fat of a record, bytes 12-13 / 10. */
+const fatOf = (rec: Buffer): number => rec.readUInt16BE(12) / 10;
 
 /** Derived from live: bytes 7-8 (kg x 10) and byte 12 set. */
 function liveFrame(weightTenths: number, control = 0xa0): Buffer {
@@ -73,6 +78,23 @@ const quietLive = live;
 const changedLive = liveFrame(LIVE_TENTHS - 1);
 const W_CHANGED = (LIVE_TENTHS - 1) / 10;
 const zeroLive = liveFrame(0);
+
+const USED = "Senssun IF_B2: using the scale's body fat, computed for the profile sent to it";
+const REASON = {
+  noFat: 'the scale reported no body fat',
+  fatOut: "the scale's body fat is out of range",
+  otherOut: 'another value in the record is out of range',
+  notConfirmed: 'the scale did not confirm the profile sent to it before the record',
+  clamped:
+    'the profile sent to the scale had its height or age clamped to the range of the profile command',
+  otherProfile:
+    'the weigh-in was matched to a user whose height, sex, birth date, age or athlete setting is not the profile sent to the scale',
+  switched:
+    'with more than one user, the scale did not confirm this same profile before this weigh-in in this run, and it may have used the one it had',
+};
+const NO_ESTIMATE = 'exporting no body composition (estimate_body_composition is off)';
+const notUsed = (why: string, note = 'using the estimate'): string =>
+  `Senssun IF_B2: the scale's body fat is not used for this weigh-in: ${why}; ${note}`;
 
 describe('Senssun IF_B2 protocol', () => {
   it.each([
@@ -111,6 +133,19 @@ describe('Senssun IF_B2 protocol', () => {
       profilePin: '0001',
       weightKg: w,
       elapsedSeconds: 0,
+    });
+  });
+  it.each([
+    ['barefoot', health],
+    ['second barefoot', alternateHealth],
+  ])('decodes bytes 12-23 of the %s record', (_, rec) => {
+    expect(decodeIfB2Frame(rec)).toMatchObject({
+      fatPercent: rec.readUInt16BE(12) / 10,
+      impedanceOhms: rec.readUInt16BE(14),
+      field16: rec.readUInt16BE(16) / 10,
+      field18: rec.readUInt16BE(18) / 10,
+      field20: rec.readUInt16BE(20) / 10,
+      field22: rec.readUInt16BE(22),
     });
   });
   it('decodes the logged ack', () => {
@@ -529,7 +564,11 @@ describe('Senssun IF_B2 session state', () => {
   it('processes a concatenated current record and acknowledgement in order', async () => {
     const adapter = await selectedAdapter();
     const reading = adapter.parseNotification(Buffer.concat([health, ack]))!;
-    expect(reading).toEqual({ weight: health.readUInt16BE(10) / 10, impedance: 0 });
+    expect(reading).toEqual({
+      weight: health.readUInt16BE(10) / 10,
+      impedance: 0,
+      scaleComposition: { fat: fatOf(health), recordInRange: false, sent: null, multiUser: null },
+    });
     expect(adapter.isFinal(reading)).toBe(true);
   });
 
@@ -670,7 +709,11 @@ describe('Senssun IF_B2 session state', () => {
     await connect(adapter);
     await settleSelection(adapter);
     const reading = adapter.parseNotification(Buffer.concat([ack, health]))!;
-    expect(reading).toEqual({ weight: health.readUInt16BE(10) / 10, impedance: 0 });
+    expect(reading).toEqual({
+      weight: health.readUInt16BE(10) / 10,
+      impedance: 0,
+      scaleComposition: { fat: fatOf(health), recordInRange: false, sent: SENT, multiUser: null },
+    });
     expect(adapter.isFinal(reading)).toBe(true);
   });
 
@@ -706,42 +749,39 @@ describe('Senssun IF_B2 session state', () => {
     expect(adapter.parseNotification(health)).toBeNull();
   });
 
-  // The two logged records: the first has bytes 12-13 and 16-19 out of any
-  // plausible range, the second has them in range. Neither may matter.
-  it.each(['if-b2-473-barefoot', 'if-b2-473-barefoot-second'])(
-    'turns the record of %s into a weight-only reading',
-    async (trace) => {
-      const steps = LOGGED.traces[trace].steps.map((step) => Buffer.from(step.hex, 'hex'));
-      const record = Buffer.concat(steps.slice(-2));
-      const adapter = new SenssunIfB2Adapter();
-      await connect(adapter);
-      for (const frame of steps.slice(0, -2)) adapter.parseNotification(frame);
-      const reading =
-        adapter.parseNotification(steps.at(-2)!) ?? adapter.parseNotification(steps.at(-1)!);
-      const weight = record.readUInt16BE(10) / 10;
-      expect(reading).toEqual({ weight, impedance: 0 });
-      expect(adapter.isFinal(reading!)).toBe(true);
-      expect(adapter.computeMetrics(reading!, profile)).toEqual(
-        buildPayload(weight, 0, {}, profile),
-      );
-    },
-  );
-
   it('estimates from BMI for the profile computeMetrics gets, not the one written', async () => {
+    const info = vi.spyOn(bleLog, 'info').mockImplementation(() => {});
     const written: UserProfile = { ...profile, age: 62, gender: 'female' };
     const other: UserProfile = { height: 160, age: 25, gender: 'female', isAthlete: true };
     const adapter = new SenssunIfB2Adapter();
     await connect(adapter, [], () => written);
     await settleSelection(adapter);
     adapter.parseNotification(ack);
-    const reading = adapter.parseNotification(health)!;
+    const reading = adapter.parseNotification(alternateHealth)!;
 
-    expect(reading).toEqual({ weight: W, impedance: 0 });
+    expect(reading).toEqual({
+      weight: W2,
+      impedance: 0,
+      scaleComposition: {
+        fat: fatOf(alternateHealth),
+        recordInRange: true,
+        sent: { ...written, birthDate: null, clamped: false },
+        multiUser: null,
+      },
+    });
     for (const p of [profile, other])
-      expect(adapter.computeMetrics(reading, p)).toEqual(buildPayload(W, 0, {}, p));
+      expect(adapter.computeMetrics(reading, p)).toEqual(buildPayload(W2, 0, {}, p));
     const off = { ...profile, estimateBodyComposition: false };
-    expect(adapter.computeMetrics(reading, off)).toEqual(buildPayload(W, 0, {}, off));
+    expect(adapter.computeMetrics(reading, off)).toEqual(buildPayload(W2, 0, {}, off));
     expect(adapter.computeMetrics(reading, off).bodyFatPercent).toBeNull();
+    const lines = info.mock.calls.map(([msg]) => String(msg));
+    expect(lines).toEqual([
+      notUsed(REASON.otherProfile),
+      notUsed(REASON.otherProfile),
+      notUsed(REASON.otherProfile, NO_ESTIMATE),
+      notUsed(REASON.otherProfile, NO_ESTIMATE),
+    ]);
+    info.mockRestore();
   });
   describe.each([
     ['onSessionStart', (adapter: SenssunIfB2Adapter) => adapter.onSessionStart()],
@@ -808,6 +848,486 @@ describe('Senssun IF_B2 session state', () => {
       await Promise.resolve();
       lifecycle(adapter);
       expect(adapter.parseNotification(health.subarray(7))).toBeNull();
+    });
+  });
+
+  describe('Senssun IF_B2 scale body fat (D091)', () => {
+    let info: MockInstance<typeof bleLog.info>;
+    beforeEach(() => {
+      info = vi.spyOn(bleLog, 'info').mockImplementation(() => {});
+    });
+    afterEach(() => vi.restoreAllMocks());
+
+    /** The info lines of the gate since the last call. */
+    function gateLines(): string[] {
+      const lines = info.mock.calls
+        .map(([msg]) => String(msg))
+        .filter((msg) => msg.includes("the scale's body fat"));
+      info.mockClear();
+      return lines;
+    }
+    /** computeMetrics, and the gate lines it logged. */
+    function gate(adapter: SenssunIfB2Adapter, reading: ScaleReading, p: UserProfile) {
+      gateLines();
+      const payload = adapter.computeMetrics(reading, p);
+      return { payload, lines: gateLines() };
+    }
+    /** Derived from the second barefoot record (bytes 12-23 in range), checksum recomputed. */
+    const record = (change: (frame: Buffer) => void): Buffer => derive(alternateHealth, change);
+    const usedPayload = (p: UserProfile = profile, rec: Buffer = alternateHealth) =>
+      buildPayload(rec.readUInt16BE(10) / 10, 0, { fat: fatOf(rec) }, p);
+    const estimate = (p: UserProfile = profile, rec: Buffer = alternateHealth) =>
+      buildPayload(rec.readUInt16BE(10) / 10, 0, {}, p);
+    /** One weigh-in on a fresh adapter: profile written, `answer` (the logged ack), `rec`. */
+    async function weighed(
+      rec: Buffer,
+      answer: Buffer | null = ack,
+      lookup?: Lookup,
+    ): Promise<{ adapter: SenssunIfB2Adapter; reading: ScaleReading }> {
+      const adapter = await selectedAdapter(answer ?? undefined, lookup);
+      const reading = adapter.parseNotification(rec)!;
+      return { adapter, reading };
+    }
+
+    it('uses the body fat of the second barefoot weigh-in, replayed from its log', async () => {
+      const trace = LOGGED.traces['if-b2-473-barefoot-second'];
+      const r = await replaySession(freshAdapter(LOGGED), trace, LOGGED);
+      const fat = fatOf(alternateHealth);
+      expect(r.reading).toEqual({
+        weight: W2,
+        impedance: 0,
+        scaleComposition: { fat, recordInRange: true, sent: SENT, multiUser: null },
+      });
+      // The harness computes the payload after onSessionEnd: only the pin is left.
+      expect(r.payload).toEqual(buildPayload(W2, 0, { fat }, profile));
+      expect(r.payload?.bodyFatPercent).toBe(r2(fat));
+      expect(gateLines()).toEqual([USED]);
+    });
+
+    it('estimates the first barefoot weigh-in, replayed from its log: body fat out of range', async () => {
+      const trace = LOGGED.traces['if-b2-473-barefoot'];
+      const r = await replaySession(freshAdapter(LOGGED), trace, LOGGED);
+      expect(r.reading).toEqual({
+        weight: W,
+        impedance: 0,
+        scaleComposition: { fat: fatOf(health), recordInRange: false, sent: SENT, multiUser: null },
+      });
+      expect(r.payload).toEqual(buildPayload(W, 0, {}, profile));
+      expect(gateLines()).toEqual([notUsed(REASON.fatOut)]);
+    });
+
+    it.each([
+      ['0x0000', 0x0000, REASON.noFat],
+      ['0x0fff', 0x0fff, REASON.fatOut],
+    ])('estimates a record with body fat %s in bytes 12-13', async (_, raw, why) => {
+      const rec = record((f) => f.writeUInt16BE(raw, 12));
+      const { adapter, reading } = await weighed(rec);
+      const { payload, lines } = gate(adapter, reading, profile);
+      expect(payload).toEqual(estimate(profile, rec));
+      expect(lines).toEqual([notUsed(why)]);
+    });
+
+    it.each([
+      [true, 'the second barefoot record', alternateHealth],
+      [false, 'the first barefoot record', health],
+      [false, 'a record with bytes 16-17 0x0000', record((f) => f.writeUInt16BE(0x0000, 16))],
+      [false, 'a record with bytes 16-17 0xffff', record((f) => f.writeUInt16BE(0xffff, 16))],
+      [false, 'a record with bytes 18-19 0x0000', record((f) => f.writeUInt16BE(0x0000, 18))],
+      [false, 'a record with bytes 18-19 0xffff', record((f) => f.writeUInt16BE(0xffff, 18))],
+      // 90.0: outside a water percentage, inside 0-100.
+      [true, 'a record with bytes 16-17 0x0384', record((f) => f.writeUInt16BE(0x0384, 16))],
+      // Not part of the check: the processor decides about an impedance.
+      [true, 'a record with bytes 14-15 0x0000', record((f) => f.writeUInt16BE(0x0000, 14))],
+      [true, 'a record with bytes 14-15 0x1000', record((f) => f.writeUInt16BE(0x1000, 14))],
+      [true, 'a record with bytes 20-21 0x0000', record((f) => f.writeUInt16BE(0x0000, 20))],
+      [true, 'a record with bytes 22-23 0x0000', record((f) => f.writeUInt16BE(0x0000, 22))],
+    ])('pins recordInRange %s for %s', async (inRange, _, rec) => {
+      const { adapter, reading } = await weighed(rec);
+      expect(reading.scaleComposition).toMatchObject({ recordInRange: inRange });
+      if (rec === health) return;
+      const { payload, lines } = gate(adapter, reading, profile);
+      expect(payload).toEqual(inRange ? usedPayload(profile, rec) : estimate(profile, rec));
+      expect(lines).toEqual([inRange ? USED : notUsed(REASON.otherOut)]);
+    });
+
+    it('checks the rest of the record before the ack', async () => {
+      // Derived: bytes 16-17 0xffff, and the scale acks nothing.
+      const rec = record((f) => f.writeUInt16BE(0xffff, 16));
+      const { adapter, reading } = await weighed(rec, null);
+      expect(gate(adapter, reading, profile).lines).toEqual([notUsed(REASON.otherOut)]);
+    });
+
+    it('estimates a record after a profile write the scale did not ack', async () => {
+      const { adapter, reading } = await weighed(alternateHealth, null);
+      expect(reading.scaleComposition).toMatchObject({ sent: null });
+      const { payload, lines } = gate(adapter, reading, profile);
+      expect(payload).toEqual(estimate());
+      expect(lines).toEqual([notUsed(REASON.notConfirmed)]);
+    });
+
+    it.each([1, 2, 3])('estimates a record after an ack with status 0x0%i', async (status) => {
+      const { adapter, reading } = await weighed(alternateHealth, profileAcknowledgement(status));
+      const { payload, lines } = gate(adapter, reading, profile);
+      expect(payload).toEqual(estimate());
+      expect(lines).toEqual([notUsed(REASON.notConfirmed)]);
+    });
+
+    it('uses the body fat only when the ack comes before the record in one notification', async () => {
+      const first = await selectedAdapter();
+      const recordFirst = first.parseNotification(Buffer.concat([alternateHealth, ack]))!;
+      expect(gate(first, recordFirst, profile).lines).toEqual([notUsed(REASON.notConfirmed)]);
+      const second = await selectedAdapter();
+      const ackFirst = second.parseNotification(Buffer.concat([ack, alternateHealth]))!;
+      expect(gate(second, ackFirst, profile)).toEqual({ payload: usedPayload(), lines: [USED] });
+    });
+
+    it('estimates a record that comes before any profile write', async () => {
+      const adapter = new SenssunIfB2Adapter();
+      await connect(adapter);
+      const reading = adapter.parseNotification(alternateHealth)!;
+      const { payload, lines } = gate(adapter, reading, profile);
+      expect(payload).toEqual(estimate());
+      expect(lines).toEqual([notUsed(REASON.notConfirmed)]);
+    });
+
+    it('uses the body fat after a late ack, once the writes gave up', async () => {
+      const adapter = await selectedAdapter();
+      await vi.advanceTimersByTimeAsync(6_000);
+      adapter.parseNotification(ack);
+      const reading = adapter.parseNotification(alternateHealth)!;
+      expect(gate(adapter, reading, profile)).toEqual({ payload: usedPayload(), lines: [USED] });
+    });
+
+    describe('the weigh-in user against the profile written', () => {
+      const written: UserProfile = { ...profile, birthDate: '1984-05-10' };
+      it.each([
+        ['a height 1 cm more', { ...written, height: written.height + 1 }],
+        ['the other sex', { ...written, gender: 'female' as const }],
+        ['an age 1 year more', { ...written, age: written.age + 1 }],
+        ['the athlete setting on', { ...written, isAthlete: true }],
+        ['a birth date a day later, at the same age', { ...written, birthDate: '1984-05-11' }],
+      ])('estimates for a user with %s', async (_, user) => {
+        const { adapter, reading } = await weighed(alternateHealth, ack, () => written);
+        const { payload, lines } = gate(adapter, reading, user);
+        expect(payload).toEqual(estimate(user));
+        expect(lines).toEqual([notUsed(REASON.otherProfile)]);
+      });
+      it('uses the body fat for a height 0.4 cm more: the same whole cm', async () => {
+        const { adapter, reading } = await weighed(alternateHealth, ack, () => written);
+        const user = { ...written, height: written.height + 0.4 };
+        expect(gate(adapter, reading, user)).toEqual({ payload: usedPayload(user), lines: [USED] });
+      });
+      it('uses the body fat for a height in inches, written and matched alike', async () => {
+        const scale = { weight_unit: 'kg', height_unit: 'in', display_unit: 'weight_unit' };
+        const inches = resolveUserProfile(
+          {
+            name: 'Inch',
+            slug: 'inch',
+            height: 69,
+            birth_date: '1984-01-01',
+            gender: 'male',
+            is_athlete: false,
+            weight_range: { min: 40, max: 150 },
+            last_known_weight: null,
+          } as UserConfig,
+          scale as AppConfig['scale'],
+        );
+        expect(Number.isInteger(inches.height)).toBe(false);
+        const { adapter, reading } = await weighed(alternateHealth, ack, () => inches);
+        expect(gate(adapter, reading, inches)).toEqual({
+          payload: usedPayload(inches),
+          lines: [USED],
+        });
+      });
+    });
+
+    it.each([
+      ['age', 0],
+      ['age', 121],
+      ['height', 49],
+      ['height', 260],
+    ] as const)(
+      'estimates when the %s %i had to be clamped for the command',
+      async (key, value) => {
+        const user: UserProfile = { ...profile, [key]: value };
+        const { adapter, reading } = await weighed(alternateHealth, ack, () => user);
+        const { payload, lines } = gate(adapter, reading, user);
+        expect(payload).toEqual(estimate(user));
+        expect(lines).toEqual([notUsed(REASON.clamped)]);
+      },
+    );
+
+    it('checks the transport profile written when the lookup matches nobody', async () => {
+      const transport: UserProfile = { height: 181, age: 35, gender: 'female', isAthlete: false };
+      const adapter = new SenssunIfB2Adapter();
+      await connect(adapter, [], () => undefined, transport);
+      await settleSelection(adapter);
+      adapter.parseNotification(ack);
+      const reading = adapter.parseNotification(alternateHealth)!;
+      expect(gate(adapter, reading, transport)).toEqual({
+        payload: usedPayload(transport),
+        lines: [USED],
+      });
+      expect(gate(adapter, reading, profile).lines).toEqual([notUsed(REASON.otherProfile)]);
+    });
+
+    describe('keeps everything the gate reads pinned to the reading', () => {
+      const other: UserProfile = { height: 160, age: 25, gender: 'female', isAthlete: true };
+      it('through another weigh-in with its own profile and ack', async () => {
+        const { adapter, reading } = await weighed(alternateHealth);
+        adapter.onSessionEnd();
+        adapter.onSessionStart();
+        await connect(adapter, [], () => other);
+        await settleSelection(adapter);
+        adapter.parseNotification(ack);
+        expect(gate(adapter, reading, profile)).toEqual({ payload: usedPayload(), lines: [USED] });
+      });
+      it('through a reload with another lookup', async () => {
+        const { adapter, reading } = await weighed(alternateHealth);
+        adapter.configure({ profileForWeight: () => other });
+        expect(gate(adapter, reading, profile)).toEqual({ payload: usedPayload(), lines: [USED] });
+      });
+      it('through a next session that writes and gets no ack', async () => {
+        const { adapter, reading } = await weighed(alternateHealth);
+        adapter.onSessionEnd();
+        adapter.onSessionStart();
+        await connect(adapter);
+        await settleSelection(adapter);
+        expect(gate(adapter, reading, profile)).toEqual({ payload: usedPayload(), lines: [USED] });
+      });
+    });
+
+    it('keeps the estimate for the weight held from the ack, without a line', async () => {
+      const adapter = await selectedAdapter();
+      const held = adapter.parseNotification(ack)!;
+      expect(held).toEqual({ weight: W, impedance: 0 });
+      expect(gate(adapter, held, profile)).toEqual({
+        payload: buildPayload(W, 0, {}, profile),
+        lines: [],
+      });
+    });
+
+    it('exports the accepted body fat and nothing for a rejected one with the estimate off', async () => {
+      const off: UserProfile = { ...profile, estimateBodyComposition: false };
+      const used = await weighed(alternateHealth);
+      const accepted = gate(used.adapter, used.reading, off);
+      expect(accepted.payload.bodyFatPercent).toBe(r2(fatOf(alternateHealth)));
+      expect(accepted.lines).toEqual([USED]);
+      const unconfirmed = await weighed(alternateHealth, null);
+      const rejected = gate(unconfirmed.adapter, unconfirmed.reading, off);
+      expect(rejected.payload.bodyFatPercent).toBeNull();
+      expect(rejected.lines).toEqual([notUsed(REASON.notConfirmed, NO_ESTIMATE)]);
+    });
+
+    it('logs no profile value and no command byte', async () => {
+      const debug = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+      const madeUp: UserProfile = { height: 187, age: 63, gender: 'female', isAthlete: false };
+      const fixture = { ...LOGGED, profile: madeUp, config: { profileForWeight: () => madeUp } };
+      const trace = LOGGED.traces['if-b2-473-barefoot-second'];
+      const r = await replaySession(freshAdapter(fixture), trace, fixture);
+      expect(r.writes.length).toBeGreaterThan(0);
+      const lines = [...debug.mock.calls, ...info.mock.calls]
+        .map(([msg]) => String(msg))
+        .filter((msg) => msg.startsWith('Senssun IF_B2:'));
+      const allowed = [
+        /^Senssun IF_B2: record \d+\.\d kg, fat \d+(\.\d)? %, impedance \d+ ohm, bytes 16-19 (in|out of) range$/,
+        /^Senssun IF_B2: profile confirmed after \d+ write\(s\), \d+ ms after the first$/,
+      ];
+      expect(lines).toContain(USED);
+      for (const line of lines) {
+        expect(line === USED || allowed.some((re) => re.test(line)), line).toBe(true);
+        for (const w of r.writes) expect(line).not.toContain(w.hex);
+      }
+    });
+
+    it.each([
+      ['second barefoot', alternateHealth, 'in'],
+      ['first barefoot', health, 'out of'],
+    ])('logs the decoded %s record once, in a debug line', async (_, rec, range) => {
+      const debug = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+      const adapter = await selectedAdapter(ack);
+      adapter.parseNotification(rec);
+      adapter.parseNotification(rec);
+      const expected =
+        `Senssun IF_B2: record ${(rec.readUInt16BE(10) / 10).toFixed(1)} kg, ` +
+        `fat ${rec.readUInt16BE(12) / 10} %, impedance ${rec.readUInt16BE(14)} ohm, ` +
+        `bytes 16-19 ${range} range`;
+      const lines = debug.mock.calls
+        .map(([msg]) => String(msg))
+        .filter((msg) => msg.startsWith('Senssun IF_B2: record'));
+      expect(lines).toEqual([expected]);
+    });
+
+    describe('with more than one user', () => {
+      const user = (name: string, height: number, min: number, max: number): UserConfig => ({
+        name,
+        slug: name.toLowerCase(),
+        height,
+        birth_date: '1984-01-01',
+        gender: 'male',
+        is_athlete: false,
+        weight_range: { min, max },
+        last_known_weight: null,
+      });
+      // A's range holds the logged weight, B's a made-up one far below it.
+      const alice = user('Alice', 176, Math.floor(W2) - 5, Math.ceil(W2) + 5);
+      const bob = user('Bob', 168, 20, 40);
+      const liveA = alternateLive;
+      const liveB = liveFrame(300);
+      const configOf = (users: UserConfig[]): AppConfig =>
+        ({
+          scale: { weight_unit: 'kg', height_unit: 'cm', display_unit: 'weight_unit' },
+          unknown_user: 'nearest',
+          users,
+        }) as unknown as AppConfig;
+      const TWO = configOf([alice, bob]);
+      // Made up, locally administered.
+      const SCALE_X = '02:00:00:00:00:0a';
+      const SCALE_Y = '02:00:00:00:00:0b';
+      const A = (): UserProfile => resolveUserProfile(alice, TWO.scale);
+      const B = (): UserProfile => resolveUserProfile(bob, TWO.scale);
+
+      function adapterFor(config: AppConfig): SenssunIfB2Adapter {
+        const adapter = new SenssunIfB2Adapter();
+        adapter.configure(buildAdapterRuntimeConfig(config, undefined));
+        return adapter;
+      }
+      /**
+       * A whole session on `adapter` with the scale at `address` (null: the
+       * transport gave none): live weight and profile write (none without
+       * `liveWeight`), `answer`, `rec`.
+       */
+      async function weighIn(
+        adapter: SenssunIfB2Adapter,
+        liveWeight: Buffer | null,
+        answer: Buffer | null = ack,
+        rec: Buffer | null = alternateHealth,
+        address: string | null = SCALE_X,
+      ): Promise<ScaleReading | null> {
+        adapter.onSessionStart(address ?? undefined);
+        await adapter.onConnected(context());
+        if (liveWeight) await settleSelection(adapter, liveWeight);
+        if (answer) adapter.parseNotification(answer);
+        const reading = rec ? adapter.parseNotification(rec) : null;
+        adapter.onSessionEnd();
+        return reading;
+      }
+
+      it('uses the first weigh-in of a fresh adapter with one user', async () => {
+        const adapter = adapterFor(configOf([alice]));
+        const reading = (await weighIn(adapter, liveA))!;
+        expect(reading.scaleComposition).toMatchObject({ multiUser: null });
+        expect(gate(adapter, reading, A())).toEqual({ payload: usedPayload(A()), lines: [USED] });
+      });
+      it('estimates the first weigh-in of a run', async () => {
+        const adapter = adapterFor(TWO);
+        const reading = (await weighIn(adapter, liveA))!;
+        expect(reading.scaleComposition).toMatchObject({ multiUser: { previous: null } });
+        expect(gate(adapter, reading, A())).toEqual({
+          payload: estimate(A()),
+          lines: [notUsed(REASON.switched)],
+        });
+      });
+      it('uses the second weigh-in of the same user', async () => {
+        const adapter = adapterFor(TWO);
+        await weighIn(adapter, liveA);
+        const second = (await weighIn(adapter, liveA))!;
+        expect(gate(adapter, second, A())).toEqual({ payload: usedPayload(A()), lines: [USED] });
+      });
+      it('estimates the first weigh-in after another user', async () => {
+        const adapter = adapterFor(TWO);
+        await weighIn(adapter, liveA);
+        const reading = (await weighIn(adapter, liveB))!;
+        expect(gate(adapter, reading, B())).toEqual({
+          payload: estimate(B()),
+          lines: [notUsed(REASON.switched)],
+        });
+      });
+      it('uses the second weigh-in of the other user', async () => {
+        const adapter = adapterFor(TWO);
+        await weighIn(adapter, liveA);
+        await weighIn(adapter, liveB);
+        const third = (await weighIn(adapter, liveB))!;
+        expect(gate(adapter, third, B())).toEqual({ payload: usedPayload(B()), lines: [USED] });
+      });
+      it('estimates after a weigh-in whose ack had another status', async () => {
+        const adapter = adapterFor(TWO);
+        await weighIn(adapter, liveA);
+        await weighIn(adapter, liveA, profileAcknowledgement(1), null);
+        const third = (await weighIn(adapter, liveA))!;
+        expect(gate(adapter, third, A()).lines).toEqual([notUsed(REASON.switched)]);
+      });
+      it('estimates after a weigh-in that wrote the profile and got no ack', async () => {
+        const adapter = adapterFor(TWO);
+        await weighIn(adapter, liveA);
+        await weighIn(adapter, liveA, null, null);
+        const third = (await weighIn(adapter, liveA))!;
+        expect(gate(adapter, third, A()).lines).toEqual([notUsed(REASON.switched)]);
+      });
+      it('keeps the confirmed profile through a session with a record and no profile write', async () => {
+        const adapter = adapterFor(TWO);
+        await weighIn(adapter, liveA);
+        const recordOnly = (await weighIn(adapter, null, null))!;
+        expect(recordOnly.scaleComposition).toMatchObject({ sent: null, multiUser: null });
+        const third = (await weighIn(adapter, liveA))!;
+        expect(gate(adapter, third, A())).toEqual({ payload: usedPayload(A()), lines: [USED] });
+      });
+      it('names the profile mismatch, not the switch, for a weigh-in matched to the other user', async () => {
+        const adapter = adapterFor(TWO);
+        await weighIn(adapter, liveA);
+        const reading = (await weighIn(adapter, liveB))!;
+        expect(gate(adapter, reading, A())).toEqual({
+          payload: estimate(A()),
+          lines: [notUsed(REASON.otherProfile)],
+        });
+      });
+      it('counts the users at the profile choice, not at the record', async () => {
+        const adapter = adapterFor(configOf([alice]));
+        adapter.onSessionStart(SCALE_X);
+        await adapter.onConnected(context());
+        await settleSelection(adapter, liveA);
+        adapter.configure(buildAdapterRuntimeConfig(TWO, undefined));
+        adapter.parseNotification(ack);
+        const reading = adapter.parseNotification(alternateHealth)!;
+        expect(reading.scaleComposition).toMatchObject({ multiUser: null });
+      });
+      it('estimates the first weigh-in on another scale', async () => {
+        const adapter = adapterFor(TWO);
+        await weighIn(adapter, liveA, ack, alternateHealth, SCALE_X);
+        const other = (await weighIn(adapter, liveA, ack, alternateHealth, SCALE_Y))!;
+        expect(other.scaleComposition).toMatchObject({ multiUser: { previous: null } });
+        expect(gate(adapter, other, A()).lines).toEqual([notUsed(REASON.switched)]);
+      });
+      it('takes the address of the same scale in either spelling', async () => {
+        const adapter = adapterFor(TWO);
+        await weighIn(adapter, liveA, ack, alternateHealth, SCALE_X);
+        const spelt = SCALE_X.replace(/:/g, '').toUpperCase();
+        const second = (await weighIn(adapter, liveA, ack, alternateHealth, spelt))!;
+        expect(gate(adapter, second, A())).toEqual({ payload: usedPayload(A()), lines: [USED] });
+      });
+      it.each([
+        ['no address', null],
+        ['an empty address', ''],
+      ])('estimates every weigh-in of a scale with %s', async (_, address) => {
+        const adapter = adapterFor(TWO);
+        await weighIn(adapter, liveA, ack, alternateHealth, address);
+        const second = (await weighIn(adapter, liveA, ack, alternateHealth, address))!;
+        expect(gate(adapter, second, A()).lines).toEqual([notUsed(REASON.switched)]);
+      });
+      it('keeps the confirmed profile through a reload', async () => {
+        const adapter = adapterFor(TWO);
+        await weighIn(adapter, liveA);
+        adapter.configure(buildAdapterRuntimeConfig(TWO, undefined));
+        const second = (await weighIn(adapter, liveA))!;
+        expect(gate(adapter, second, A())).toEqual({ payload: usedPayload(A()), lines: [USED] });
+      });
+      it('reads only the pin: a later weigh-in of another user changes nothing', async () => {
+        const adapter = adapterFor(TWO);
+        await weighIn(adapter, liveA);
+        const second = (await weighIn(adapter, liveA))!;
+        await weighIn(adapter, liveB);
+        expect(gate(adapter, second, A())).toEqual({ payload: usedPayload(A()), lines: [USED] });
+      });
     });
   });
 });
