@@ -825,7 +825,7 @@ describe('waitForRawReading()', () => {
       }),
     });
 
-    const promise = waitForRawReading(charMap, device, adapter, PROFILE, '');
+    const promise = waitForRawReading(req(charMap, device, adapter, PROFILE, ''));
     await vi.waitFor(() => expect(notifyChar.subscribeCalled).toBe(true));
     notifyChar.triggerData(Buffer.from([0x01]));
 

@@ -664,7 +664,6 @@ export async function readWithTimeouts(
     deviceName?: string;
     /** Advertised manufacturer data, handed on as ConnectionContext.manufacturerData. */
     manufacturerData?: { id: number; data: Buffer };
-    selectProfile?: SessionProfileSelector;
   },
 ): Promise<RawReading> {
   // A shutdown ends the session the way a timeout does, instead of waiting out

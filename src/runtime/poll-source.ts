@@ -1,5 +1,5 @@
 import type { RawReading } from '../ble/shared.js';
-import type { ScaleAdapter, SessionProfileSelector } from '../interfaces/scale-adapter.js';
+import type { ScaleAdapter } from '../interfaces/scale-adapter.js';
 import { scanAndReadRaw, releaseTransport } from '../ble/index.js';
 import { POLL_CYCLE_TIMEOUT_MS } from '../ble/types.js';
 import { resolveScaleAuth, resolveUserProfile } from '../config/resolve.js';

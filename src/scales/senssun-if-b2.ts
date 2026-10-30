@@ -6,7 +6,7 @@ import type {
   ScaleReading,
   UserProfile,
 } from '../interfaces/scale-adapter.js';
-import { buildPayload, ReadingComposition, uuid16 } from './body-comp-helpers.js';
+import { buildPayload, uuid16 } from './body-comp-helpers.js';
 import { matchesDescriptor, type MatchDescriptor } from './match-descriptor.js';
 import { isHistoricalReading } from '../interfaces/reading-time.js';
 
@@ -56,6 +56,9 @@ export interface IfB2ProfileAck {
 export type IfB2Frame = IfB2LiveWeight | IfB2ProfileAck | IfB2HealthRecord;
 
 type IfB2SelectedProfile = { userSlug: string; profile: UserProfile };
+
+/** The decoded record a reading came from, carried on the reading (D077). */
+type IfB2Composition = { record: IfB2HealthRecord; transmittedFatTenths: number };
 
 function f32(value: number): number {
   return Math.fround(value);
@@ -305,10 +308,6 @@ export class SenssunIfB2Adapter implements ScaleAdapterCore {
   readonly serviceUuid = uuid16(0xfff0);
   readonly charNotifyUuid = uuid16(0xfff1);
   readonly charWriteUuid = uuid16(0xfff2);
-  readonly normalizesWeight = true;
-  private readonly compositions = new ReadingComposition<
-    { record: IfB2HealthRecord; transmittedFatTenths: number } | undefined
-  >();
   private reassembler = new IfB2Reassembler();
   private ctx: ConnectionContext | undefined;
   private stableWeight: number | undefined;
@@ -473,13 +472,13 @@ export class SenssunIfB2Adapter implements ScaleAdapterCore {
     this.completed = true;
     this.clearTimers();
     this.pendingCommandError = undefined;
-    const reading: ScaleReading = {
+    const reading: ScaleReading<IfB2Composition> = {
       weight: decoded.weightKg,
       impedance: decoded.impedanceOhms,
       selectedUserSlug: this.selected.userSlug,
       timestamp,
+      scaleComposition: { record: decoded, transmittedFatTenths },
     };
-    this.compositions.pin(reading, { record: decoded, transmittedFatTenths });
     return reading;
   }
 
@@ -527,12 +526,12 @@ export class SenssunIfB2Adapter implements ScaleAdapterCore {
       }
 
       if (!this.selected && !this.ctx && profile) {
-        const reading: ScaleReading = {
+        const reading: ScaleReading<IfB2Composition> = {
           weight: decoded.weightKg,
           impedance: decoded.impedanceOhms,
           timestamp: new Date(Date.now() - decoded.elapsedSeconds * 1_000),
+          scaleComposition: { record: decoded, transmittedFatTenths: u16(frame, 12) },
         };
-        this.compositions.pin(reading, { record: decoded, transmittedFatTenths: u16(frame, 12) });
         emitted = reading;
         continue;
       }
@@ -576,7 +575,7 @@ export class SenssunIfB2Adapter implements ScaleAdapterCore {
 
   computeMetrics(reading: ScaleReading, profile: UserProfile): BodyComposition {
     if (reading.impedance === 0) return buildPayload(reading.weight, 0, {}, profile);
-    const pinned = this.compositions.of(reading, undefined);
+    const pinned = reading.scaleComposition as IfB2Composition | undefined;
     if (!pinned) return buildPayload(reading.weight, reading.impedance, {}, profile);
     const record = pinned.record;
     // Stored readings are attributed independently at export time. Recompute

@@ -37,7 +37,7 @@ function makeCtx(ble: Record<string, unknown> | undefined): Ctx {
 
 async function optionsFor(ctx: Ctx): Promise<Record<string, unknown>> {
   scanAndReadRaw.mockClear();
-  await new PollReadingSource(ctx, [], () => null).nextReading(new AbortController().signal);
+  await new PollReadingSource(ctx, []).nextReading(new AbortController().signal);
   return scanAndReadRaw.mock.calls[0][0] as Record<string, unknown>;
 }
 
@@ -60,7 +60,7 @@ describe('PollReadingSource ble.preemptive_adapter_reset (#417)', () => {
 
   it('re-reads the option on every cycle, so a config reload lands without a restart', async () => {
     const ctx = makeCtx({ preemptive_adapter_reset: true });
-    const source = new PollReadingSource(ctx, [], () => null);
+    const source = new PollReadingSource(ctx, []);
 
     await source.nextReading(new AbortController().signal);
     (ctx as { config: { ble?: Record<string, unknown> } }).config.ble = {

@@ -1,4 +1,9 @@
-import type { AdapterRuntimeConfig, ScaleAuth, UserProfile } from '../interfaces/scale-adapter.js';
+import type {
+  AdapterRuntimeConfig,
+  ScaleAuth,
+  SessionProfileSelection,
+  UserProfile,
+} from '../interfaces/scale-adapter.js';
 import type { z } from 'zod';
 import type { BleHandlerName } from '../ble/types.js';
 import {

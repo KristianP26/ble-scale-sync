@@ -3,7 +3,6 @@ import type {
   BleDeviceInfo,
   UserProfile,
   ScaleAuth,
-  SessionProfileSelector,
 } from '../../interfaces/scale-adapter.js';
 import type { EsphomeProxyConfig } from '../../config/schema.js';
 import type { RawReading } from '../shared.js';

@@ -190,7 +190,6 @@ export async function createReadingSource(opts: ReadingSourceOptions): Promise<R
       opts.adapters,
       opts.targetMac,
       opts.profile,
-      opts.selectProfile,
     );
     return {
       kind: 'watcher',

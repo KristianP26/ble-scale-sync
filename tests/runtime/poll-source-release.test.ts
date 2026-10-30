@@ -25,7 +25,7 @@ type Ctx = ConstructorParameters<typeof PollReadingSource>[0];
 describe('PollReadingSource.stop (A-02)', () => {
   it('releases the BLE transport of the configured handler', async () => {
     const ctx = { config: { users: [{}], scale: {} }, bleHandler: 'auto' } as unknown as Ctx;
-    const source: ReadingSource = new PollReadingSource(ctx, [], () => null);
+    const source: ReadingSource = new PollReadingSource(ctx, []);
 
     await source.stop?.();
 

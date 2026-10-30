@@ -70,9 +70,9 @@ export async function buildReadingSource(
     adapters,
     targetMac: ctx.scaleMac,
     profile,
-    selectProfile,
     scaleAuth: scaleAuth(),
   });
+
   if (plan.kind === 'watcher') {
     const { watcher } = plan;
     // Proxy liveness (#281). The watcher branch has no watchdog of its own: a
@@ -97,7 +97,6 @@ export async function buildReadingSource(
           adapters,
           targetMac: ctx.scaleMac,
           profile,
-          selectProfile,
           scaleAuth: scaleAuth(),
         }),
       onFailure: (err) => {
@@ -137,7 +136,7 @@ export async function buildReadingSource(
   const applyGraceFloor = plan.appliesGraceFloor;
 
   return {
-    source: new PollReadingSource(ctx, adapters, selectProfile),
+    source: new PollReadingSource(ctx, adapters),
     failureLogPrefix: 'No scale found',
     // A skipped connect found the scale, so "No scale found" would send the
     // user looking in the wrong place (#417). So does a session that ran out

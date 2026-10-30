@@ -4,7 +4,6 @@ import type {
   ScaleReading,
   ScaleAuth,
   LiveWeight,
-  SessionProfileSelector,
 } from '../interfaces/scale-adapter.js';
 import type { MqttProxyConfig, EsphomeProxyConfig, HaBluetoothConfig } from '../config/schema.js';
 import { createLogger } from '../logger.js';

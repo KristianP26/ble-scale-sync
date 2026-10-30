@@ -4,7 +4,6 @@ import type {
   ScaleReading,
   ConnectionContext,
   ScaleAuth,
-  SessionProfileSelector,
 } from '../interfaces/scale-adapter.js';
 import { errMsg, bleLog } from './types.js';
 import { HistoryBuffer, HoldTimer } from './notification-processor.js';
@@ -99,7 +98,6 @@ function initializeAdapter(
       const availableChars = new Set<string>(charMap.keys());
       const ctx: ConnectionContext = {
         profile,
-        selectProfile,
         scaleAuth,
         deviceAddress: address,
         ...(deviceName ? { deviceName } : {}),

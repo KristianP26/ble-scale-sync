@@ -1,10 +1,34 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-import { createReadingSource } from '../../src/ble/index.js';
-import type { ScaleAdapter, UserProfile } from '../../src/interfaces/scale-adapter.js';
+// Mock the two watcher modules so the factory constructs arg-capturing fakes
+// (and so the real mqtt/esphome transport deps are never loaded).
+const h = vi.hoisted(() => {
+  class FakeMqttWatcher {
+    args: unknown[];
+    constructor(...a: unknown[]) {
+      this.args = a;
+    }
+  }
+  class FakeEsphomeWatcher {
+    args: unknown[];
+    constructor(...a: unknown[]) {
+      this.args = a;
+    }
+  }
+  return { FakeMqttWatcher, FakeEsphomeWatcher };
+});
+
+vi.mock('../../src/ble/handler-mqtt-proxy/index.js', () => ({ ReadingWatcher: h.FakeMqttWatcher }));
+vi.mock('../../src/ble/handler-esphome-proxy/index.js', () => ({
+  ReadingWatcher: h.FakeEsphomeWatcher,
+}));
+
+const { createReadingSource } = await import('../../src/ble/index.js');
+import type { ScaleAdapter, UserProfile, ScaleAuth } from '../../src/interfaces/scale-adapter.js';
 
 const ADAPTERS = [{ name: 'A' }] as unknown as ScaleAdapter[];
 const PROFILE = { height: 170, age: 30, gender: 'male', isAthlete: false } as UserProfile;
+const AUTH = { pin: 1234, userIndex: 2 } as ScaleAuth;
 
 const ORIG_PLATFORM = process.platform;
 const ORIG_DRIVER = process.env.NOBLE_DRIVER;

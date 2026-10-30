@@ -760,7 +760,6 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
       profile,
       onLiveData,
       scaleAuth,
-      selectProfile,
       readingTimeoutMs,
       abortSignal,
       deviceName,

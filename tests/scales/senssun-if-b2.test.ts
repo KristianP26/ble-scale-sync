@@ -4,6 +4,7 @@ import {
   IfB2Reassembler,
   buildCloudProfileCommand,
   decodeIfB2Frame,
+  type IfB2HealthRecord,
 } from '../../src/scales/senssun-if-b2.js';
 import { uuid16 } from '../../src/scales/body-comp-helpers.js';
 import type { SessionProfileSelector, UserProfile } from '../../src/interfaces/scale-adapter.js';
@@ -37,6 +38,12 @@ const profileDeleted = profileAcknowledgement(2);
 const profileFull = profileAcknowledgement(3);
 const profile = { height: 176, age: 42, gender: 'male' as const, isAthlete: false };
 const profileUnsupported = profileAcknowledgement(4);
+
+function decodeRecord(frame: Buffer, withProfile?: UserProfile): IfB2HealthRecord {
+  const decoded = decodeIfB2Frame(frame, withProfile);
+  if (decoded.frameType !== 'health_record') throw new Error(`not a record: ${decoded.frameType}`);
+  return decoded;
+}
 
 function liveFrame(weightTenths: number, control = 0xa0): Buffer {
   const frame = Buffer.from(live);
@@ -777,7 +784,7 @@ describe('Senssun IF_B2 session state', () => {
       frame.writeUInt16BE(0xffff, 20);
       frame.writeUInt16BE(0xffff, 22);
     });
-    const expected = decodeIfB2Frame(invalidComposition, profile);
+    const expected = decodeRecord(invalidComposition, profile);
     const reading = adapter.parseNotification(invalidComposition)!;
 
     expect(adapter.computeMetrics(reading, profile)).toMatchObject({
@@ -791,7 +798,7 @@ describe('Senssun IF_B2 session state', () => {
   it('uses the selected profile rather than the transport startup profile', async () => {
     const selectedProfile: UserProfile = { ...profile, age: 62, gender: 'female' };
     const transportProfile: UserProfile = { ...profile, age: 20 };
-    const expected = decodeIfB2Frame(health, selectedProfile);
+    const expected = decodeRecord(health, selectedProfile);
     const adapter = new SenssunIfB2Adapter();
     await adapter.onConnected(
       context([], () => ({ userSlug: 'alice', profile: selectedProfile }), transportProfile),
