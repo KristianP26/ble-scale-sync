@@ -10,7 +10,6 @@ import type { WeightUnit, UserConfig } from '../config/schema.js';
 import type { AppContext } from './context.js';
 import { resolveUserProfile } from '../config/resolve.js';
 import { matchUserByWeight, detectWeightDrift, isOutOfRange } from '../config/user-matching.js';
-import type { MatchResult } from '../config/user-matching.js';
 import { updateLastKnownWeight } from '../config/write.js';
 import { dispatchExports, type ExportAttempt } from '../orchestrator.js';
 import { createLogger } from '../logger.js';
@@ -215,17 +214,6 @@ export async function processReading(
   const frames = classifyFrames(raw, new Date());
   const stored = frames.filter((f) => f.historical);
   const live = frames.filter((f) => !f.historical);
-  const latestLive = live[live.length - 1]?.reading;
-  if (
-    latestLive?.selectedUserSlug !== undefined &&
-    !ctx.config.users.some((user) => user.slug === latestLive.selectedUserSlug)
-  ) {
-    log.warn(
-      `Selected user slug "${latestLive.selectedUserSlug}" is not configured; skipping live reading.`,
-    );
-    ctx.display?.beep(600, 150, 3);
-    live.length = 0;
-  }
   if (ctx.config.users.length > 1) {
     return processMultiUser(ctx, raw, stored, live, opts.getExportersForUser);
   }
@@ -650,16 +638,11 @@ async function processMultiUser(
   }
 
   if (latestLive) {
-    // Session authorization applies only to live frames. Stored records retain
-    // their independent attribution above, even when they contain a stale slug.
-    const selectedSlug = latestLive.reading.selectedUserSlug;
-    const match: MatchResult =
-      selectedSlug === undefined
-        ? matchUserByWeight(ctx.config.users, latestLive.reading.weight, ctx.config.unknown_user)
-        : {
-            user: ctx.config.users.find((user) => user.slug === selectedSlug) ?? null,
-            tier: 'exact',
-          };
+    const match = matchUserByWeight(
+      ctx.config.users,
+      latestLive.reading.weight,
+      ctx.config.unknown_user,
+    );
     if (!match.user) {
       // matchUserByWeight has already logged its warning, if it has one.
       ctx.display?.beep(600, 150, 3);

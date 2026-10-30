@@ -67,10 +67,6 @@ export interface ScaleReading<C = unknown> {
    */
   impedance: number;
   /**
-   * User slug selected for this session, when profile authorization resolved one.
-   */
-  selectedUserSlug?: string;
-  /**
    * When the scale measured this reading (ADR D027).
    *
    * An adapter whose frame carries a time (the SIG Time Stamp flag, a vendor
@@ -153,18 +149,6 @@ export interface UserProfile {
    */
   estimateBodyComposition?: boolean;
 }
-/** A profile selected for the current session and authorized for a weight. */
-export interface SessionProfileSelection {
-  userSlug: string;
-  profile: UserProfile;
-}
-
-/**
- * Resolves the profile authorized for body-composition data at a measured weight.
- * Return `null` when the runtime cannot safely authorize body-composition data
- * for the weight.
- */
-export type SessionProfileSelector = (weightKg: number) => SessionProfileSelection | null;
 
 export interface BodyComposition {
   weight: number;
@@ -288,11 +272,6 @@ export interface ConnectionContext {
   subscribe(charUuid: string): Promise<void>;
   /** User profile from .env configuration. */
   profile: UserProfile;
-  /**
-   * Select the profile authorized for body-composition data at a measured weight.
-   * Return `null` when the runtime cannot safely authorize that data for the weight.
-   */
-  selectProfile?: SessionProfileSelector;
   /** Optional consent material for scales that need a PIN (Beurer SIG). */
   scaleAuth?: ScaleAuth;
   /**

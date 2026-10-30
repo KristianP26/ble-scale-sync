@@ -37,10 +37,6 @@ const h = vi.hoisted(() => {
     createReadingSource: vi.fn(),
     raceWithLiveness: vi.fn(() => new Promise(() => {})),
     resolveUserProfile: vi.fn(() => ({ __profile: 'sentinel' })),
-    resolveSessionProfile: vi.fn((config: { users: Array<{ slug?: string }> }) => ({
-      userSlug: config.users[0]?.slug ?? 'unknown',
-      profile: { __profile: config.users[0]?.slug ?? 'unknown' },
-    })),
     abortableSleep: vi.fn(async () => undefined),
   };
 });

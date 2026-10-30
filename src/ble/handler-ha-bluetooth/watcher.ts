@@ -1,8 +1,4 @@
-import type {
-  ScaleAdapter,
-  BleDeviceInfo,
-  SessionProfileSelector,
-} from '../../interfaces/scale-adapter.js';
+import type { ScaleAdapter, BleDeviceInfo } from '../../interfaces/scale-adapter.js';
 import type { HaBluetoothConfig } from '../../config/schema.js';
 import type { RawReading } from '../shared.js';
 import { resolveAdapter } from '../../scales/resolve.js';
@@ -40,7 +36,6 @@ export class ReadingWatcher implements Watcher {
   private adapters: ScaleAdapter[];
   private targetMac?: string;
   private profile?: ProfileSource;
-  private selectProfile?: SessionProfileSelector;
   private config: HaBluetoothConfig;
   private readonly dedup = new DedupWindow(DEDUP_WINDOW_MS);
   private client: HaBluetoothClient | null = null;
@@ -65,13 +60,11 @@ export class ReadingWatcher implements Watcher {
     adapters: ScaleAdapter[],
     targetMac?: string,
     profile?: ProfileSource,
-    selectProfile?: SessionProfileSelector,
   ) {
     this.config = config;
     this.adapters = adapters;
     this.targetMac = targetMac?.toLowerCase();
     this.profile = profile;
-    this.selectProfile = selectProfile;
   }
 
   async start(): Promise<void> {
@@ -118,7 +111,6 @@ export class ReadingWatcher implements Watcher {
     this.adapters = config.adapters;
     this.targetMac = config.targetMac?.toLowerCase();
     if (config.profile) this.profile = config.profile;
-    this.selectProfile = config.selectProfile;
   }
 
   private handleAd(info: BleDeviceInfo, address: string): void {

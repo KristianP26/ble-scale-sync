@@ -1,9 +1,4 @@
-import type {
-  ScaleAdapter,
-  UserProfile,
-  ScaleAuth,
-  SessionProfileSelector,
-} from '../interfaces/scale-adapter.js';
+import type { ScaleAdapter, UserProfile, ScaleAuth } from '../interfaces/scale-adapter.js';
 import type { RawReading } from './shared.js';
 
 /**
@@ -32,7 +27,6 @@ export interface WatcherConfig {
   adapters: ScaleAdapter[];
   targetMac?: string;
   profile?: ProfileSource;
-  selectProfile?: SessionProfileSelector;
   scaleAuth?: ScaleAuth;
 }
 

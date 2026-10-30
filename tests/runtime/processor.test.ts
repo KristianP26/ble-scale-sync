@@ -229,46 +229,7 @@ describe('processReading: single-user', () => {
     expect(ok).toBe(true);
     expect(dispatchExports).not.toHaveBeenCalled();
   });
-  it('routes the current sole selected slug after a config reload', async () => {
-    const ctx = makeCtx([mom]);
-    const exporters = [fakeExporter('mom-exporter')];
-    const raw: RawReading = {
-      reading: { weight: 60, impedance: 500, selectedUserSlug: 'mom' },
-      adapter: fakeAdapter(),
-    };
 
-    await processReading(ctx, raw, { singleUserExporters: exporters });
-
-    const [targets, , context] = vi.mocked(dispatchExports).mock.calls[0];
-    expect(targets).toEqual(exporters);
-    expect(context).toMatchObject({ userName: 'Mom', userSlug: 'mom' });
-  });
-
-  it.each([undefined, new Date()])(
-    'ignores a stale live selected slug after reloading from two users to one (%s)',
-    async (timestamp) => {
-      const ctx = makeCtx([mom], {
-        outOfRange: 'warn',
-        configSource: 'yaml',
-        configPath: '/tmp/config.yaml',
-      });
-      const adapter = fakeAdapter();
-      const computeMetrics = vi.spyOn(adapter, 'computeMetrics');
-      const raw: RawReading = {
-        // Dad was selected before the config reloaded, but only Mom remains.
-        reading: { weight: 82, impedance: 500, selectedUserSlug: 'dad', timestamp },
-        adapter,
-      };
-
-      await processReading(ctx, raw, { singleUserExporters: [fakeExporter('mom-exporter')] });
-
-      expect(dispatchExports).not.toHaveBeenCalled();
-      expect(computeMetrics).not.toHaveBeenCalled();
-      expect(checkAndLogUpdate).not.toHaveBeenCalled();
-      expect(updateLastKnownWeight).not.toHaveBeenCalled();
-      expect(ctx.lastExportedWeights).toEqual(new Map());
-    },
-  );
   it('dispatches with ExportContext built from the single user', async () => {
     const ctx = makeCtx([dad]);
     const exporters = [fakeExporter()];
@@ -475,140 +436,6 @@ describe('processReading: multi-user', () => {
     expect(context).toHaveProperty('driftWarning');
     expect(String((context as { driftWarning?: string }).driftWarning)).toMatch(/upper boundary/);
   });
-  it.each([undefined, new Date()])(
-    'routes a live selected slug to that user profile and exporters (%s)',
-    async (timestamp) => {
-      const ctx = makeCtx([dad, mom]);
-      const exporters = [fakeExporter('mom-exporter')];
-      const getter = vi.fn(() => exporters);
-      const computeMetrics = vi.fn(
-        (_reading: ScaleReading, profile: UserProfile): BodyComposition => ({
-          ...FIXED_BODY_COMP,
-          bmi: profile.height,
-        }),
-      );
-      const raw: RawReading = {
-        reading: { weight: 82, impedance: 500, selectedUserSlug: 'mom', timestamp },
-        adapter: fakeAdapter(),
-      };
-      raw.adapter.computeMetrics = computeMetrics;
-
-      await processReading(ctx, raw, { getExportersForUser: getter });
-
-      expect(getter).toHaveBeenCalledWith('mom');
-      expect(computeMetrics).toHaveBeenCalledWith(
-        expect.anything(),
-        expect.objectContaining({ height: 165, gender: 'female' }),
-      );
-      expect(vi.mocked(dispatchExports).mock.calls[0][2]).toMatchObject({
-        userName: 'Mom',
-        userSlug: 'mom',
-      });
-    },
-  );
-
-  it('skips an unknown selected slug without rematching or exporting', async () => {
-    const ctx = makeCtx([dad, mom]);
-    const getter = vi.fn(() => [fakeExporter()]);
-    const raw: RawReading = {
-      reading: { weight: 82, impedance: 500, selectedUserSlug: 'unknown' },
-      adapter: fakeAdapter(),
-    };
-
-    await processReading(ctx, raw, { getExportersForUser: getter });
-
-    expect(getter).not.toHaveBeenCalled();
-    expect(dispatchExports).not.toHaveBeenCalled();
-    expect(updateLastKnownWeight).not.toHaveBeenCalled();
-  });
-
-  it('applies out_of_range skip to a valid selected slug after its range changes', async () => {
-    const changedMom = { ...mom, weight_range: { min: 50, max: 70 } };
-    const ctx = makeCtx([dad, changedMom], {
-      outOfRange: 'skip',
-      configSource: 'yaml',
-      configPath: '/tmp/config.yaml',
-    });
-    const getter = vi.fn(() => [fakeExporter()]);
-    const raw: RawReading = {
-      reading: { weight: 82, impedance: 500, selectedUserSlug: 'mom' },
-      adapter: fakeAdapter(),
-    };
-
-    await processReading(ctx, raw, { getExportersForUser: getter });
-
-    expect(getter).not.toHaveBeenCalled();
-    expect(dispatchExports).not.toHaveBeenCalled();
-    expect(updateLastKnownWeight).not.toHaveBeenCalled();
-  });
-
-  it('attributes stored frames independently of the latest live selected slug', async () => {
-    const ctx = makeCtx([dad, mom]);
-    const raw: RawReading = {
-      history: [
-        {
-          weight: 84,
-          impedance: 480,
-          timestamp: new Date('2025-07-01T07:00:00Z'),
-          selectedUserSlug: 'mom',
-        },
-      ],
-      reading: { weight: 82, impedance: 500, selectedUserSlug: 'mom' },
-      adapter: fakeAdapter(),
-    };
-
-    await processReading(ctx, raw, {
-      getExportersForUser: (slug) => [fakeExporter(`${slug}-exporter`)],
-    });
-
-    expect(dispatchExports).toHaveBeenCalledTimes(2);
-    const calls = vi.mocked(dispatchExports).mock.calls;
-    expect(calls[0][0][0].name).toBe('dad-exporter');
-    expect(calls[0][2]).toMatchObject({ userName: 'Dad', userSlug: 'dad', historical: true });
-    expect(calls[1][0][0].name).toBe('mom-exporter');
-    expect(calls[1][2]).toMatchObject({ userName: 'Mom', userSlug: 'mom' });
-    expect(calls[1][2]).not.toHaveProperty('historical');
-  });
-
-  it('drops a removed live selection without discarding independently attributed history', async () => {
-    const ctx = makeCtx([dad, mom]);
-    const raw: RawReading = {
-      history: [{ weight: 84, impedance: 480, timestamp: new Date('2025-07-01T07:00:00Z') }],
-      reading: { weight: 82, impedance: 500, selectedUserSlug: 'removed' },
-      adapter: fakeAdapter(),
-    };
-
-    await processReading(ctx, raw, {
-      getExportersForUser: (slug) => [fakeExporter(`${slug}-exporter`)],
-    });
-
-    expect(dispatchExports).toHaveBeenCalledTimes(1);
-    const [targets, , context] = vi.mocked(dispatchExports).mock.calls[0];
-    expect(targets[0].name).toBe('dad-exporter');
-    expect(context).toMatchObject({ userSlug: 'dad', historical: true });
-    expect(ctx.lastExportedWeights.size).toBe(0);
-  });
-  it('does not authorize a selected slug on a historical frame without a live frame', async () => {
-    const ctx = makeCtx([dad, mom]);
-    const getter = vi.fn(() => [fakeExporter('dad-exporter')]);
-    const raw: RawReading = {
-      reading: {
-        weight: 83,
-        impedance: 500,
-        timestamp: new Date('2025-07-01T07:00:00Z'),
-        selectedUserSlug: 'mom',
-      },
-      adapter: fakeAdapter(),
-    };
-
-    await processReading(ctx, raw, { getExportersForUser: getter });
-
-    expect(getter).toHaveBeenCalledWith('dad');
-    expect(vi.mocked(dispatchExports).mock.calls[0][2]).toMatchObject({
-      userSlug: 'dad',
-      historical: true,
-    });
-  });
 
   it('dry-run skips dispatch and last_known_weight write', async () => {
     const ctx = makeCtx([dad, mom], {
@@ -689,17 +516,6 @@ describe('processReading: multi-user', () => {
     expect(display.reading).toHaveBeenCalledWith('dad', 'Dad', 82, 500, ['webhook']);
     expect(display.result).toHaveBeenCalledWith('dad', 'Dad', 80, [{ name: 'webhook', ok: true }]);
     expect(display.beep).toHaveBeenCalledWith(1200, 200, 2);
-  });
-  it('retains weight matching when the latest reading has no selected slug', async () => {
-    const ctx = makeCtx([dad, mom]);
-    const getter = vi.fn(() => [fakeExporter('dad-exporter')]);
-
-    await processReading(ctx, rawReading({ weight: 82, impedance: 500 }), {
-      getExportersForUser: getter,
-    });
-
-    expect(getter).toHaveBeenCalledWith('dad');
-    expect(vi.mocked(dispatchExports).mock.calls[0][2]).toMatchObject({ userSlug: 'dad' });
   });
 
   it('is a safe no-op when no display notifier is attached', async () => {
