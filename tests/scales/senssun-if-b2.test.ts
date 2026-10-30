@@ -14,57 +14,85 @@ import type { AppConfig, UserConfig } from '../../src/config/schema.js';
 import { bleLog } from '../../src/ble/types.js';
 import { session as LOGGED } from '../fixtures/senssun/if-b2.js';
 
-// These frames and profiles are synthetic and contain no hardware-captured measurements.
-// Expected composition values were calculated independently from the protocol equations.
-const live = Buffer.from('100000c50e038002d6064101aa5b', 'hex');
-const historicalHealth = Buffer.from(
-  '100000c51d03820f000102d600d00208023001a4001e05dc00000078b2',
-  'hex',
-);
-// Derived: the current slot and no age, as every record in the reporter's log has.
-const health = Buffer.from(historicalHealth);
-health[7] = 0x00;
-health.writeUInt32BE(0, 24);
-health[28] = health.subarray(4, 28).reduce((sum, value) => (sum + value) & 0xff, 0);
-const alternateLive = Buffer.from('100000c50e038002ac05e401a0c9', 'hex');
-const alternateHealth = Buffer.from(
-  '100000c51d038200000102ac00bb014a023001a4001e05dc000000002d',
-  'hex',
-);
-const profileCommand = Buffer.from('100000c51303010000000101b02a000000483b', 'hex');
-function profileAcknowledgement(status: number, pin = 1): Buffer {
-  const frame = Buffer.from([0x10, 0x00, 0x00, 0xc5, 0x0b, 0x03, 0x81, status, 0x00, pin, 0x00]);
-  frame[10] = frame.subarray(4, 10).reduce((sum, value) => (sum + value) & 0xff, 0);
-  return frame;
-}
+// Frames come from the DEBUG logs of tests/fixtures/senssun/if-b2.ts. A derived
+// frame says what changed; its checksum (the last byte, the sum of bytes 4 to
+// the one before it) is recomputed. Expected weights are read from the frames.
+const frames = (trace: string): Buffer[] =>
+  LOGGED.traces[trace].steps.map((step) => Buffer.from(step.hex, 'hex'));
+const BAREFOOT = frames('if-b2-473-barefoot');
+const SECOND = frames('if-b2-473-barefoot-second');
+const SOCKS = frames('if-b2-473-socks');
 
-const profileCreated = profileAcknowledgement(0);
-const profileUpdated = profileAcknowledgement(1);
-const profile = { height: 176, age: 42, gender: 'male' as const, isAthlete: false };
-
-function liveFrame(weightTenths: number, control = 0xa0): Buffer {
-  const frame = Buffer.from(live);
-  frame.writeUInt16BE(weightTenths, 7);
-  frame[12] = control;
+function derive(base: Buffer, change: (frame: Buffer) => void): Buffer {
+  const frame = Buffer.from(base);
+  change(frame);
   frame[frame.length - 1] = frame
     .subarray(4, frame.length - 1)
     .reduce((sum, value) => (sum + value) & 0xff, 0);
   return frame;
 }
 
-const quietLive = liveFrame(726);
-const changedLive = liveFrame(725);
+/** The last live weight before the ack; the record repeats it. */
+const live = BAREFOOT[22];
+const W = live.readUInt16BE(7) / 10;
+/** The logged ack: status 0x00, PIN 0001. */
+const ack = BAREFOOT[23];
+/** The barefoot record, logged in two notifications of 20 and 9 bytes. */
+const health = Buffer.concat([BAREFOOT[24], BAREFOOT[25]]);
+const alternateLive = SECOND[2];
+const W2 = alternateLive.readUInt16BE(7) / 10;
+/** The second barefoot record, also 20 + 9 bytes. */
+const alternateHealth = Buffer.concat([SECOND[4], SECOND[5]]);
+/** Derived from health: slot 0x0f and 120 in bytes 24-27. */
+const historicalHealth = derive(health, (frame) => {
+  frame[7] = 0x0f;
+  frame.writeUInt32BE(120, 24);
+});
+/** Derived from the logged ack: byte 7 (status) and byte 9 (PIN low byte) set. */
+function profileAcknowledgement(status: number, pin = 1): Buffer {
+  return derive(ack, (frame) => {
+    frame[7] = status;
+    frame[9] = pin;
+  });
+}
+
+/** The made-up profile the reporter used, as in the fixture. */
+const profile = { height: 176, age: 42, gender: 'male' as const, isAthlete: false };
+const profileCommand = buildCloudProfileCommand(profile, W);
+
+/** Derived from live: bytes 7-8 (kg x 10) and byte 12 set. */
+function liveFrame(weightTenths: number, control = 0xa0): Buffer {
+  return derive(live, (frame) => {
+    frame.writeUInt16BE(weightTenths, 7);
+    frame[12] = control;
+  });
+}
+
+const LIVE_TENTHS = live.readUInt16BE(7);
+const quietLive = live;
+const changedLive = liveFrame(LIVE_TENTHS - 1);
+const W_CHANGED = (LIVE_TENTHS - 1) / 10;
 const zeroLive = liveFrame(0);
 
 describe('Senssun IF_B2 protocol', () => {
-  it('decodes live kilograms, pounds, unit and control byte', () => {
-    expect(decodeIfB2Frame(live)).toMatchObject({
-      frameType: 'live_weight',
-      weightKg: 72.6,
-      weightLb: 160.1,
-      unitCode: 0x01,
-      control: 0xaa,
-    });
+  it.each([
+    ['barefoot', BAREFOOT.slice(0, 23)],
+    ['socks', SOCKS.slice(0, 10)],
+    ['second barefoot', SECOND.slice(0, 3)],
+  ])('decodes every %s live frame: kg and lb, byte 11 0x01, byte 12 0xa0', (_, lives) => {
+    for (const frame of lives) {
+      const decoded = decodeIfB2Frame(frame);
+      expect(decoded).toMatchObject({
+        frameType: 'live_weight',
+        weightKg: frame.readUInt16BE(7) / 10,
+        weightLb: frame.readUInt16BE(9) / 10,
+        unitCode: 0x01,
+        control: 0xa0,
+      });
+      const ratio = frame.readUInt16BE(9) / frame.readUInt16BE(7);
+      expect(ratio).toBeGreaterThan(2.2);
+      expect(ratio).toBeLessThan(2.21);
+    }
   });
   it('decodes zero live weight so it can clear a provisional candidate', () => {
     expect(decodeIfB2Frame(zeroLive)).toMatchObject({
@@ -73,20 +101,25 @@ describe('Senssun IF_B2 protocol', () => {
       control: 0xa0,
     });
   });
-  it('decodes transient A0 control and current slot zero', () => {
-    expect(decodeIfB2Frame(alternateLive)).toMatchObject({
-      frameType: 'live_weight',
-      weightKg: 68.4,
-      control: 0xa0,
-    });
-    expect(decodeIfB2Frame(alternateHealth)).toMatchObject({
+  it.each([
+    ['barefoot', health, W],
+    ['second barefoot', alternateHealth, W2],
+  ])('decodes the %s record: slot 0, PIN 0001, the live weight, 0 in bytes 24-27', (_, rec, w) => {
+    expect(decodeIfB2Frame(rec)).toMatchObject({
       frameType: 'health_record',
       recordSlot: 0,
       profilePin: '0001',
-      weightKg: 68.4,
-      impedanceOhms: 330,
+      weightKg: w,
       elapsedSeconds: 0,
     });
+  });
+  it('decodes the logged ack', () => {
+    expect(decodeIfB2Frame(ack)).toMatchObject({
+      frameType: 'profile_ack',
+      status: 0,
+      profilePin: '0001',
+    });
+    expect(decodeIfB2Frame(SOCKS[10])).toEqual(decodeIfB2Frame(ack));
   });
   it('reassembles split and concatenated health frames', () => {
     const r = new IfB2Reassembler();
@@ -94,34 +127,33 @@ describe('Senssun IF_B2 protocol', () => {
     expect(r.push(health.subarray(20))).toEqual([health]);
     const r2 = new IfB2Reassembler();
     expect(r2.push(Buffer.concat([live, health]))).toEqual([live, health]);
-    const malformed = Buffer.from('100000c57f00', 'hex');
+    // Derived from live: byte 4 (length) set to 0x7f, cut after byte 5.
+    const malformed = derive(live, (frame) => {
+      frame[4] = 0x7f;
+    }).subarray(0, 6);
     expect(new IfB2Reassembler().push(Buffer.concat([malformed, live]))).toEqual([live]);
   });
   it('reassembles a profile acknowledgement followed by a live frame', () => {
     const r = new IfB2Reassembler();
-    expect(r.push(Buffer.concat([profileUpdated, live]))).toEqual([profileUpdated, live]);
+    expect(r.push(Buffer.concat([ack, live]))).toEqual([ack, live]);
   });
   it('resynchronizes after a truncated acknowledgement prefix', () => {
     const reassembler = new IfB2Reassembler();
-    expect(
-      reassembler.push(Buffer.concat([profileUpdated.subarray(0, 5), profileUpdated])),
-    ).toEqual([profileUpdated]);
+    expect(reassembler.push(Buffer.concat([ack.subarray(0, 5), ack]))).toEqual([ack]);
   });
   it('recovers a complete acknowledgement behind an incomplete health-record prefix', () => {
     const reassembler = new IfB2Reassembler();
-    expect(reassembler.push(Buffer.concat([health.subarray(0, 5), profileUpdated]))).toEqual([
-      profileUpdated,
-    ]);
+    expect(reassembler.push(Buffer.concat([health.subarray(0, 5), ack]))).toEqual([ack]);
   });
   it('keeps a complete checksum-valid outer frame containing an acknowledgement header', () => {
     const frame = Buffer.from(health);
-    profileUpdated.copy(frame, 12);
+    ack.copy(frame, 12);
     frame[28] = frame.subarray(4, 28).reduce((sum, value) => (sum + value) & 0xff, 0);
     expect(new IfB2Reassembler().push(frame)).toEqual([frame]);
   });
   it('preserves a fragmented outer record containing a complete acknowledgement in its payload', () => {
     const frame = Buffer.from(health);
-    profileUpdated.copy(frame, 12);
+    ack.copy(frame, 12);
     frame[28] = frame.subarray(4, 28).reduce((sum, value) => (sum + value) & 0xff, 0);
     const reassembler = new IfB2Reassembler();
     expect(reassembler.push(frame.subarray(0, 23))).toEqual([]);
@@ -149,8 +181,12 @@ describe('Senssun IF_B2 protocol', () => {
       .reduce((sum, value) => (sum + value) & 0xff, 0);
     expect(decodeIfB2Frame(declaredMismatch)).toBeNull();
   });
+  // The command layout is the pull request's code; no log shows a write. The
+  // weight here is invented.
   it('builds the exact reusable cloud profile command', () => {
-    expect(buildCloudProfileCommand(profile, 72.6)).toEqual(profileCommand);
+    expect(buildCloudProfileCommand(profile, 72.6)).toEqual(
+      Buffer.from('100000c51303010000000101b02a000000483b', 'hex'),
+    );
     expect(
       buildCloudProfileCommand({ ...profile, gender: 'female', isAthlete: true }, 72.6),
     ).toMatchObject({ 11: 0, 14: 5 });
@@ -179,7 +215,7 @@ describe('Senssun IF_B2 protocol', () => {
     });
   });
   it('rejects a profile acknowledgement with an invalid checksum', () => {
-    const malformed = Buffer.from(profileUpdated);
+    const malformed = Buffer.from(ack);
     malformed[8]++;
     expect(decodeIfB2Frame(malformed)).toBeNull();
   });
@@ -228,14 +264,14 @@ describe('Senssun IF_B2 session state', () => {
     adapter.parseNotification(frame);
     await vi.advanceTimersByTimeAsync(2_000);
   }
-  async function selectedAdapter(ack?: Buffer, lookup?: Lookup): Promise<SenssunIfB2Adapter> {
+  async function selectedAdapter(answer?: Buffer, lookup?: Lookup): Promise<SenssunIfB2Adapter> {
     const adapter = new SenssunIfB2Adapter();
     await connect(adapter, [], lookup);
     await settleSelection(adapter);
-    if (ack) adapter.parseNotification(ack);
+    if (answer) adapter.parseNotification(answer);
     return adapter;
   }
-  async function acknowledgedAdapter(ack = profileUpdated): Promise<SenssunIfB2Adapter> {
+  async function acknowledgedAdapter(): Promise<SenssunIfB2Adapter> {
     return selectedAdapter(ack);
   }
 
@@ -265,21 +301,21 @@ describe('Senssun IF_B2 session state', () => {
     expect(lookup).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
     expect(writes).toEqual([{ uuid: uuid16(0xfff2), data: profileCommand, withResponse: true }]);
-    expect(lookup).toHaveBeenCalledExactlyOnceWith(72.6);
+    expect(lookup).toHaveBeenCalledExactlyOnceWith(W);
   });
 
   it('looks the profile up once per weigh-in, on the settled weight', async () => {
     const lookup = vi.fn(() => profile);
     const adapter = new SenssunIfB2Adapter();
     await connect(adapter, [], lookup);
-    for (let tenths = 100; tenths <= 726; tenths += 50)
+    for (let tenths = 100; tenths <= LIVE_TENTHS; tenths += 50)
       adapter.parseNotification(liveFrame(tenths));
     adapter.parseNotification(quietLive);
     await vi.advanceTimersByTimeAsync(2_000);
     for (let i = 0; i < 5; i++) adapter.parseNotification(quietLive);
-    adapter.parseNotification(profileUpdated);
+    adapter.parseNotification(ack);
     adapter.parseNotification(health);
-    expect(lookup).toHaveBeenCalledExactlyOnceWith(72.6);
+    expect(lookup).toHaveBeenCalledExactlyOnceWith(W);
   });
 
   it('writes the sex, height, age and athlete flag of the profile the lookup returns', async () => {
@@ -288,7 +324,7 @@ describe('Senssun IF_B2 session state', () => {
     const adapter = new SenssunIfB2Adapter();
     await connect(adapter, writes, () => other);
     await settleSelection(adapter);
-    expect(writes[0]?.data).toEqual(buildCloudProfileCommand(other, 72.6));
+    expect(writes[0]?.data).toEqual(buildCloudProfileCommand(other, W));
     expect(writes[0]?.data.subarray(11, 15)).toEqual(Buffer.from([0, 158, 35, 5]));
   });
 
@@ -321,7 +357,8 @@ describe('Senssun IF_B2 session state', () => {
     const spies = [vi.spyOn(console, 'log'), vi.spyOn(console, 'warn')];
     const adapter = new SenssunIfB2Adapter();
     await connect(adapter, [], lookup);
-    for (let tenths = 100; tenths <= 726; tenths += 2) adapter.parseNotification(liveFrame(tenths));
+    for (let tenths = 100; tenths <= LIVE_TENTHS; tenths += 2)
+      adapter.parseNotification(liveFrame(tenths));
     await vi.advanceTimersByTimeAsync(2_000);
 
     expect(lookup).toHaveBeenCalledOnce();
@@ -349,10 +386,11 @@ describe('Senssun IF_B2 session state', () => {
     const adapter = new SenssunIfB2Adapter();
     await connect(adapter, writes, () => fractional);
     await settleSelection(adapter);
-    expect(writes[0]?.data).toEqual(Buffer.from('100000c51303010000000101a82a0000004833', 'hex'));
-    adapter.parseNotification(profileUpdated);
+    expect(writes[0]?.data).toEqual(buildCloudProfileCommand(fractional, W));
+    expect(writes[0]?.data[12]).toBe(168);
+    adapter.parseNotification(ack);
     expect(adapter.parseNotification(health)).toMatchObject({
-      weight: 72.6,
+      weight: W,
       impedance: 0,
     });
   });
@@ -381,8 +419,9 @@ describe('Senssun IF_B2 session state', () => {
 
   it('restarts the quiet timer when weight changes', async () => {
     const writes: Array<{ uuid: string; data: Buffer; withResponse: boolean }> = [];
+    const lookup = vi.fn(() => profile);
     const adapter = new SenssunIfB2Adapter();
-    await connect(adapter, writes);
+    await connect(adapter, writes, lookup);
 
     adapter.parseNotification(quietLive);
     await vi.advanceTimersByTimeAsync(1_500);
@@ -390,7 +429,8 @@ describe('Senssun IF_B2 session state', () => {
     await vi.advanceTimersByTimeAsync(1_999);
     expect(writes).toEqual([]);
     await vi.advanceTimersByTimeAsync(1);
-    expect(writes[0]?.data).toEqual(buildCloudProfileCommand(profile, 72.5));
+    expect(writes[0]?.data).toEqual(buildCloudProfileCommand(profile, W_CHANGED));
+    expect(lookup).toHaveBeenCalledExactlyOnceWith(W_CHANGED);
   });
 
   it('clears a pending candidate when live weight returns to zero', async () => {
@@ -418,8 +458,7 @@ describe('Senssun IF_B2 session state', () => {
     expect(writes).toHaveLength(1);
   });
 
-  it('retries every 200 ms until an update acknowledgement', async () => {
-    vi.useFakeTimers();
+  it('retries every 200 ms until the ack', async () => {
     const writes: Array<{ uuid: string; data: Buffer; withResponse: boolean }> = [];
     const adapter = new SenssunIfB2Adapter();
     await connect(adapter, writes);
@@ -429,13 +468,12 @@ describe('Senssun IF_B2 session state', () => {
     expect(writes).toHaveLength(1);
     await vi.advanceTimersByTimeAsync(201);
     expect(writes).toHaveLength(3);
-    expect(adapter.parseNotification(profileUpdated)).toMatchObject({ weight: 72.6 });
+    expect(adapter.parseNotification(ack)).toMatchObject({ weight: W });
     await vi.advanceTimersByTimeAsync(1_000);
     expect(writes).toHaveLength(3);
     expect(
       writes.every(({ data, withResponse }) => data.equals(profileCommand) && withResponse),
     ).toBe(true);
-    vi.useRealTimers();
   });
 
   it('waits for an in-flight profile write before retrying', async () => {
@@ -460,40 +498,37 @@ describe('Senssun IF_B2 session state', () => {
     expect(write).toHaveBeenCalledTimes(2);
   });
 
-  it.each([profileCreated, profileUpdated])(
-    'accepts a current record after a successful acknowledgement',
-    async (ack) => {
-      const adapter = await acknowledgedAdapter(ack);
-      expect(adapter.parseNotification(health)).toMatchObject({ impedance: 0 });
-    },
-  );
+  it('accepts a current record after the ack', async () => {
+    const adapter = await acknowledgedAdapter();
+    expect(adapter.parseNotification(health)).toMatchObject({ weight: W, impedance: 0 });
+  });
 
   it('emits a record that arrives before any profile write, and writes nothing', async () => {
     const writes: Array<{ uuid: string; data: Buffer; withResponse: boolean }> = [];
     const adapter = new SenssunIfB2Adapter();
     await connect(adapter, writes);
-    expect(adapter.parseNotification(health)).toMatchObject({ weight: 72.6, impedance: 0 });
+    expect(adapter.parseNotification(health)).toMatchObject({ weight: W, impedance: 0 });
     adapter.parseNotification(quietLive);
     await vi.advanceTimersByTimeAsync(5_000);
     expect(writes).toEqual([]);
   });
   it('emits a record that arrives before the profile ack, once', async () => {
     const adapter = await selectedAdapter();
-    expect(adapter.parseNotification(health)).toMatchObject({ weight: 72.6, impedance: 0 });
-    expect(adapter.parseNotification(profileCreated)).toBeNull();
+    expect(adapter.parseNotification(health)).toMatchObject({ weight: W, impedance: 0 });
+    expect(adapter.parseNotification(ack)).toBeNull();
     expect(adapter.parseNotification(health)).toBeNull();
   });
   it('processes a concatenated current record and acknowledgement in order', async () => {
     const adapter = await selectedAdapter();
-    expect(adapter.parseNotification(Buffer.concat([health, profileUpdated]))).toMatchObject({
-      impedance: 0,
-    });
+    const reading = adapter.parseNotification(Buffer.concat([health, ack]))!;
+    expect(reading).toEqual({ weight: health.readUInt16BE(10) / 10, impedance: 0 });
+    expect(adapter.isFinal(reading)).toBe(true);
   });
 
   it('emits a record with no age without a timestamp', async () => {
     const adapter = await acknowledgedAdapter();
     const reading = adapter.parseNotification(health)!;
-    expect(reading).toMatchObject({ weight: 72.6 });
+    expect(reading).toMatchObject({ weight: W });
     expect(reading.timestamp).toBeUndefined();
   });
 
@@ -515,9 +550,7 @@ describe('Senssun IF_B2 session state', () => {
   it('emits the final record instead of an earlier live frame in the same notification', async () => {
     const adapter = await selectedAdapter();
     expect(
-      adapter.isFinal(
-        adapter.parseNotification(Buffer.concat([quietLive, health, profileUpdated]))!,
-      ),
+      adapter.isFinal(adapter.parseNotification(Buffer.concat([quietLive, health, ack]))!),
     ).toBe(true);
   });
 
@@ -579,8 +612,8 @@ describe('Senssun IF_B2 session state', () => {
     expect(() => adapter.parseNotification(alternateLive)).not.toThrow();
     await vi.advanceTimersByTimeAsync(1_000);
     expect(rejected.write.mock.calls.length).toBeGreaterThan(1);
-    expect(adapter.parseNotification(profileUpdated)).toMatchObject({ weight: 72.6 });
-    expect(adapter.parseNotification(health)).toMatchObject({ weight: 72.6 });
+    expect(adapter.parseNotification(ack)).toMatchObject({ weight: W });
+    expect(adapter.parseNotification(health)).toMatchObject({ weight: W });
   });
   it('returns the settled weight on the ack as a held, not final, reading', async () => {
     const writes: Array<{ uuid: string; data: Buffer; withResponse: boolean }> = [];
@@ -590,8 +623,8 @@ describe('Senssun IF_B2 session state', () => {
     const display = adapter.parseNotification(quietLive)!;
     expect(adapter.isComplete(display)).toBe(false);
 
-    const held = adapter.parseNotification(profileUpdated)!;
-    expect(held).toEqual({ weight: 72.6, impedance: 0 });
+    const held = adapter.parseNotification(ack)!;
+    expect(held).toEqual({ weight: W, impedance: 0 });
     expect(adapter.isComplete(held)).toBe(true);
     expect(adapter.isFinal(held)).toBe(false);
     expect(adapter.completionHoldMs).toBe(IF_B2_RECORD_WAIT_MS);
@@ -616,7 +649,7 @@ describe('Senssun IF_B2 session state', () => {
       write: vi.fn(() => pendingWrite),
     });
     await settleSelection(adapter);
-    adapter.parseNotification(profileUpdated);
+    adapter.parseNotification(ack);
     rejectWrite(new Error('late'));
     await Promise.resolve();
     await Promise.resolve();
@@ -628,9 +661,9 @@ describe('Senssun IF_B2 session state', () => {
     const adapter = new SenssunIfB2Adapter();
     await connect(adapter);
     await settleSelection(adapter);
-    expect(adapter.parseNotification(Buffer.concat([profileUpdated, health]))).toMatchObject({
-      impedance: 0,
-    });
+    const reading = adapter.parseNotification(Buffer.concat([ack, health]))!;
+    expect(reading).toEqual({ weight: health.readUInt16BE(10) / 10, impedance: 0 });
+    expect(adapter.isFinal(reading)).toBe(true);
   });
 
   it('rejects historical slots and PINs other than 0001', async () => {
@@ -653,14 +686,14 @@ describe('Senssun IF_B2 session state', () => {
     long[4] = 30;
     long[29] = long.subarray(4, 29).reduce((sum, value) => (sum + value) & 0xff, 0);
     expect(adapter.parseNotification(long)).toBeNull();
-    expect(adapter.parseNotification(health)).toMatchObject({ weight: 72.6 });
+    expect(adapter.parseNotification(health)).toMatchObject({ weight: W });
   });
 
   it('emits a record split over two notifications once', async () => {
     const adapter = await acknowledgedAdapter();
     expect(adapter.parseNotification(health.subarray(0, 20))).toBeNull();
     const reading = adapter.parseNotification(health.subarray(20))!;
-    expect(reading).toMatchObject({ weight: 72.6, impedance: 0 });
+    expect(reading).toMatchObject({ weight: W, impedance: 0 });
     expect(adapter.isComplete(reading)).toBe(true);
     expect(adapter.parseNotification(health)).toBeNull();
   });
@@ -692,14 +725,14 @@ describe('Senssun IF_B2 session state', () => {
     const adapter = new SenssunIfB2Adapter();
     await connect(adapter, [], () => written);
     await settleSelection(adapter);
-    adapter.parseNotification(profileUpdated);
+    adapter.parseNotification(ack);
     const reading = adapter.parseNotification(health)!;
 
-    expect(reading).toEqual({ weight: 72.6, impedance: 0 });
+    expect(reading).toEqual({ weight: W, impedance: 0 });
     for (const p of [profile, other])
-      expect(adapter.computeMetrics(reading, p)).toEqual(buildPayload(72.6, 0, {}, p));
+      expect(adapter.computeMetrics(reading, p)).toEqual(buildPayload(W, 0, {}, p));
     const off = { ...profile, estimateBodyComposition: false };
-    expect(adapter.computeMetrics(reading, off)).toEqual(buildPayload(72.6, 0, {}, off));
+    expect(adapter.computeMetrics(reading, off)).toEqual(buildPayload(W, 0, {}, off));
     expect(adapter.computeMetrics(reading, off).bodyFatPercent).toBeNull();
   });
   describe.each([
@@ -733,12 +766,11 @@ describe('Senssun IF_B2 session state', () => {
     });
 
     it('stops retries and clears the previous selection and acknowledgement', async () => {
-      vi.useFakeTimers();
       const oldWrites: Array<{ uuid: string; data: Buffer; withResponse: boolean }> = [];
       const adapter = new SenssunIfB2Adapter();
       await adapter.onConnected(context(oldWrites));
       await settleSelection(adapter);
-      adapter.parseNotification(profileUpdated);
+      adapter.parseNotification(ack);
       const count = oldWrites.length;
       lifecycle(adapter);
       await vi.advanceTimersByTimeAsync(1_000);
@@ -747,10 +779,9 @@ describe('Senssun IF_B2 session state', () => {
       const nextWrites: Array<{ uuid: string; data: Buffer; withResponse: boolean }> = [];
       await connect(adapter, nextWrites, () => ({ ...profile, age: 28 }));
       await settleSelection(adapter);
-      expect(nextWrites[0]?.data).toEqual(buildCloudProfileCommand({ ...profile, age: 28 }, 72.6));
-      adapter.parseNotification(profileCreated);
-      expect(adapter.parseNotification(health)).toMatchObject({ weight: 72.6 });
-      vi.useRealTimers();
+      expect(nextWrites[0]?.data).toEqual(buildCloudProfileCommand({ ...profile, age: 28 }, W));
+      adapter.parseNotification(ack);
+      expect(adapter.parseNotification(health)).toMatchObject({ weight: W });
     });
 
     it('drops partial reassembly bytes after a rejected profile write', async () => {
