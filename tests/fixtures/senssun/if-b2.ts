@@ -95,6 +95,13 @@ const traces: Record<string, Trace> = {
     // The log's first line after the scale dropped the link.
     disconnectAtMs: 15_247,
   },
+  'if-b2-473-record-first': {
+    provenance: 'derived',
+    source:
+      'the barefoot log above, only its two record lines: a record with no profile write before it',
+    advert: ADVERT,
+    steps: fromDebugLog(BAREFOOT.trim().split('\n').slice(-2).join('\n')),
+  },
   'if-b2-473-barefoot-second': {
     provenance: 'captured',
     source: 'private DEBUG log, 2026-10-30 02:10:59 .. 02:11:03, barefoot',

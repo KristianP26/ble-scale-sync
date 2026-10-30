@@ -9,7 +9,7 @@ import type {
 } from '../interfaces/scale-adapter.js';
 import { buildPayload, uuid16 } from './body-comp-helpers.js';
 import { matchesDescriptor, type MatchDescriptor } from './match-descriptor.js';
-import { bleLog } from '../ble/types.js';
+import { bleLog, errMsg } from '../ble/types.js';
 
 const CLOUD_HEADER = Buffer.from('100000c5', 'hex');
 const LIVE_WEIGHT_FRAME = 0x80;
@@ -19,8 +19,13 @@ const MAX_BUFFER = 4096;
 const PROFILE_RETRY_MS = 200;
 const PROFILE_TIMEOUT_MS = 5_000;
 const SELECTION_QUIET_MS = 2_000;
-
-class IfB2ProfileAcknowledgementError extends Error {}
+/**
+ * At most this many profile writes per weigh-in. On mqtt-proxy a write only
+ * publishes, so nothing in flight slows the 200 ms retry; this caps it at 3 s
+ * of writes. The logs show no writes; timed by the 2 s quiet rule, the slowest
+ * ack came about 1.8 s after the first one.
+ */
+export const IF_B2_MAX_PROFILE_WRITES = 15;
 
 export interface IfB2LiveWeight {
   frameType: 'live_weight';
@@ -50,7 +55,10 @@ export interface IfB2HealthRecord {
 }
 export interface IfB2ProfileAck {
   frameType: 'profile_ack';
-  status: 'created' | 'updated' | 'deleted' | 'full';
+  /** Byte 7. Every ack in the logs has 0x00; what other values mean is unproven. */
+  status: number;
+  /** Bytes 8-9 as hex, the profile slot the ack is for. */
+  profilePin: string;
   raw: string;
 }
 export type IfB2Frame = IfB2LiveWeight | IfB2ProfileAck | IfB2HealthRecord;
@@ -66,9 +74,6 @@ function roundOne(value: number): number {
 }
 function u16(frame: Buffer, at: number): number {
   return frame.readUInt16BE(at);
-}
-function assertFinite(value: number, name: string): void {
-  if (!Number.isFinite(value)) throw new Error(`non-finite ${name}`);
 }
 
 export class IfB2Reassembler {
@@ -123,30 +128,28 @@ export class IfB2Reassembler {
   }
 }
 
-export function decodeIfB2Frame(frame: Buffer, profile?: UserProfile): IfB2Frame {
-  if (frame.length < 8 || !frame.subarray(0, 4).equals(CLOUD_HEADER))
-    throw new Error('invalid IF_B2 header');
-  if (frame[4] !== frame.length) throw new Error('invalid declared length');
-  if (frame[5] !== 0x03) throw new Error('unsupported IF_B2 namespace');
+/**
+ * One reassembled frame, or null for anything this decoder does not accept:
+ * a bad header, length, namespace or checksum, an unknown type, a record
+ * whose fields are out of range. Never throws.
+ */
+export function decodeIfB2Frame(frame: Buffer, profile?: UserProfile): IfB2Frame | null {
+  if (frame.length < 8 || !frame.subarray(0, 4).equals(CLOUD_HEADER)) return null;
+  if (frame[4] !== frame.length) return null;
+  if (frame[5] !== 0x03) return null;
   const checksum = frame.subarray(4, -1).reduce((sum, value) => (sum + value) & 0xff, 0);
-  if (frame.at(-1) !== checksum) throw new Error('invalid additive checksum');
+  if (frame.at(-1) !== checksum) return null;
   if (frame[6] === PROFILE_ACK_FRAME) {
-    if (frame.length !== 11) throw new Error('invalid profile-acknowledgement length');
-    if (frame.subarray(8, 10).toString('hex') !== '0001')
-      throw new Error('IF_B2 profile acknowledgement did not identify PIN 0001');
-    const status = ['created', 'updated', 'deleted', 'full'] as const;
-    if (frame[7] >= status.length)
-      throw new IfB2ProfileAcknowledgementError(
-        `unsupported profile acknowledgement 0x${frame[7].toString(16).padStart(2, '0')}`,
-      );
+    if (frame.length !== 11) return null;
     return {
       frameType: 'profile_ack',
-      status: status[frame[7]],
+      status: frame[7],
+      profilePin: frame.subarray(8, 10).toString('hex'),
       raw: frame.toString('hex'),
     };
   }
   if (frame[6] === LIVE_WEIGHT_FRAME) {
-    if (frame.length !== 14) throw new Error('invalid live-weight length');
+    if (frame.length !== 14) return null;
     const result: IfB2LiveWeight = {
       frameType: 'live_weight',
       weightKg: u16(frame, 7) / 10,
@@ -156,13 +159,10 @@ export function decodeIfB2Frame(frame: Buffer, profile?: UserProfile): IfB2Frame
       stable: frame[12] === 0xaa,
       raw: frame.toString('hex'),
     };
-    assertFinite(result.weightKg, 'weight');
-    if (result.weightKg < 0) throw new Error('invalid weight');
     return result;
   }
-  if (frame[6] !== HEALTH_RECORD_FRAME || frame.length !== 29)
-    throw new Error('unsupported IF_B2 frame type or length');
-  if (frame[7] === 0xff) throw new Error('rejected record end marker');
+  if (frame[6] !== HEALTH_RECORD_FRAME || frame.length !== 29) return null;
+  if (frame[7] === 0xff) return null;
   const weightKg = u16(frame, 10) / 10;
   const result: IfB2HealthRecord = {
     frameType: 'health_record',
@@ -178,8 +178,6 @@ export function decodeIfB2Frame(frame: Buffer, profile?: UserProfile): IfB2Frame
     elapsedSeconds: frame.readUInt32BE(24),
     raw: frame.toString('hex'),
   };
-  for (const [name, value] of Object.entries(result))
-    if (typeof value === 'number') assertFinite(value, name);
   if (
     result.weightKg <= 0 ||
     result.impedanceOhms <= 0 ||
@@ -193,8 +191,10 @@ export function decodeIfB2Frame(frame: Buffer, profile?: UserProfile): IfB2Frame
         result.boneKg <= 0 ||
         result.boneKg > result.weightKg))
   )
-    throw new Error('invalid health measurements');
+    return null;
   if (profile) {
+    if (profile.gender !== 'male' && profile.gender !== 'female') return null;
+    if (!(profile.height > 0) || !(profile.age >= 1)) return null;
     const derived = deriveComposition(
       result.weightKg,
       result.impedanceOhms,
@@ -219,9 +219,6 @@ function deriveComposition(
   profile: UserProfile,
   transmittedFatTenths: number,
 ) {
-  if (profile.gender !== 'male' && profile.gender !== 'female')
-    throw new Error('invalid profile gender');
-  if (!(profile.height > 0) || !(profile.age >= 1)) throw new Error('invalid profile');
   const weight = f32(weightKg),
     height = f32(profile.height),
     impedance = f32(impedanceOhms);
@@ -273,26 +270,22 @@ function deriveComposition(
   };
 }
 
+const clamp = (value: number, min: number, max: number, fallback: number): number =>
+  Number.isFinite(value) ? Math.min(max, Math.max(min, value)) : fallback;
+
+/**
+ * The 19-byte profile command for PIN 0001. Height, age and weight are clamped
+ * into the byte ranges (50-250 cm, 1-120 years, whole kg) instead of refused:
+ * without a write there is no ack, and so no weight to hold for the record.
+ */
 export function buildCloudProfileCommand(profile: UserProfile, weightKg: number): Buffer {
-  if (
-    !Number.isFinite(profile.height) ||
-    profile.height < 50 ||
-    profile.height > 250 ||
-    !Number.isInteger(profile.age) ||
-    profile.age < 1 ||
-    profile.age > 120 ||
-    !Number.isFinite(weightKg) ||
-    weightKg <= 0 ||
-    weightKg >= 0x10000
-  )
-    throw new Error('invalid IF_B2 cloud profile');
   const bytes = Buffer.from('100000c5130301000000010000000000000000', 'hex');
   bytes[11] = profile.gender === 'male' ? 1 : 0;
-  bytes[12] = Math.round(profile.height);
-  bytes[13] = profile.age;
+  bytes[12] = Math.round(clamp(profile.height, 50, 250, 170));
+  bytes[13] = Math.round(clamp(profile.age, 1, 120, 30));
   bytes[14] = profile.isAthlete ? 5 : 0;
   bytes[15] = 0;
-  bytes.writeUInt16BE(Math.trunc(weightKg), 16);
+  bytes.writeUInt16BE(Math.trunc(clamp(weightKg, 0, 0xffff, 0)), 16);
   bytes[18] = bytes.subarray(4, 18).reduce((sum, value) => (sum + value) & 0xff, 0);
   return bytes;
 }
@@ -310,12 +303,14 @@ class IfB2Session {
   stableWeight: number | undefined;
   selected: UserProfile | undefined;
   selectionAttempted = false;
-  profileAcknowledged = false;
+  acked = false;
   completed = false;
-  profileWriteInFlight = false;
-  pendingRecord: IfB2Composition | undefined;
-  ignoredRecordLogged = false;
-  pendingCommandError: Error | undefined;
+  writing = false;
+  writeInFlight = false;
+  writes = 0;
+  firstWriteAt = 0;
+  /** "Log once per session" flags, one per kind of frame or failure. */
+  logged = new Set<'record' | 'ack' | 'write'>();
   selectionTimer: NodeJS.Timeout | undefined;
   commandTimer: NodeJS.Timeout | undefined;
   commandWindowTimer: NodeJS.Timeout | undefined;
@@ -336,7 +331,15 @@ class IfB2Session {
   }
 
   dispose(): void {
+    this.writing = false;
     this.clearTimers();
+  }
+
+  /** A debug line the first time `key` comes up in this session. */
+  debugOnce(key: 'record' | 'ack' | 'write', msg: string): void {
+    if (this.logged.has(key)) return;
+    this.logged.add(key);
+    bleLog.debug(msg);
   }
 }
 
@@ -404,94 +407,81 @@ export class SenssunIfB2Adapter implements ScaleAdapterCore {
       // one, so skipping it could leave no reading. The processor decides who
       // the reading belongs to.
       s.selected = this.profileForWeight?.(weight) ?? s.ctx.profile;
-      this.startProfileWrites(s);
+      this.startProfileWrites(s, buildCloudProfileCommand(s.selected, weight));
     }, SELECTION_QUIET_MS);
     s.selectionTimer.unref?.();
   }
 
-  private writeProfile(s: IfB2Session, command: Buffer): void {
-    const ctx = s.ctx;
-    if (!ctx || this.s !== s || s.profileWriteInFlight) return;
-    s.profileWriteInFlight = true;
-    void ctx
-      .write(this.charWriteUuid, command, true)
-      .catch((error: unknown) => {
-        if (this.s !== s || s.profileAcknowledged || s.completed) return;
-        s.clearTimers();
-        const detail = error instanceof Error ? error.message : String(error);
-        s.pendingCommandError = new Error(`IF_B2 profile write failed: ${detail}`);
-      })
-      .finally(() => {
-        s.profileWriteInFlight = false;
-      });
+  private stopWrites(s: IfB2Session): void {
+    s.writing = false;
+    s.clearTimers();
   }
 
-  private startProfileWrites(s: IfB2Session): void {
-    const selected = s.selected;
-    const weight = s.stableWeight;
-    if (!s.ctx || !selected || weight === undefined) return;
-    let command: Buffer;
-    try {
-      command = buildCloudProfileCommand(selected, weight);
-    } catch (error) {
-      s.clearTimers();
-      s.pendingCommandError = error instanceof Error ? error : new Error(String(error));
-      return;
-    }
-    const send = () => {
-      if (this.s !== s || !s.ctx || s.profileAcknowledged || s.completed || s.pendingCommandError)
-        return;
-      this.writeProfile(s, command);
+  /**
+   * Write the profile every PROFILE_RETRY_MS until the scale acks it, never two
+   * writes at once, for at most PROFILE_TIMEOUT_MS and IF_B2_MAX_PROFILE_WRITES.
+   * The profile bytes are personal data, so no log line carries them.
+   */
+  private startProfileWrites(s: IfB2Session, command: Buffer): void {
+    const ctx = s.ctx;
+    if (!ctx) return;
+    s.writing = true;
+    const giveUp = (): void => {
+      if (this.s !== s || !s.writing || s.acked) return;
+      this.stopWrites(s);
+      bleLog.info(
+        `Senssun IF_B2: the scale did not confirm the user profile after ${s.writes} write(s), ` +
+          'so it may send no reading',
+      );
     };
-    s.commandWindowTimer = setTimeout(() => {
-      if (this.s !== s || s.profileAcknowledged || s.completed) return;
-      s.clearTimers();
-      s.pendingCommandError = new Error('IF_B2 profile acknowledgement timed out');
-    }, PROFILE_TIMEOUT_MS);
+    const send = (): void => {
+      if (this.s !== s || !s.writing || s.acked || s.writeInFlight) return;
+      if (s.writes >= IF_B2_MAX_PROFILE_WRITES) return giveUp();
+      s.writeInFlight = true;
+      if (s.writes === 0) s.firstWriteAt = Date.now();
+      s.writes++;
+      ctx.write(this.charWriteUuid, command, true).then(
+        () => {
+          s.writeInFlight = false;
+        },
+        (err: unknown) => {
+          s.writeInFlight = false;
+          s.debugOnce('write', `Senssun IF_B2: profile write failed: ${errMsg(err)}`);
+        },
+      );
+    };
+    s.commandWindowTimer = setTimeout(giveUp, PROFILE_TIMEOUT_MS);
     s.commandWindowTimer.unref?.();
     s.commandTimer = setInterval(send, PROFILE_RETRY_MS);
     s.commandTimer.unref?.();
     send();
   }
 
-  private completePendingRecord(s: IfB2Session): ScaleReading | null {
-    if (!s.pendingRecord || !s.selected || !s.profileAcknowledged || s.completed) return null;
-
-    const { record: decoded, transmittedFatTenths } = s.pendingRecord;
-    s.pendingRecord = undefined;
-    s.completed = true;
-    s.clearTimers();
-    s.pendingCommandError = undefined;
-    const reading: ScaleReading<IfB2Composition> = {
-      weight: decoded.weightKg,
-      impedance: decoded.impedanceOhms,
-      scaleComposition: { record: decoded, transmittedFatTenths },
-    };
-    return reading;
+  private onAck(s: IfB2Session, ack: IfB2ProfileAck): void {
+    // A late ack, after the writes gave up, still answers one of them.
+    if (s.writes === 0 || s.acked || ack.profilePin !== '0001') {
+      s.debugOnce('ack', 'Senssun IF_B2: ignoring a profile ack this session did not ask for');
+      return;
+    }
+    s.acked = true;
+    this.stopWrites(s);
+    bleLog.debug(
+      `Senssun IF_B2: profile confirmed after ${s.writes} write(s), ` +
+        `${Date.now() - s.firstWriteAt} ms after the first`,
+    );
+    if (ack.status !== 0)
+      bleLog.debug(
+        `Senssun IF_B2: profile ack status 0x${ack.status.toString(16).padStart(2, '0')}`,
+      );
   }
 
   parseNotification(data: Buffer, profile?: UserProfile): ScaleReading | null {
     const s = this.s;
-    if (s.pendingCommandError) {
-      const error = s.pendingCommandError;
-      s.pendingCommandError = undefined;
-      throw error;
-    }
-
     let emitted: ScaleReading | null = null;
     for (const frame of s.reassembler.push(data)) {
-      let decoded: IfB2Frame;
-      try {
-        const decodeProfile = s.selected ?? (s.ctx ? s.ctx.profile : profile);
-        decoded = decodeIfB2Frame(frame, decodeProfile);
-      } catch (error) {
-        if (error instanceof IfB2ProfileAcknowledgementError) {
-          s.clearTimers();
-          s.pendingCommandError = undefined;
-          throw error;
-        }
-        continue;
-      }
+      const decodeProfile = s.selected ?? s.ctx?.profile ?? profile;
+      const decoded = decodeIfB2Frame(frame, decodeProfile);
+      if (!decoded) continue;
 
       if (decoded.frameType === 'live_weight') {
         const display: ScaleReading = { weight: decoded.weightKg, impedance: 0 };
@@ -501,16 +491,7 @@ export class SenssunIfB2Adapter implements ScaleAdapterCore {
       }
 
       if (decoded.frameType === 'profile_ack') {
-        if (!s.selected || s.completed) continue;
-        s.clearTimers();
-        s.pendingCommandError = undefined;
-        if (decoded.status === 'deleted')
-          throw new Error('IF_B2 returned an unexpected profile-delete acknowledgement');
-        if (decoded.status === 'full')
-          throw new Error('IF_B2 profile storage is full; PIN 0001 is unavailable');
-        s.profileAcknowledged = true;
-        const reading = this.completePendingRecord(s);
-        if (reading) emitted = reading;
+        this.onAck(s, decoded);
         continue;
       }
 
@@ -521,31 +502,22 @@ export class SenssunIfB2Adapter implements ScaleAdapterCore {
         decoded.recordSlot !== 0 ||
         decoded.elapsedSeconds !== 0
       ) {
-        if (!s.ignoredRecordLogged)
-          bleLog.debug('Senssun IF_B2: ignoring a record that is not this weigh-in');
-        s.ignoredRecordLogged = true;
+        s.debugOnce('record', 'Senssun IF_B2: ignoring a record that is not this weigh-in');
         continue;
       }
-
-      if (!s.selected && !s.ctx && profile) {
-        const reading: ScaleReading<IfB2Composition> = {
-          weight: decoded.weightKg,
-          impedance: decoded.impedanceOhms,
-          scaleComposition: { record: decoded, transmittedFatTenths: u16(frame, 12) },
-        };
-        emitted = reading;
-        continue;
-      }
-
-      if (!s.selected || s.stableWeight === undefined)
-        throw new Error('IF_B2 final record arrived before safe profile selection');
       if (s.completed) continue;
 
-      if (!s.pendingRecord) {
-        s.pendingRecord = { record: decoded, transmittedFatTenths: u16(frame, 12) };
-      }
-      const reading = this.completePendingRecord(s);
-      if (reading) emitted = reading;
+      // A record without our ack is still this weigh-in; the processor decides
+      // who it belongs to.
+      s.completed = true;
+      this.stopWrites(s);
+      s.clearSelectionCandidate();
+      const reading: ScaleReading<IfB2Composition> = {
+        weight: decoded.weightKg,
+        impedance: decoded.impedanceOhms,
+        scaleComposition: { record: decoded, transmittedFatTenths: u16(frame, 12) },
+      };
+      emitted = reading;
     }
     return emitted;
   }
