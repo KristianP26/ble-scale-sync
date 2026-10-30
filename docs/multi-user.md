@@ -53,14 +53,6 @@ So once any user has a `last_known_weight`, a reading outside every range is sti
 
 A scale that sends weigh-ins stored in its memory has each one assigned by its own weight, or by the scale's user slot when it sends one, not to the person on the scale now. A stored weigh-in that matches nobody, or that several users fit equally, is dropped and logged.
 
-### Senssun IF_B2
-
-Users only need to step on a Senssun IF_B2. BLE Scale Sync waits until one uniquely matched live weight remains unchanged for two seconds, updates reusable scale profile PIN `0001`, and confirms the same user from the final current record before exporting. The scale retains the most recently acknowledged user's demographics in that profile. Use non-overlapping `weight_range` values so a quiet reading identifies one user unambiguously, and set `out_of_range: skip` to discard readings outside every configured range. If an intermediate plateau selects a different user, final correlation fails the measurement rather than routing it to the wrong account.
-
-The user must still match unambiguously when the two-second window ends. If a configuration reload removes that authorization, no profile is written. Updated demographics for the same authorized user are applied before the write.
-
-If you remove a selected user while a completed live reading is queued, that reading is skipped rather than reassigned. This also applies when only one configured user remains. Historical records do not authorize a live session selection.
-
 ## Drift Detection
 
 After a match, a weight in the outer 10% of the user's range logs a warning, so you can widen the range before readings go to the wrong person. With Alice at 50 to 70 kg, a reading of 68.5 kg warns that she is near the upper boundary.

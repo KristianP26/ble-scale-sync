@@ -76,6 +76,7 @@
     "charNotifyUuid": "0000fff100001000800000805f9b34fb",
     "charWriteUuid": "0000fff200001000800000805f9b34fb",
     "hooks": [
+      "configure",
       "onConnected",
       "onSessionStart",
       "onSessionEnd"

@@ -1,4 +1,5 @@
 import type {
+  AdapterRuntimeConfig,
   BleDeviceInfo,
   BodyComposition,
   ConnectionContext,
@@ -54,8 +55,6 @@ export interface IfB2ProfileAck {
   raw: string;
 }
 export type IfB2Frame = IfB2LiveWeight | IfB2ProfileAck | IfB2HealthRecord;
-
-type IfB2SelectedProfile = { userSlug: string; profile: UserProfile };
 
 /** The decoded record a reading came from, carried on the reading (D077). */
 type IfB2Composition = { record: IfB2HealthRecord; transmittedFatTenths: number };
@@ -311,8 +310,10 @@ export class SenssunIfB2Adapter implements ScaleAdapterCore {
   private reassembler = new IfB2Reassembler();
   private ctx: ConnectionContext | undefined;
   private stableWeight: number | undefined;
-  private candidate: { weightKg: number; selected: IfB2SelectedProfile } | undefined;
-  private selected: IfB2SelectedProfile | undefined;
+  /** From configure(): process lifetime, replaced on every config reload. */
+  private profileForWeight: AdapterRuntimeConfig['profileForWeight'];
+  private candidateWeight: number | undefined;
+  private selected: UserProfile | undefined;
   private selectionAttempted = false;
   private profileAcknowledged = false;
   private completed = false;
@@ -327,6 +328,10 @@ export class SenssunIfB2Adapter implements ScaleAdapterCore {
 
   matches(device: BleDeviceInfo): boolean {
     return matchesDescriptor(device, this.match);
+  }
+
+  configure(opts: AdapterRuntimeConfig): void {
+    this.profileForWeight = opts.profileForWeight;
   }
 
   onSessionStart(): void {
@@ -352,7 +357,7 @@ export class SenssunIfB2Adapter implements ScaleAdapterCore {
     this.clearTimers();
     this.ctx = undefined;
     this.reassembler = new IfB2Reassembler();
-    this.candidate = undefined;
+    this.candidateWeight = undefined;
     this.stableWeight = undefined;
     this.selected = undefined;
     this.selectionAttempted = false;
@@ -366,7 +371,7 @@ export class SenssunIfB2Adapter implements ScaleAdapterCore {
   private clearSelectionCandidate(): void {
     clearTimeout(this.selectionTimer);
     this.selectionTimer = undefined;
-    this.candidate = undefined;
+    this.candidateWeight = undefined;
   }
 
   private clearTimers(): void {
@@ -385,30 +390,24 @@ export class SenssunIfB2Adapter implements ScaleAdapterCore {
       return;
     }
 
-    const choice = this.ctx?.selectProfile?.(weightKg);
-    if (!choice) {
-      this.clearSelectionCandidate();
-      return;
-    }
-    if (
-      this.candidate?.weightKg === weightKg &&
-      this.candidate.selected.userSlug === choice.userSlug
-    )
-      return;
+    if (this.candidateWeight === weightKg) return;
 
     this.clearSelectionCandidate();
-    this.candidate = { weightKg, selected: choice };
+    this.candidateWeight = weightKg;
     const token = this.sessionToken;
     this.selectionTimer = setTimeout(() => {
-      const candidate = this.candidate;
-      if (token !== this.sessionToken || !this.ctx || !candidate || this.completed) return;
-      this.candidate = undefined;
+      const weight = this.candidateWeight;
+      if (token !== this.sessionToken || !this.ctx || weight === undefined || this.completed)
+        return;
+      this.candidateWeight = undefined;
       this.selectionTimer = undefined;
-      const selected = this.ctx.selectProfile?.(candidate.weightKg);
-      if (!selected || selected.userSlug !== candidate.selected.userSlug) return;
       this.selectionAttempted = true;
-      this.stableWeight = candidate.weightKg;
-      this.selected = selected;
+      this.stableWeight = weight;
+      // Once per weigh-in, on the settled weight. Nobody matching still writes
+      // users[0]: the ack answers a write, and no log shows a weigh-in without
+      // one, so skipping it could leave no reading. The processor decides who
+      // the reading belongs to.
+      this.selected = this.profileForWeight?.(weight) ?? this.ctx.profile;
       this.startProfileWrites();
     }, SELECTION_QUIET_MS);
   }
@@ -437,7 +436,7 @@ export class SenssunIfB2Adapter implements ScaleAdapterCore {
     const token = this.sessionToken;
     let command: Buffer;
     try {
-      command = buildCloudProfileCommand(selected.profile, weight);
+      command = buildCloudProfileCommand(selected, weight);
     } catch (error) {
       this.clearTimers();
       this.pendingCommandError = error instanceof Error ? error : new Error(String(error));
@@ -475,7 +474,6 @@ export class SenssunIfB2Adapter implements ScaleAdapterCore {
     const reading: ScaleReading<IfB2Composition> = {
       weight: decoded.weightKg,
       impedance: decoded.impedanceOhms,
-      selectedUserSlug: this.selected.userSlug,
       timestamp,
       scaleComposition: { record: decoded, transmittedFatTenths },
     };
@@ -493,7 +491,7 @@ export class SenssunIfB2Adapter implements ScaleAdapterCore {
     for (const frame of this.reassembler.push(data)) {
       let decoded: IfB2Frame;
       try {
-        const decodeProfile = this.selected?.profile ?? (this.ctx ? this.ctx.profile : profile);
+        const decodeProfile = this.selected ?? (this.ctx ? this.ctx.profile : profile);
         decoded = decodeIfB2Frame(frame, decodeProfile);
       } catch (error) {
         if (error instanceof IfB2ProfileAcknowledgementError) {
@@ -542,20 +540,6 @@ export class SenssunIfB2Adapter implements ScaleAdapterCore {
         throw new Error('IF_B2 final record arrived before safe profile selection');
       if (this.completed) continue;
 
-      const finalSelection = this.ctx?.selectProfile?.(decoded.weightKg);
-      if (!finalSelection)
-        throw new Error(
-          `IF_B2 final record no longer matches provisional user ${this.selected.userSlug}`,
-        );
-      if (finalSelection.userSlug !== this.selected.userSlug)
-        throw new Error(
-          `IF_B2 final record matched ${finalSelection.userSlug} instead of provisional user ${this.selected.userSlug}`,
-        );
-      if (Math.abs(Math.round(decoded.weightKg * 100) - Math.round(this.stableWeight * 100)) > 10)
-        throw new Error(
-          `IF_B2 final weight ${decoded.weightKg} kg differs from provisional weight ${this.stableWeight} kg`,
-        );
-
       if (!this.pendingRecord) {
         this.pendingRecord = {
           record: decoded,
@@ -570,7 +554,7 @@ export class SenssunIfB2Adapter implements ScaleAdapterCore {
   }
 
   isComplete(reading: ScaleReading): boolean {
-    return reading.weight > 0 && reading.impedance > 0 && !!reading.selectedUserSlug;
+    return reading.weight > 0 && reading.impedance > 0;
   }
 
   computeMetrics(reading: ScaleReading, profile: UserProfile): BodyComposition {

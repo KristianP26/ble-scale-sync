@@ -7,7 +7,9 @@ import {
   type IfB2HealthRecord,
 } from '../../src/scales/senssun-if-b2.js';
 import { uuid16 } from '../../src/scales/body-comp-helpers.js';
-import type { SessionProfileSelector, UserProfile } from '../../src/interfaces/scale-adapter.js';
+import type { UserProfile } from '../../src/interfaces/scale-adapter.js';
+import { buildAdapterRuntimeConfig } from '../../src/config/resolve.js';
+import type { AppConfig, UserConfig } from '../../src/config/schema.js';
 import { isHistoricalReading } from '../../src/interfaces/reading-time.js';
 
 // These frames and profiles are synthetic and contain no hardware-captured measurements.
@@ -254,10 +256,9 @@ describe('Senssun IF_B2 protocol', () => {
 describe('Senssun IF_B2 session state', () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
-  const selected = { userSlug: 'alice', profile };
+  type Lookup = (weightKg: number) => UserProfile | undefined;
   function context(
     writes: Array<{ uuid: string; data: Buffer; withResponse: boolean }> = [],
-    selectProfile: SessionProfileSelector = () => selected,
     transportProfile: UserProfile = profile,
   ) {
     return {
@@ -267,10 +268,19 @@ describe('Senssun IF_B2 session state', () => {
       read: vi.fn(async () => Buffer.alloc(0)),
       subscribe: vi.fn(async () => {}),
       profile: transportProfile,
-      selectProfile,
       deviceAddress: 'AA',
       availableChars: new Set([uuid16(0xfff1), uuid16(0xfff2)]),
     };
+  }
+  /** configure() with the lookup, then connect; without a lookup the adapter uses ctx.profile. */
+  async function connect(
+    adapter: SenssunIfB2Adapter,
+    writes: Array<{ uuid: string; data: Buffer; withResponse: boolean }> = [],
+    lookup?: Lookup,
+    transportProfile: UserProfile = profile,
+  ): Promise<void> {
+    if (lookup) adapter.configure({ profileForWeight: lookup });
+    await adapter.onConnected(context(writes, transportProfile));
   }
   function currentRecord(changes: (frame: Buffer) => void): Buffer {
     const frame = Buffer.from(health);
@@ -284,12 +294,9 @@ describe('Senssun IF_B2 session state', () => {
     adapter.parseNotification(frame);
     await vi.advanceTimersByTimeAsync(2_000);
   }
-  async function selectedAdapter(
-    ack?: Buffer,
-    selectProfile: SessionProfileSelector = () => selected,
-  ): Promise<SenssunIfB2Adapter> {
+  async function selectedAdapter(ack?: Buffer, lookup?: Lookup): Promise<SenssunIfB2Adapter> {
     const adapter = new SenssunIfB2Adapter();
-    await adapter.onConnected(context([], selectProfile));
+    await connect(adapter, [], lookup);
     await settleSelection(adapter);
     if (ack) adapter.parseNotification(ack);
     return adapter;
@@ -301,7 +308,7 @@ describe('Senssun IF_B2 session state', () => {
   it('stores the active context without writing before stable weight', async () => {
     const writes: Array<{ uuid: string; data: Buffer; withResponse: boolean }> = [];
     const adapter = new SenssunIfB2Adapter();
-    await adapter.onConnected(context(writes));
+    await connect(adapter, writes);
     expect(writes).toEqual([]);
   });
 
@@ -312,43 +319,91 @@ describe('Senssun IF_B2 session state', () => {
     );
   });
 
-  it('starts profile writes after one unique weight remains unchanged for two seconds', async () => {
+  it('starts profile writes after one weight remains unchanged for two seconds', async () => {
     const writes: Array<{ uuid: string; data: Buffer; withResponse: boolean }> = [];
-    const select = vi.fn(() => selected);
+    const lookup = vi.fn(() => profile);
     const adapter = new SenssunIfB2Adapter();
-    await adapter.onConnected(context(writes, select));
+    await connect(adapter, writes, lookup);
 
     adapter.parseNotification(quietLive);
-    expect(select).toHaveBeenCalledWith(72.6);
     await vi.advanceTimersByTimeAsync(1_999);
     expect(writes).toEqual([]);
+    expect(lookup).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
     expect(writes).toEqual([{ uuid: uuid16(0xfff2), data: profileCommand, withResponse: true }]);
+    expect(lookup).toHaveBeenCalledExactlyOnceWith(72.6);
   });
 
-  it.each([null, { ...selected, userSlug: 'bob' }])(
-    'does not write demographics when authorization changes during the quiet period (%j)',
-    async (nextSelection) => {
-      const writes: Array<{ uuid: string; data: Buffer; withResponse: boolean }> = [];
-      let choice: typeof selected | null = selected;
-      const adapter = new SenssunIfB2Adapter();
-      await adapter.onConnected(context(writes, () => choice));
-      adapter.parseNotification(quietLive);
-      await vi.advanceTimersByTimeAsync(1_000);
-      choice = nextSelection;
-      await vi.advanceTimersByTimeAsync(1_000);
-      expect(writes).toEqual([]);
-    },
-  );
-
-  it('uses fresh demographics for the same authorized user at quiet-period expiry', async () => {
-    const writes: Array<{ uuid: string; data: Buffer; withResponse: boolean }> = [];
-    let choice = selected;
+  it('looks the profile up once per weigh-in, on the settled weight', async () => {
+    const lookup = vi.fn(() => profile);
     const adapter = new SenssunIfB2Adapter();
-    await adapter.onConnected(context(writes, () => choice));
+    await connect(adapter, [], lookup);
+    for (let tenths = 100; tenths <= 726; tenths += 50)
+      adapter.parseNotification(liveFrame(tenths));
+    adapter.parseNotification(quietLive);
+    await vi.advanceTimersByTimeAsync(2_000);
+    for (let i = 0; i < 5; i++) adapter.parseNotification(quietLive);
+    adapter.parseNotification(profileUpdated);
+    adapter.parseNotification(health);
+    expect(lookup).toHaveBeenCalledExactlyOnceWith(72.6);
+  });
+
+  it('writes the sex, height, age and athlete flag of the profile the lookup returns', async () => {
+    const writes: Array<{ uuid: string; data: Buffer; withResponse: boolean }> = [];
+    const other: UserProfile = { height: 158, age: 35, gender: 'female', isAthlete: true };
+    const adapter = new SenssunIfB2Adapter();
+    await connect(adapter, writes, () => other);
+    await settleSelection(adapter);
+    expect(writes[0]?.data).toEqual(buildCloudProfileCommand(other, 72.6));
+    expect(writes[0]?.data.subarray(11, 15)).toEqual(Buffer.from([0, 158, 35, 5]));
+  });
+
+  it('writes the transport profile when the lookup matches nobody', async () => {
+    const writes: Array<{ uuid: string; data: Buffer; withResponse: boolean }> = [];
+    const adapter = new SenssunIfB2Adapter();
+    await connect(adapter, writes, () => undefined);
+    await settleSelection(adapter);
+    expect(writes[0]?.data).toEqual(profileCommand);
+  });
+
+  it('calls the real matcher once and logs nothing while the weight ramps up', async () => {
+    const user = (name: string, min: number, max: number): UserConfig => ({
+      name,
+      slug: name.toLowerCase(),
+      height: 176,
+      birth_date: '1984-01-01',
+      gender: 'male',
+      is_athlete: false,
+      weight_range: { min, max },
+      last_known_weight: null,
+    });
+    const config = {
+      scale: { weight_unit: 'kg', height_unit: 'cm', display_unit: 'weight_unit' },
+      unknown_user: 'nearest',
+      users: [user('Alice', 50, 60), user('Bob', 75, 85)],
+    } as unknown as AppConfig;
+    const real = buildAdapterRuntimeConfig(config, undefined).profileForWeight!;
+    const lookup = vi.fn(real);
+    const spies = [vi.spyOn(console, 'log'), vi.spyOn(console, 'warn')];
+    const adapter = new SenssunIfB2Adapter();
+    await connect(adapter, [], lookup);
+    for (let tenths = 100; tenths <= 726; tenths += 2) adapter.parseNotification(liveFrame(tenths));
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    expect(lookup).toHaveBeenCalledOnce();
+    const lines = spies.flatMap((spy) => spy.mock.calls.map((call) => String(call[0])));
+    expect(lines.filter((line) => line.includes('UserMatch'))).toEqual([]);
+    for (const spy of spies) spy.mockRestore();
+  });
+
+  it('uses the demographics the lookup returns when the quiet period ends', async () => {
+    const writes: Array<{ uuid: string; data: Buffer; withResponse: boolean }> = [];
+    let current: UserProfile = profile;
+    const adapter = new SenssunIfB2Adapter();
+    await connect(adapter, writes, () => current);
     adapter.parseNotification(quietLive);
     await vi.advanceTimersByTimeAsync(1_000);
-    choice = { ...selected, profile: { ...profile, height: 170, age: 43 } };
+    current = { ...profile, height: 170, age: 43 };
     await vi.advanceTimersByTimeAsync(1_000);
     expect(writes[0].data[12]).toBe(170);
     expect(writes[0].data[13]).toBe(43);
@@ -356,25 +411,22 @@ describe('Senssun IF_B2 session state', () => {
 
   it('writes and completes with a fractional-centimetre selected profile', async () => {
     const writes: Array<{ uuid: string; data: Buffer; withResponse: boolean }> = [];
-    const fractional = { userSlug: 'alice', profile: { ...profile, height: 167.64 } };
+    const fractional = { ...profile, height: 167.64 };
     const adapter = new SenssunIfB2Adapter();
-    await adapter.onConnected(context(writes, () => fractional));
+    await connect(adapter, writes, () => fractional);
     await settleSelection(adapter);
     expect(writes[0]?.data).toEqual(Buffer.from('100000c51303010000000101a82a0000004833', 'hex'));
     adapter.parseNotification(profileUpdated);
     expect(adapter.parseNotification(health)).toMatchObject({
       weight: 72.6,
       impedance: 520,
-      selectedUserSlug: 'alice',
     });
   });
 
   it('reports invalid profile construction through the session parser without writing', async () => {
     const writes: Array<{ uuid: string; data: Buffer; withResponse: boolean }> = [];
     const adapter = new SenssunIfB2Adapter();
-    await adapter.onConnected(
-      context(writes, () => ({ userSlug: 'alice', profile: { ...profile, age: 121 } })),
-    );
+    await connect(adapter, writes, () => ({ ...profile, age: 121 }));
     await settleSelection(adapter);
     expect(() => adapter.parseNotification(health)).toThrow(/invalid IF_B2 cloud profile/);
     await vi.advanceTimersByTimeAsync(5_000);
@@ -384,7 +436,7 @@ describe('Senssun IF_B2 session state', () => {
   it('does not restart the quiet timer for a duplicate frame', async () => {
     const writes: Array<{ uuid: string; data: Buffer; withResponse: boolean }> = [];
     const adapter = new SenssunIfB2Adapter();
-    await adapter.onConnected(context(writes));
+    await connect(adapter, writes);
 
     adapter.parseNotification(quietLive);
     await vi.advanceTimersByTimeAsync(1_000);
@@ -398,7 +450,7 @@ describe('Senssun IF_B2 session state', () => {
   it('restarts the quiet timer when weight changes', async () => {
     const writes: Array<{ uuid: string; data: Buffer; withResponse: boolean }> = [];
     const adapter = new SenssunIfB2Adapter();
-    await adapter.onConnected(context(writes));
+    await connect(adapter, writes);
 
     adapter.parseNotification(quietLive);
     await vi.advanceTimersByTimeAsync(1_500);
@@ -412,7 +464,7 @@ describe('Senssun IF_B2 session state', () => {
   it('clears a pending candidate when live weight returns to zero', async () => {
     const writes: Array<{ uuid: string; data: Buffer; withResponse: boolean }> = [];
     const adapter = new SenssunIfB2Adapter();
-    await adapter.onConnected(context(writes));
+    await connect(adapter, writes);
 
     adapter.parseNotification(quietLive);
     await vi.advanceTimersByTimeAsync(1_000);
@@ -422,26 +474,10 @@ describe('Senssun IF_B2 session state', () => {
     expect(display && adapter.isComplete(display)).toBe(false);
   });
 
-  it('reconsiders a later weight after selection returns no user', async () => {
-    const writes: Array<{ uuid: string; data: Buffer; withResponse: boolean }> = [];
-    const select = vi.fn((weightKg: number) => (weightKg === 72.6 ? null : selected));
-    const adapter = new SenssunIfB2Adapter();
-    await adapter.onConnected(context(writes, select));
-
-    adapter.parseNotification(quietLive);
-    await vi.advanceTimersByTimeAsync(2_000);
-    expect(writes).toEqual([]);
-    adapter.parseNotification(changedLive);
-    await vi.advanceTimersByTimeAsync(1_999);
-    expect(writes).toEqual([]);
-    await vi.advanceTimersByTimeAsync(1);
-    expect(writes).toHaveLength(1);
-  });
-
   it('does not let an AA frame bypass the quiet period', async () => {
     const writes: Array<{ uuid: string; data: Buffer; withResponse: boolean }> = [];
     const adapter = new SenssunIfB2Adapter();
-    await adapter.onConnected(context(writes));
+    await connect(adapter, writes);
 
     adapter.parseNotification(liveFrame(726, 0xaa));
     await vi.advanceTimersByTimeAsync(1_999);
@@ -454,7 +490,7 @@ describe('Senssun IF_B2 session state', () => {
     vi.useFakeTimers();
     const writes: Array<{ uuid: string; data: Buffer; withResponse: boolean }> = [];
     const adapter = new SenssunIfB2Adapter();
-    await adapter.onConnected(context(writes));
+    await connect(adapter, writes);
     await settleSelection(adapter);
     expect(writes).toHaveLength(1);
     await vi.advanceTimersByTimeAsync(199);
@@ -496,16 +532,13 @@ describe('Senssun IF_B2 session state', () => {
     'accepts a current record after a successful acknowledgement',
     async (ack) => {
       const adapter = await acknowledgedAdapter(ack);
-      expect(adapter.parseNotification(health)).toMatchObject({
-        selectedUserSlug: 'alice',
-        impedance: 520,
-      });
+      expect(adapter.parseNotification(health)).toMatchObject({ impedance: 520 });
     },
   );
 
   it('rejects a final record received before safe profile selection', async () => {
     const adapter = new SenssunIfB2Adapter();
-    await adapter.onConnected(context());
+    await connect(adapter);
     expect(() => adapter.parseNotification(health)).toThrow(
       /final record arrived before safe profile selection/,
     );
@@ -514,10 +547,7 @@ describe('Senssun IF_B2 session state', () => {
   it('buffers a valid current record until the profile acknowledgement arrives', async () => {
     const adapter = await selectedAdapter();
     expect(adapter.parseNotification(health)).toBeNull();
-    expect(adapter.parseNotification(profileCreated)).toMatchObject({
-      selectedUserSlug: 'alice',
-      impedance: 520,
-    });
+    expect(adapter.parseNotification(profileCreated)).toMatchObject({ impedance: 520 });
     expect(adapter.parseNotification(profileCreated)).toBeNull();
     expect(adapter.parseNotification(health)).toBeNull();
   });
@@ -525,7 +555,6 @@ describe('Senssun IF_B2 session state', () => {
   it('processes a concatenated current record and acknowledgement in order', async () => {
     const adapter = await selectedAdapter();
     expect(adapter.parseNotification(Buffer.concat([health, profileUpdated]))).toMatchObject({
-      selectedUserSlug: 'alice',
       impedance: 520,
     });
   });
@@ -591,10 +620,7 @@ describe('Senssun IF_B2 session state', () => {
     const adapter = await selectedAdapter();
     expect(
       adapter.parseNotification(Buffer.concat([quietLive, health, profileUpdated])),
-    ).toMatchObject({
-      selectedUserSlug: 'alice',
-      impedance: 520,
-    });
+    ).toMatchObject({ impedance: 520 });
   });
 
   it.each([
@@ -604,7 +630,7 @@ describe('Senssun IF_B2 session state', () => {
   ] as const)('rejects unsuccessful profile acknowledgement', async (ack, message) => {
     vi.useFakeTimers();
     const adapter = new SenssunIfB2Adapter();
-    await adapter.onConnected(context());
+    await connect(adapter);
     await settleSelection(adapter);
     expect(() => adapter.parseNotification(ack)).toThrow(message);
     vi.useRealTimers();
@@ -613,7 +639,7 @@ describe('Senssun IF_B2 session state', () => {
   it('surfaces a bounded profile acknowledgement timeout on the next notification', async () => {
     vi.useFakeTimers();
     const adapter = new SenssunIfB2Adapter();
-    await adapter.onConnected(context());
+    await connect(adapter);
     await settleSelection(adapter);
     await vi.advanceTimersByTimeAsync(5_000);
     expect(() => adapter.parseNotification(alternateLive)).toThrow(
@@ -657,18 +683,14 @@ describe('Senssun IF_B2 session state', () => {
     await Promise.resolve();
     await Promise.resolve();
 
-    expect(adapter.parseNotification(health)).toMatchObject({
-      selectedUserSlug: 'alice',
-      impedance: 520,
-    });
+    expect(adapter.parseNotification(health)).toMatchObject({ impedance: 520 });
   });
 
   it('processes a concatenated acknowledgement and current record in order', async () => {
     const adapter = new SenssunIfB2Adapter();
-    await adapter.onConnected(context());
+    await connect(adapter);
     await settleSelection(adapter);
     expect(adapter.parseNotification(Buffer.concat([profileUpdated, health]))).toMatchObject({
-      selectedUserSlug: 'alice',
       impedance: 520,
     });
   });
@@ -679,7 +701,7 @@ describe('Senssun IF_B2 session state', () => {
     const reading = adapter.parseNotification(
       Buffer.concat([health.subarray(0, 5), profileUpdated]),
     );
-    expect(reading).toMatchObject({ weight: 72.6, impedance: 520, selectedUserSlug: 'alice' });
+    expect(reading).toMatchObject({ weight: 72.6, impedance: 520 });
     expect(adapter.parseNotification(profileUpdated)).toBeNull();
   });
 
@@ -696,27 +718,7 @@ describe('Senssun IF_B2 session state', () => {
     ).toBeNull();
   });
 
-  it('rejects a final record that no longer selects the provisional user', async () => {
-    let choice = selected;
-    const adapter = await selectedAdapter(profileUpdated, () => choice);
-    choice = { userSlug: 'bob', profile: { ...profile, age: 30 } };
-
-    expect(() => adapter.parseNotification(health)).toThrow(
-      /final record matched bob instead of provisional user alice/,
-    );
-  });
-
-  it('rejects a final record that no longer matches any user', async () => {
-    let choice: typeof selected | null = selected;
-    const adapter = await selectedAdapter(profileUpdated, () => choice);
-    choice = null;
-
-    expect(() => adapter.parseNotification(health)).toThrow(
-      /final record no longer matches provisional user alice/,
-    );
-  });
-
-  it('accepts the elapsed and weight boundaries and rejects values beyond them', async () => {
+  it('accepts the elapsed boundary and rejects a record beyond it', async () => {
     const elapsedAccepted = await acknowledgedAdapter();
     expect(
       elapsedAccepted.parseNotification(
@@ -724,7 +726,7 @@ describe('Senssun IF_B2 session state', () => {
           frame.writeUInt32BE(600, 24);
         }),
       ),
-    ).toMatchObject({ selectedUserSlug: 'alice' });
+    ).toMatchObject({ weight: 72.6 });
     const elapsedRejected = await acknowledgedAdapter();
     expect(
       elapsedRejected.parseNotification(
@@ -733,43 +735,19 @@ describe('Senssun IF_B2 session state', () => {
         }),
       ),
     ).toBeNull();
-
-    const divided = (rawWeight: number) => {
-      const frame = Buffer.concat([health.subarray(0, 28), Buffer.from([0x10, 0])]);
-      frame[4] = 30;
-      frame.writeUInt16BE(rawWeight, 10);
-      frame[29] = frame.subarray(4, 29).reduce((sum, value) => (sum + value) & 0xff, 0);
-      return frame;
-    };
-    for (const [rawWeight, weight] of [
-      [7250, 72.5],
-      [7270, 72.7],
-    ]) {
-      const accepted = await acknowledgedAdapter();
-      expect(accepted.parseNotification(divided(rawWeight))).toMatchObject({
-        weight,
-        selectedUserSlug: 'alice',
-      });
-    }
-    for (const rawWeight of [7249, 7271]) {
-      const rejected = await acknowledgedAdapter();
-      expect(() => rejected.parseNotification(divided(rawWeight))).toThrow();
-    }
   });
 
   it('emits one fragmented current record and keeps its composition pinned across sessions', async () => {
     const adapter = await acknowledgedAdapter();
     expect(adapter.parseNotification(health.subarray(0, 20))).toBeNull();
     const reading = adapter.parseNotification(health.subarray(20))!;
-    expect(reading).toMatchObject({ weight: 72.6, impedance: 520, selectedUserSlug: 'alice' });
+    expect(reading).toMatchObject({ weight: 72.6, impedance: 520 });
     expect(adapter.isComplete(reading)).toBe(true);
     expect(adapter.parseNotification(health)).toBeNull();
     const metrics = adapter.computeMetrics(reading, profile);
 
     adapter.onSessionStart();
-    await adapter.onConnected(
-      context([], () => ({ userSlug: 'bob', profile: { ...profile, age: 30 } })),
-    );
+    await connect(adapter, [], () => ({ ...profile, age: 30 }));
     await settleSelection(adapter);
     adapter.parseNotification(profileUpdated);
     expect(adapter.computeMetrics(reading, profile)).toEqual(metrics);
@@ -800,9 +778,7 @@ describe('Senssun IF_B2 session state', () => {
     const transportProfile: UserProfile = { ...profile, age: 20 };
     const expected = decodeRecord(health, selectedProfile);
     const adapter = new SenssunIfB2Adapter();
-    await adapter.onConnected(
-      context([], () => ({ userSlug: 'alice', profile: selectedProfile }), transportProfile),
-    );
+    await connect(adapter, [], () => selectedProfile, transportProfile);
     await settleSelection(adapter);
     adapter.parseNotification(profileUpdated);
 
@@ -822,7 +798,7 @@ describe('Senssun IF_B2 session state', () => {
     it('cancels a pending quiet-period candidate', async () => {
       const writes: Array<{ uuid: string; data: Buffer; withResponse: boolean }> = [];
       const adapter = new SenssunIfB2Adapter();
-      await adapter.onConnected(context(writes));
+      await connect(adapter, writes);
       adapter.parseNotification(quietLive);
       await vi.advanceTimersByTimeAsync(1_000);
 
@@ -843,19 +819,15 @@ describe('Senssun IF_B2 session state', () => {
       await vi.advanceTimersByTimeAsync(1_000);
       expect(oldWrites).toHaveLength(count);
 
-      const nextSelect = vi.fn(() => ({
-        userSlug: 'next',
-        profile: { ...profile, age: 28 },
-      }));
       const nextWrites: Array<{ uuid: string; data: Buffer; withResponse: boolean }> = [];
-      await adapter.onConnected(context(nextWrites, nextSelect));
+      await connect(adapter, nextWrites, () => ({ ...profile, age: 28 }));
       expect(() => adapter.parseNotification(health)).toThrow(
         /final record arrived before safe profile selection/,
       );
       await settleSelection(adapter);
       expect(nextWrites[0]?.data).toEqual(buildCloudProfileCommand({ ...profile, age: 28 }, 72.6));
       adapter.parseNotification(profileCreated);
-      expect(adapter.parseNotification(health)).toMatchObject({ selectedUserSlug: 'next' });
+      expect(adapter.parseNotification(health)).toMatchObject({ weight: 72.6 });
       vi.useRealTimers();
     });
 
