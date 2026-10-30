@@ -47,9 +47,7 @@ import { registerExclusionRegistry } from './derived-excludes.js';
 
 export const adapters: ScaleAdapter[] = [
   // Specific adapters first — they match by device name before the generic one.
-  // Order matters: Senssun IF_B2's exact name (priority 300) precedes broad
-  // FFF0/QN candidates; SenssunAdapter remains ahead of QnScaleAdapter (which
-  // matches 'senssun').
+  // Order matters: SenssunAdapter before QnScaleAdapter (QN matches 'senssun'),
   // QnScaleAdapter before RenphoScaleAdapter (mutual exclusion by service UUID),
   // EufyP2Adapter before QnScaleAdapter (P2/P2 Pro advertise FFF0 and would be
   // mis-detected as a QN scale; Eufy's company ID 0xFF48 + "eufy T914x" name is specific).
@@ -59,8 +57,9 @@ export const adapters: ScaleAdapter[] = [
   // Outranks EufyP2Adapter, whose 0xFF48 + [6] == 0xCF claim a P3 could meet
   // only with an address starting 0xFF; the reverse cannot happen (#408).
   new EufyC20P3Adapter(),
-  new SenssunIfB2Adapter(),
   new SenssunAdapter(),
+  // Senssun IF_B2: exact name only, priority between Senssun Fat and QN.
+  new SenssunIfB2Adapter(),
   new QnScaleAdapter(),
   new RenphoScaleAdapter(),
   // Renpho R-MSC04 (#117/#265): 55AA-framed weight on service 0x1A10. Matched by

@@ -79,6 +79,12 @@ export const ORDERING_INVARIANTS: ReadonlyArray<readonly [string, string]> = [
   // every transport that resolves after discovery hands the scale to Inlife
   // (#507). Custom on both sides, so the overlap check below is silent.
   ['Renpho ES-WBE28', 'Inlife'],
+  // The IF_B2 claims on its exact name, but the mqtt-proxy notify-char
+  // fallback takes the highest-priority adapter whose notify characteristic
+  // the device has. Above Senssun Fat Scale it would take every unclassified
+  // device with 0xFFF1, and one with 0xFFF1 and 0xFFF2 ahead of Eufy P2
+  // (notify 0xFFF2); below it the fallback stays as it was.
+  ['Senssun Fat Scale', 'Senssun IF_B2'],
 ];
 
 /** Run structural checks over an adapter registry. Pure — no throw, no log. */

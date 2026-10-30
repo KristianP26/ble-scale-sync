@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { adapters } from '../../src/scales/index.js';
+import { resolveAdapter } from '../../src/scales/resolve.js';
 import { uuid16 } from '../../src/scales/body-comp-helpers.js';
 import type { BleDeviceInfo } from '../../src/interfaces/scale-adapter.js';
 
@@ -9,7 +10,7 @@ describe('adapter resolution (Senssun IF_B2 registration)', () => {
       localName: 'IF_B2',
       serviceUuids: [uuid16(0xfff0)],
     };
-    const matched = adapters.find((a) => a.matches(info));
+    const matched = resolveAdapter(info, adapters);
     expect(matched?.name).toBe('Senssun IF_B2');
   });
 
@@ -18,7 +19,7 @@ describe('adapter resolution (Senssun IF_B2 registration)', () => {
       localName: 'if_b2',
       serviceUuids: [uuid16(0xfff0)],
     };
-    const matched = adapters.find((a) => a.matches(info));
+    const matched = resolveAdapter(info, adapters);
     expect(matched?.name).toBe('Senssun IF_B2');
   });
 
@@ -27,19 +28,19 @@ describe('adapter resolution (Senssun IF_B2 registration)', () => {
       localName: '',
       serviceUuids: [uuid16(0xfff0)],
     };
-    const matched = adapters.find((a) => a.matches(info));
+    const matched = resolveAdapter(info, adapters);
     expect(matched?.name).not.toBe('Senssun IF_B2');
   });
 
   it('preserves the legacy Senssun Fat Scale resolution', () => {
     const info: BleDeviceInfo = { localName: 'senssun fat', serviceUuids: [] };
-    const matched = adapters.find((a) => a.matches(info));
+    const matched = resolveAdapter(info, adapters);
     expect(matched?.name).toBe('Senssun Fat Scale');
   });
 
   it('preserves the legacy QN Scale resolution', () => {
     const info: BleDeviceInfo = { localName: 'QN-Scale', serviceUuids: [uuid16(0xfff0)] };
-    const matched = adapters.find((a) => a.matches(info));
+    const matched = resolveAdapter(info, adapters);
     expect(matched?.name).toBe('QN Scale');
   });
 });

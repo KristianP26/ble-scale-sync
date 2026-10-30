@@ -64,27 +64,6 @@
     ]
   },
   {
-    "name": "Senssun IF_B2",
-    "match": {
-      "priority": 300,
-      "names": {
-        "exact": [
-          "if_b2"
-        ]
-      }
-    },
-    "charNotifyUuid": "0000fff100001000800000805f9b34fb",
-    "charWriteUuid": "0000fff200001000800000805f9b34fb",
-    "completionHoldMs": 9000,
-    "hooks": [
-      "configure",
-      "onConnected",
-      "onSessionStart",
-      "onSessionEnd",
-      "isFinal"
-    ]
-  },
-  {
     "name": "Senssun Fat Scale",
     "match": {
       "priority": 260,
@@ -100,6 +79,27 @@
     "unlockIntervalMs": 5000,
     "hooks": [
       "onSessionStart"
+    ]
+  },
+  {
+    "name": "Senssun IF_B2",
+    "match": {
+      "priority": 255,
+      "names": {
+        "exact": [
+          "if_b2"
+        ]
+      }
+    },
+    "charNotifyUuid": "0000fff100001000800000805f9b34fb",
+    "charWriteUuid": "0000fff200001000800000805f9b34fb",
+    "completionHoldMs": 9000,
+    "hooks": [
+      "configure",
+      "onConnected",
+      "onSessionStart",
+      "onSessionEnd",
+      "isFinal"
     ]
   },
   {

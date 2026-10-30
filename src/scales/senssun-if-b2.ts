@@ -253,7 +253,11 @@ class IfB2Session {
 
 export class SenssunIfB2Adapter implements ScaleAdapterCore, HoldForComposition {
   readonly name = 'Senssun IF_B2';
-  readonly match: MatchDescriptor = { priority: 300, names: { exact: ['if_b2'] } };
+  // Below Senssun Fat Scale (260) and above QN (250). At 300 the mqtt-proxy
+  // notify-char fallback would pick it ahead of Senssun Fat Scale for every
+  // unclassified FFF1 device, and ahead of Eufy P2 (FFF2) for one with both
+  // (registry-check invariant).
+  readonly match: MatchDescriptor = { priority: 255, names: { exact: ['if_b2'] } };
   readonly serviceUuid = uuid16(0xfff0);
   readonly charNotifyUuid = uuid16(0xfff1);
   readonly charWriteUuid = uuid16(0xfff2);
