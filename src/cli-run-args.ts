@@ -4,8 +4,8 @@ import { SUBCOMMANDS } from './cli-dispatch.js';
 /**
  * Argument parsing for the run path (`ble-scale-sync [--config <path>]`).
  *
- * Pure for the same reason as cli-dispatch.ts: run.ts starts the app at module
- * evaluation, so the rule has to live where a test can import it.
+ * Pure for the same reason as cli-dispatch.ts: a test can import it without
+ * starting anything.
  *
  * Strict on purpose (G-16). A leading flag sends everything to the run path,
  * and a lenient parse ignored whatever it did not recognise there:

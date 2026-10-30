@@ -1,4 +1,4 @@
-import type { BleChar } from './shared.js';
+import type { BleChar } from './session/ports.js';
 
 /**
  * Per-characteristic write lanes for one GATT session (#211).

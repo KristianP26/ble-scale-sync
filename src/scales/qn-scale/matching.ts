@@ -29,6 +29,32 @@ import {
   SVC_T2,
 } from './constants.js';
 
+/**
+ * The names QN claims, the descriptor's and `qnMatches`' alike. 'seb-scale' and
+ * the exact 'fit plus' come from openScale's QN handler, which annotates the
+ * latter as a BTSnoop-confirmed GE CS 10 G (#409, and we have GE CS10G history
+ * in #235). 'fit plus' is EXACT on purpose: as a substring it would claim any
+ * fitness-branded device whose name contains it.
+ */
+export const QN_NAMES = {
+  includes: ['qn-scale', 'renpho', 'senssun', 'sencor', 'seb-scale'],
+  exact: ['fit plus'],
+};
+
+/**
+ * Whether QN's handshake can run: it needs a notify char (fff1 or ffe1) AND a
+ * write char (fff2 or ffe3), exactly the pair subscribeAndInit resolves.
+ * `chars` lowercased; RenphoScaleAdapter declines a "renpho"-named device on
+ * it too. A nameless one it decides on its own characteristic set instead, as
+ * the Renpho A-R003 has this pair next to the SIG stack (#507).
+ */
+export function qnCanRun(chars: readonly string[]): boolean {
+  return (
+    (hasChar(chars, 0xfff1) || hasChar(chars, 0xffe1)) &&
+    (hasChar(chars, 0xfff2) || hasChar(chars, 0xffe3))
+  );
+}
+
 /** True when `chars` (lowercased) holds the 16-bit `code` in short or 128-bit form. */
 function hasChar(chars: readonly string[], code: number): boolean {
   const short = code.toString(16).padStart(4, '0');
@@ -58,19 +84,14 @@ export function qnMatches(device: BleDeviceInfo): boolean {
   const chars = (device.characteristicUuids || []).map((u) => u.toLowerCase());
 
   // #436: a 0x1A10 / 55AA-family scale (Renpho ES-CS20M, JieLi revision) can
-  // carry the JieLi AE00 service too. QN cannot run there: its handshake needs a
-  // notify char (fff1 or ffe1) AND a write char (fff2 or ffe3), exactly the pair
-  // subscribeAndInit resolves, and without them the session ends on "Required
-  // characteristics not found". Declining only when the other protocol's pair is
-  // present and QN's is not means the outcome changes solely where QN would have
-  // failed anyway; an AE00 QN unit (#235 GE CS 10 G, #258/#75 Elis 1, all with
-  // fff1+fff2) is untouched. Before GATT discovery `chars` is empty, so no
-  // pre-connect decision changes.
+  // carry the JieLi AE00 service too. QN cannot run there (qnCanRun), and the
+  // session would end on "Required characteristics not found". Declining only
+  // when the other protocol's pair is present and QN's is not means the outcome
+  // changes solely where QN would have failed anyway; an AE00 QN unit (#235 GE
+  // CS 10 G, #258/#75 Elis 1, all with fff1+fff2) is untouched. Before GATT
+  // discovery `chars` is empty, so no pre-connect decision changes.
   const has55aaPair = hasChar(chars, 0x2a10) && hasChar(chars, 0x2a11);
-  const qnCanRun =
-    (hasChar(chars, 0xfff1) || hasChar(chars, 0xffe1)) &&
-    (hasChar(chars, 0xfff2) || hasChar(chars, 0xffe3));
-  if (has55aaPair && !qnCanRun) return false;
+  if (has55aaPair && !qnCanRun(chars)) return false;
 
   // AE00 is a JieLi service. On a QN scale it identifies the family even when
   // the device also carries a non-QN name and advertises fff0 (e.g. GE CS 10 G
@@ -87,19 +108,9 @@ export function qnMatches(device: BleDeviceInfo): boolean {
     (u) => u === SVC_T1 || u === SVC_T2 || u === uuid16(0xffe0) || u === uuid16(0xfff0),
   );
 
-  const nameMatch =
-    name.includes('qn-scale') ||
-    name.includes('renpho') ||
-    name.includes('senssun') ||
-    name.includes('sencor') ||
-    // From openScale's QN handler (#409). 'seb-scale' is a substring like the
-    // others; 'fit plus' is EXACT, because as a substring it would claim any
-    // fitness-branded device carrying those two words. The comment above about
-    // AE00 already names the GE CS 10 G "Fit Plus": that unit is caught by its
-    // service when AE00 is visible, and by this when it is not.
-    name.includes('seb-scale') ||
-    name === 'fit plus';
-  if (nameMatch) {
+  // The GE CS 10 G "Fit Plus" above is caught by its service when AE00 is
+  // visible, and by its name when it is not.
+  if (QN_NAMES.includes.some((t) => name.includes(t)) || QN_NAMES.exact.includes(name)) {
     // #191: a device named only via 'renpho' (not the QN-specific names)
     // that advertises a SIG Weight Scale / Body Composition service but NO
     // QN vendor service is a Renpho ES-WBE28 (proprietary 0x2A9D payload),
@@ -127,7 +138,7 @@ export function qnMatches(device: BleDeviceInfo): boolean {
     // consent pair without a QN pair is an ES-WBE28 (#267 capture), never a
     // scale this handshake can drive. Mirrors RenphoScaleAdapter.matches().
     const hasSigConsentPair = hasChar(chars, 0x2a9f) && hasChar(chars, 0x2a9d);
-    if (onlyRenpho && hasSigConsentPair && !qnCanRun) return false;
+    if (onlyRenpho && hasSigConsentPair && !qnCanRun(chars)) return false;
     return true;
   }
 
@@ -150,7 +161,11 @@ export function qnMatches(device: BleDeviceInfo): boolean {
   // reporter saw it alternate between QN Scale and Standard GATT, reading
   // nothing either way. The SIG User Control Point is the discriminator: it
   // belongs to the User Data service, which a QN scale does not implement.
-  // Mirrors the looksLikeWbe28 mutual exclusion above.
+  // Mirrors the looksLikeWbe28 mutual exclusion above. It also keeps this
+  // fallback off the nameless Renpho A-R003 (#507), whose handles imply 0xFFE0
+  // and 0xFFF0 services next to the consent pair: QN outranks
+  // RenphoScaleAdapter (registry-check.ts), so wherever discovered services
+  // reach this matcher QN would take it without the guard.
   const hasSigConsent =
     chars.some((u) => u === '2a9f' || u === CHR_SIG_USER_CONTROL_POINT) &&
     chars.some((u) => u === '2a9d' || u === CHR_SIG_WEIGHT_MEASUREMENT);

@@ -1,0 +1,29 @@
+{
+  "returned": true,
+  "exports": [],
+  "computeMetrics": [],
+  "queued": [],
+  "lastKnownWeightWrites": [],
+  "replayAnchorWrites": [],
+  "updateChecks": 0,
+  "display": [
+    [
+      "beep",
+      600,
+      150,
+      3
+    ]
+  ],
+  "after": {
+    "lastExportedWeights": {},
+    "lastExportedAt": {},
+    "lastKnownWeight": {
+      "dad": null,
+      "mom": null
+    }
+  },
+  "log": [
+    "[Sync] Raw reading: 72.00 kg / 500 Ohm",
+    "[UserMatch] No match for 72 kg — logging and skipping (unknown_user: log)"
+  ]
+}

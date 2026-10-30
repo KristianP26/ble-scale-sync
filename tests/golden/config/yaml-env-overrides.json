@@ -1,0 +1,84 @@
+{
+  "config": {
+    "version": 1,
+    "ble": {
+      "handler": "auto",
+      "scale_mac": "AA:BB:CC:DD:EE:09",
+      "adapter": "hci2",
+      "noble_driver": "stoprocent"
+    },
+    "scale": {
+      "weight_unit": "kg",
+      "height_unit": "cm",
+      "display_unit": "weight_unit"
+    },
+    "unknown_user": "nearest",
+    "out_of_range": "warn",
+    "users": [
+      {
+        "name": "Dad",
+        "slug": "dad",
+        "height": 183,
+        "birth_date": "1990-06-15",
+        "gender": "male",
+        "is_athlete": false,
+        "weight_range": {
+          "min": 75,
+          "max": 95
+        },
+        "last_known_weight": null
+      }
+    ],
+    "runtime": {
+      "continuous_mode": true,
+      "scan_cooldown": 30,
+      "dry_run": true,
+      "debug": true,
+      "watchdog_max_consecutive_failures": 7,
+      "watch_config": true,
+      "idle_rescan_delay": 5,
+      "no_reading_rescan_delay": 0,
+      "retry_failed_exports": true
+    },
+    "update_check": true
+  },
+  "runtime": {
+    "profile": {
+      "height": 183,
+      "age": 36,
+      "gender": "male",
+      "isAthlete": false,
+      "birthDate": "1990-06-15",
+      "lastKnownWeight": 85
+    },
+    "scaleMac": "AA:BB:CC:DD:EE:09",
+    "weightUnit": "kg",
+    "dryRun": true,
+    "continuousMode": true,
+    "scanCooldownSec": 30,
+    "retryFailedExports": true,
+    "watchdogMaxFailures": 7,
+    "watchConfig": true,
+    "bleHandler": "auto",
+    "bleAdapter": "hci2",
+    "adapterPrivacy": false
+  },
+  "adapterRuntime": {
+    "scaleMac": "AA:BB:CC:DD:EE:09",
+    "displayUnit": "kg",
+    "userWeights": "config.users"
+  },
+  "exporterSlots": {
+    "dad": []
+  },
+  "log": [
+    "[Config] CONTINUOUS_MODE is set in the environment and overrides runtime.continuous_mode from config.yaml.",
+    "[Config] DRY_RUN is set in the environment and overrides runtime.dry_run from config.yaml.",
+    "[Config] DEBUG is set in the environment and overrides runtime.debug from config.yaml.",
+    "[Config] SCAN_COOLDOWN='12.5' is not a whole number of seconds between 5 and 3600; keeping scan_cooldown=30.",
+    "[Config] BLE_WATCHDOG_MAX_FAILURES is set in the environment and overrides runtime.watchdog_max_consecutive_failures from config.yaml.",
+    "[Config] SCALE_MAC is set in the environment and overrides ble.scale_mac from config.yaml.",
+    "[Config] BLE_ADAPTER is set in the environment and overrides ble.adapter from config.yaml.",
+    "[Config] NOBLE_DRIVER is set in the environment and overrides ble.noble_driver from config.yaml."
+  ]
+}

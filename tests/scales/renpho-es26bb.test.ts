@@ -4,6 +4,7 @@ import type { ConnectionContext } from '../../src/interfaces/scale-adapter.js';
 import {
   mockPeripheral,
   defaultProfile,
+  makeConnectionContext,
   assertPayloadRanges,
 } from '../helpers/scale-test-utils.js';
 import { WEIGHT_ONLY_HOLD_MS } from '../../src/scales/body-comp-helpers.js';
@@ -43,13 +44,13 @@ function makeOfflineFrame(weightX100: number, impedance: number, secondsAgo = 0)
 function makeMockCtx(): { ctx: ConnectionContext; write: ReturnType<typeof vi.fn> } {
   const write = vi.fn().mockResolvedValue(undefined);
   return {
-    ctx: {
+    ctx: makeConnectionContext({
       write,
       read: vi.fn().mockResolvedValue(Buffer.alloc(0)),
       subscribe: vi.fn().mockResolvedValue(undefined),
       profile: defaultProfile(),
       deviceAddress: 'AA:BB:CC:DD:EE:FF',
-    },
+    }),
     write,
   };
 }
@@ -192,13 +193,13 @@ describe('RenphoEs26bbAdapter', () => {
     it('survives ack write failure without throwing', async () => {
       const adapter = makeAdapter();
       const write = vi.fn().mockRejectedValue(new Error('disconnected'));
-      const ctx: ConnectionContext = {
+      const ctx = makeConnectionContext({
         write,
         read: vi.fn().mockResolvedValue(Buffer.alloc(0)),
         subscribe: vi.fn().mockResolvedValue(undefined),
         profile: defaultProfile(),
         deviceAddress: 'AA:BB:CC:DD:EE:FF',
-      };
+      });
       // First call (start cmd) also rejects but onConnected swallows it.
       await expect(adapter.onConnected(ctx)).resolves.toBeUndefined();
       write.mockClear();

@@ -7,6 +7,7 @@ import type { HaBluetoothConfig } from '../../config/schema.js';
 import type { RawReading } from '../shared.js';
 import { resolveAdapter } from '../../scales/resolve.js';
 import {
+  BoundedSet,
   evaluateAdvertisement,
   GraceTimers,
   DedupWindow,
@@ -22,8 +23,6 @@ import { logTransportCapabilities } from './scan.js';
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const DEDUP_WINDOW_MS = 30_000;
-/** Cap for the once-per-scale "needs GATT" warning tracker. */
-const GATT_WARN_MAX = 256;
 
 // ─── ReadingWatcher (continuous mode) ────────────────────────────────────────
 
@@ -48,7 +47,8 @@ export class ReadingWatcher implements Watcher {
   private unsub: (() => void) | null = null;
   /** Set at start and on every advertisement; the proxy liveness signal (#281). */
   private lastAdvertAt: number | null = null;
-  private readonly gattWarned = new Set<string>();
+  /** Once-per-scale "needs GATT" warnings. */
+  private readonly gattWarned = new BoundedSet<string>(256);
 
   /** Weight-only fallback timer per address; on elapse the held reading is
    *  queued directly (no dedup, matching the other proxy watchers). */
@@ -56,7 +56,7 @@ export class ReadingWatcher implements Watcher {
     bleLog.info(
       `Matched: ${gr.adapter.name} (${address}), weight only, no impedance within ${IMPEDANCE_GRACE_MS / 1000}s`,
     );
-    bleLog.info(`Reading: ${gr.reading.weight} kg`);
+    bleLog.info(`Reading: ${gr.reading.weight.toFixed(2)} kg`);
     this.queue.push(gr);
   });
 
@@ -152,10 +152,6 @@ export class ReadingWatcher implements Watcher {
 
   private warnGatt(adapter: ScaleAdapter, address: string): void {
     if (this.gattWarned.has(address)) return;
-    if (this.gattWarned.size >= GATT_WARN_MAX) {
-      const oldest = this.gattWarned.values().next().value;
-      if (oldest !== undefined) this.gattWarned.delete(oldest);
-    }
     this.gattWarned.add(address);
     bleLog.warn(
       `${adapter.name} at ${address} needs a GATT connection, which Home Assistant's ` +

@@ -67,7 +67,7 @@ describe('export queue when the file cannot be read', () => {
   });
 
   const linesOf = (spy: ReturnType<typeof vi.spyOn>): string[] =>
-    spy.mock.calls.map((c) => c.map(String).join(' '));
+    spy.mock.calls.map((c: unknown[]) => c.map(String).join(' '));
 
   it('flush leaves the file alone, attempts nothing, and warns once', async () => {
     const before = fs.readFileSync(file, 'utf-8');

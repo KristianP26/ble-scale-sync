@@ -211,6 +211,25 @@ describe('add-on option update_check', () => {
   });
 });
 
+describe('add-on option user_estimate_body_composition (#497)', () => {
+  it('is an add-on option, on by default, with a translation', () => {
+    expect(MANIFEST.options).toHaveProperty('user_estimate_body_composition', true);
+    expect(TRANSLATIONS.configuration).toHaveProperty('user_estimate_body_composition');
+  });
+
+  // A plain opt_bool would turn a missing key into false, and jq's // would
+  // turn an explicit false into true.
+  it('is read as an option that defaults to true', () => {
+    expect(RUN_SH).toMatch(
+      /^ {2}USER_ESTIMATE_BODY_COMPOSITION=\$\(opt_bool_default_true user_estimate_body_composition\)$/m,
+    );
+  });
+
+  it('is named as ignored in custom config mode when it is turned off', () => {
+    expect(customConfigBranch()).toMatch(/opt_bool_default_true user_estimate_body_composition/);
+  });
+});
+
 describe('add-on option adapter_privacy (#417)', () => {
   const SCHEMA = (
     parse(lf(readFileSync('ble-scale-sync-addon/config.yaml', 'utf8'))) as {
@@ -236,6 +255,128 @@ describe('add-on option adapter_privacy (#417)', () => {
   });
 });
 
+describe('add-on option pairing_retry_max_min (#471)', () => {
+  const SCHEMA = (
+    parse(lf(readFileSync('ble-scale-sync-addon/config.yaml', 'utf8'))) as {
+      schema: Record<string, unknown>;
+    }
+  ).schema;
+
+  it('is an add-on option, 60 by default, validated as a whole number from 0 to 1440', () => {
+    expect(MANIFEST.options).toHaveProperty('pairing_retry_max_min', 60);
+    expect(SCHEMA).toHaveProperty('pairing_retry_max_min', 'int(0,1440)?');
+    expect(TRANSLATIONS.configuration).toHaveProperty('pairing_retry_max_min');
+  });
+
+  it('is read with opt_int and written into the ble block only when it is not 60', () => {
+    expect(RUN_SH).toMatch(/^ {2}PAIRING_RETRY_MAX_MIN=\$\(opt_int pairing_retry_max_min 60\)$/m);
+    expect(RUN_SH).toContain(
+      '[ "$PAIRING_RETRY_MAX_MIN" != "60" ] && echo "  pairing_retry_max_min: $PAIRING_RETRY_MAX_MIN" >> "$FRESH"',
+    );
+  });
+
+  it('is named as ignored in custom config mode by its own check, not the loop', () => {
+    // opt() answers "60" for the default, so in the loop every start with
+    // custom_config would warn about an option nobody set.
+    expect(customConfigBranch()).toMatch(
+      /if \[ "\$\(opt_int pairing_retry_max_min 60\)" != "60" \]; then/,
+    );
+    expect(customConfigBranch()).not.toMatch(/for _qn in [^;]*\bpairing_retry_max_min\b/);
+  });
+});
+
+describe('add-on option no_reading_rescan_delay (#475)', () => {
+  const SCHEMA = (
+    parse(lf(readFileSync('ble-scale-sync-addon/config.yaml', 'utf8'))) as {
+      schema: Record<string, unknown>;
+    }
+  ).schema;
+
+  it('is an add-on option, 0 by default, validated as int(0,3600)?', () => {
+    expect(MANIFEST.options).toHaveProperty('no_reading_rescan_delay', 0);
+    expect(SCHEMA).toHaveProperty('no_reading_rescan_delay', 'int(0,3600)?');
+    expect(TRANSLATIONS.configuration).toHaveProperty('no_reading_rescan_delay');
+  });
+
+  it('is read with opt_int and a default of 0 and written into the runtime block', () => {
+    expect(RUN_SH).toMatch(
+      /^ {2}NO_READING_RESCAN_DELAY=\$\(opt_int no_reading_rescan_delay 0\)$/m,
+    );
+    // Always written, like idle_rescan_delay: 0 is the app's own default, so
+    // the line changes nothing until somebody sets the option.
+    expect(RUN_SH).toMatch(
+      /^ {2}idle_rescan_delay: \$IDLE_RESCAN_DELAY\n {2}no_reading_rescan_delay: \$NO_READING_RESCAN_DELAY$/m,
+    );
+  });
+});
+
+// A text option like qn_user_key, so that unset stays unset (#501).
+describe('add-on option qn_user_slot', () => {
+  it('is an add-on option, unset by default, validated as text', () => {
+    const { schema } = parse(lf(readFileSync('ble-scale-sync-addon/config.yaml', 'utf8'))) as {
+      schema: Record<string, unknown>;
+    };
+    expect(MANIFEST.options).toHaveProperty('qn_user_slot', '');
+    expect(schema).toHaveProperty('qn_user_slot', 'str?');
+    expect(TRANSLATIONS.configuration).toHaveProperty('qn_user_slot');
+  });
+
+  it('is named as ignored in custom config mode', () => {
+    expect(customConfigBranch()).toMatch(/for _qn in [^;]*\bqn_user_slot\b[^;]*; do/);
+  });
+
+  it('opens the ble block on its own', () => {
+    expect(RUN_SH).toMatch(/\[ -n "\$QN_USER_SLOT" \] \|\|/);
+  });
+});
+
+// A text option like the other QN switches, so that unset stays unset (#331).
+describe('add-on option qn_result_ack', () => {
+  it('is an add-on option, unset by default, validated as text', () => {
+    const { schema } = parse(lf(readFileSync('ble-scale-sync-addon/config.yaml', 'utf8'))) as {
+      schema: Record<string, unknown>;
+    };
+    expect(MANIFEST.options).toHaveProperty('qn_result_ack', '');
+    expect(schema).toHaveProperty('qn_result_ack', 'str?');
+    expect(TRANSLATIONS.configuration).toHaveProperty('qn_result_ack');
+  });
+
+  it('is named as ignored in custom config mode', () => {
+    expect(customConfigBranch()).toMatch(/for _qn in [^;]*\bqn_result_ack\b[^;]*; do/);
+  });
+});
+
+// One byte of the user's own Renpho app profile (#434, D079): personal, so a
+// warning about it never repeats the value, and quoted so 99 stays a string.
+describe('add-on option rmsc04_profile_byte', () => {
+  it('is an add-on option, unset by default, validated as text', () => {
+    const { schema } = parse(lf(readFileSync('ble-scale-sync-addon/config.yaml', 'utf8'))) as {
+      schema: Record<string, unknown>;
+    };
+    expect(MANIFEST.options).toHaveProperty('rmsc04_profile_byte', '');
+    expect(schema).toHaveProperty('rmsc04_profile_byte', 'str?');
+    expect(TRANSLATIONS.configuration).toHaveProperty('rmsc04_profile_byte');
+  });
+
+  it('is named as ignored in custom config mode', () => {
+    expect(customConfigBranch()).toMatch(/for _qn in [^;]*\brmsc04_profile_byte\b[^;]*; do/);
+  });
+
+  it('is written in quotes', () => {
+    expect(RUN_SH).toMatch(
+      /^ {4}\[ -n "\$RMSC04_PROFILE_BYTE" \] && echo " {2}rmsc04_profile_byte: \\"\$RMSC04_PROFILE_BYTE\\"" >> "\$FRESH"$/m,
+    );
+  });
+
+  it('never puts the value into a warning', () => {
+    const warnings = RUN_SH.split('\n').filter(
+      (l) => l.includes('WARNING') && l.includes('rmsc04_profile_byte'),
+    );
+    expect(warnings.length).toBeGreaterThan(0);
+    for (const l of warnings) expect(l).not.toContain('$');
+  });
+});
+
 describe('generated config: ble block', () => {
   it('is opened by every option it writes', () => {
     // An option written inside the block but missing from its condition is
@@ -248,10 +389,14 @@ describe('generated config: ble block', () => {
     const body = RUN_SH.slice(open, RUN_SH.indexOf('\n  fi\n', open));
     // printf as well as echo: a guard that only knew echo stopped checking every
     // line that moved to printf, without failing. emit_* writes whole sections.
+    // Digits too: without them RMSC04_PROFILE_BYTE was never checked.
     const written = [
-      ...body.matchAll(/\[ [^\]]*"\$([A-Z_]+)"[^\]]*\] && (?:echo|printf|emit_[a-z_]+)/g),
+      ...body.matchAll(/\[ [^\]]*"\$([A-Z0-9_]+)"[^\]]*\] && (?:echo|printf|emit_[a-z_]+)/g),
     ].map((m) => m[1]);
     expect(written).toContain('ADAPTER_PRIVACY');
+    expect(written).toContain('PAIRING_RETRY_MAX_MIN');
+    expect(written).toContain('QN_RESULT_ACK');
+    expect(written).toContain('RMSC04_PROFILE_BYTE');
     expect(written).toContain('SCALE_MAC');
     expect(written).toContain('BLE_TRANSPORT');
     for (const v of written) expect(condition, v).toContain(`"$${v}"`);
@@ -958,7 +1103,7 @@ describe.skipIf(!SHELL)('run.sh ble_transport_problem', { timeout: 30_000 }, () 
   };
 
   it('says nothing for a transport that can run', () => {
-    for (const vars of [
+    const runnable: Record<string, string>[] = [
       { BLE_TRANSPORT: 'local' },
       { BLE_TRANSPORT: 'esphome-proxy', ESPHOME_HOST: '192.168.1.50', ESPHOME_KEY: '' },
       { BLE_TRANSPORT: 'esphome-proxy', ESPHOME_HOST: 'proxy.local', ESPHOME_KEY: KEY },
@@ -966,7 +1111,8 @@ describe.skipIf(!SHELL)('run.sh ble_transport_problem', { timeout: 30_000 }, () 
       { ...MQTT_SHARED, MQTT_BROKER_URL: 'mqtts://broker.example:8883' },
       { ...MQTT_EMBEDDED, MQTT_PROXY_USERNAME: 'esp32', MQTT_PROXY_PASSWORD: 'pw' },
       { BLE_TRANSPORT: 'ha-bluetooth', SUPERVISOR_TOKEN: 'token' },
-    ]) {
+    ];
+    for (const vars of runnable) {
       expect(problem(vars), JSON.stringify(vars)).toEqual({ status: 0, out: '' });
     }
   });

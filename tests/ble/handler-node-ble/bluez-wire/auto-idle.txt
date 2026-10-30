@@ -1,0 +1,360 @@
++0ms [debug] D-Bus connection established
++0ms :1.1 Hello
++0ms :1.1 Introspect /org/bluez
++0ms :1.1 Introspect /org/bluez
++0ms :1.1 Introspect /org/bluez
++0ms :1.1 AgentManager1.RegisterAgent /org/bluez /org/blescalesync/agent KeyboardDisplay
++0ms [debug] BlueZ pairing agent registered (KeyboardDisplay)
++0ms [debug] Not claiming the BlueZ default-agent role (no users[].beurer_pin configured)
++0ms :1.1 Introspect hci0
++0ms :1.1 Get hci0 Adapter1.Powered
++0ms :1.1 Get hci0 Adapter1.Discovering
++0ms [debug] Discovery state at start: Discovering=false, our filtered session=no
++0ms :1.1 Adapter1.SetDiscoveryFilter hci0 {Transport=le,DuplicateData=true}
++0ms [debug] Discovery filter: Transport=le, DuplicateData=true
++0ms :1.1 Adapter1.StartDiscovery hci0
++0ms [debug] Discovery started
++0ms :1.1 Introspect hci0
++0ms :1.1 Introspect hci0
++0ms :1.1 Introspect hci0/dev_11_22_33_44_55_66
++0ms :1.1 AddMatch hci0/dev_11_22_33_44_55_66 Properties.PropertiesChanged
++0ms :1.1 Get hci0/dev_11_22_33_44_55_66 Device1.Name
++0ms [debug] Discovered: Phone [11:22:33:44:55:66]
++0ms :1.1 Get hci0/dev_11_22_33_44_55_66 Device1.AddressType
++0ms :1.1 Get hci0/dev_11_22_33_44_55_66 Device1.AdvertisingFlags -> InvalidArgs
++0ms :1.1 Get hci0/dev_11_22_33_44_55_66 Device1.UUIDs -> InvalidArgs
++0ms :1.1 Get hci0/dev_11_22_33_44_55_66 Device1.ServiceData -> InvalidArgs
++0ms :1.1 Get hci0/dev_11_22_33_44_55_66 Device1.ManufacturerData -> InvalidArgs
++0ms :1.1 RemoveMatch hci0/dev_11_22_33_44_55_66 Properties.PropertiesChanged
++2000ms :1.1 Introspect hci0
++2000ms :1.1 Introspect hci0
++2000ms :1.1 Introspect hci0/dev_11_22_33_44_55_66
++2000ms :1.1 AddMatch hci0/dev_11_22_33_44_55_66 Properties.PropertiesChanged
++2000ms :1.1 Get hci0/dev_11_22_33_44_55_66 Device1.Name
++2000ms [debug] Discovered: Phone [11:22:33:44:55:66]
++2000ms :1.1 Get hci0/dev_11_22_33_44_55_66 Device1.AddressType
++2000ms :1.1 Get hci0/dev_11_22_33_44_55_66 Device1.AdvertisingFlags -> InvalidArgs
++2000ms :1.1 Get hci0/dev_11_22_33_44_55_66 Device1.UUIDs -> InvalidArgs
++2000ms :1.1 Get hci0/dev_11_22_33_44_55_66 Device1.ServiceData -> InvalidArgs
++2000ms :1.1 Get hci0/dev_11_22_33_44_55_66 Device1.ManufacturerData -> InvalidArgs
++2000ms :1.1 RemoveMatch hci0/dev_11_22_33_44_55_66 Properties.PropertiesChanged
++3000ms :1.1 GetManagedObjects
++4000ms :1.1 Introspect hci0
++4000ms :1.1 Introspect hci0
++4000ms :1.1 Introspect hci0/dev_11_22_33_44_55_66
++4000ms :1.1 AddMatch hci0/dev_11_22_33_44_55_66 Properties.PropertiesChanged
++4000ms :1.1 Get hci0/dev_11_22_33_44_55_66 Device1.Name
++4000ms [debug] Discovered: Phone [11:22:33:44:55:66]
++4000ms :1.1 Get hci0/dev_11_22_33_44_55_66 Device1.AddressType
++4000ms :1.1 Get hci0/dev_11_22_33_44_55_66 Device1.AdvertisingFlags -> InvalidArgs
++4000ms :1.1 Get hci0/dev_11_22_33_44_55_66 Device1.UUIDs -> InvalidArgs
++4000ms :1.1 Get hci0/dev_11_22_33_44_55_66 Device1.ServiceData -> InvalidArgs
++4000ms :1.1 Get hci0/dev_11_22_33_44_55_66 Device1.ManufacturerData -> InvalidArgs
++4000ms :1.1 RemoveMatch hci0/dev_11_22_33_44_55_66 Properties.PropertiesChanged
++6000ms :1.1 GetManagedObjects
++6000ms :1.1 Introspect hci0
++6000ms :1.1 Introspect hci0
++6000ms :1.1 Introspect hci0/dev_11_22_33_44_55_66
++6000ms :1.1 AddMatch hci0/dev_11_22_33_44_55_66 Properties.PropertiesChanged
++6000ms :1.1 Get hci0/dev_11_22_33_44_55_66 Device1.Name
++6000ms [debug] Discovered: Phone [11:22:33:44:55:66]
++6000ms :1.1 Get hci0/dev_11_22_33_44_55_66 Device1.AddressType
++6000ms :1.1 Get hci0/dev_11_22_33_44_55_66 Device1.AdvertisingFlags -> InvalidArgs
++6000ms :1.1 Get hci0/dev_11_22_33_44_55_66 Device1.UUIDs -> InvalidArgs
++6000ms :1.1 Get hci0/dev_11_22_33_44_55_66 Device1.ServiceData -> InvalidArgs
++6000ms :1.1 Get hci0/dev_11_22_33_44_55_66 Device1.ManufacturerData -> InvalidArgs
++6000ms :1.1 RemoveMatch hci0/dev_11_22_33_44_55_66 Properties.PropertiesChanged
++8000ms :1.1 Introspect hci0
++8000ms :1.1 Introspect hci0
++8000ms :1.1 Introspect hci0/dev_11_22_33_44_55_66
++8000ms :1.1 AddMatch hci0/dev_11_22_33_44_55_66 Properties.PropertiesChanged
++8000ms :1.1 Get hci0/dev_11_22_33_44_55_66 Device1.Name
++8000ms [debug] Discovered: Phone [11:22:33:44:55:66]
++8000ms :1.1 Get hci0/dev_11_22_33_44_55_66 Device1.AddressType
++8000ms :1.1 Get hci0/dev_11_22_33_44_55_66 Device1.AdvertisingFlags -> InvalidArgs
++8000ms :1.1 Get hci0/dev_11_22_33_44_55_66 Device1.UUIDs -> InvalidArgs
++8000ms :1.1 Get hci0/dev_11_22_33_44_55_66 Device1.ServiceData -> InvalidArgs
++8000ms :1.1 Get hci0/dev_11_22_33_44_55_66 Device1.ManufacturerData -> InvalidArgs
++8000ms [info] Still scanning...
++8000ms :1.1 RemoveMatch hci0/dev_11_22_33_44_55_66 Properties.PropertiesChanged
++9000ms :1.1 GetManagedObjects
++10000ms :1.1 Introspect hci0
++12000ms :1.1 GetManagedObjects
++12000ms :1.1 Introspect hci0
++14000ms :1.1 Introspect hci0
++15000ms :1.1 GetManagedObjects
++16000ms :1.1 Introspect hci0
++18000ms :1.1 GetManagedObjects
++18000ms :1.1 Introspect hci0
++18000ms [info] Still scanning...
++20000ms :1.1 Introspect hci0
++21000ms :1.1 GetManagedObjects
++22000ms :1.1 Introspect hci0
++24000ms :1.1 GetManagedObjects
++24000ms :1.1 Introspect hci0
++26000ms :1.1 Introspect hci0
++27000ms :1.1 GetManagedObjects
++28000ms :1.1 Introspect hci0
++28000ms [info] Still scanning...
++30000ms :1.1 GetManagedObjects
++30000ms :1.1 Introspect hci0
++32000ms :1.1 Introspect hci0
++33000ms :1.1 GetManagedObjects
++34000ms :1.1 Introspect hci0
++36000ms :1.1 GetManagedObjects
++36000ms :1.1 Introspect hci0
++38000ms :1.1 Introspect hci0
++38000ms [info] Still scanning...
++39000ms :1.1 GetManagedObjects
++40000ms :1.1 Introspect hci0
++42000ms :1.1 GetManagedObjects
++42000ms :1.1 Introspect hci0
++44000ms :1.1 Introspect hci0
++45000ms :1.1 GetManagedObjects
++46000ms :1.1 Introspect hci0
++48000ms :1.1 GetManagedObjects
++48000ms :1.1 Introspect hci0
++48000ms [info] Still scanning...
++50000ms :1.1 Introspect hci0
++51000ms :1.1 GetManagedObjects
++52000ms :1.1 Introspect hci0
++54000ms :1.1 GetManagedObjects
++54000ms :1.1 Introspect hci0
++56000ms :1.1 Introspect hci0
++57000ms :1.1 GetManagedObjects
++58000ms :1.1 Introspect hci0
++58000ms [info] Still scanning...
++60000ms :1.1 GetManagedObjects
++60000ms :1.1 Introspect hci0
++62000ms :1.1 Introspect hci0
++63000ms :1.1 GetManagedObjects
++64000ms :1.1 Introspect hci0
++66000ms :1.1 GetManagedObjects
++66000ms :1.1 Introspect hci0
++68000ms :1.1 Introspect hci0
++68000ms [info] Still scanning...
++69000ms :1.1 GetManagedObjects
++70000ms :1.1 Introspect hci0
++72000ms :1.1 GetManagedObjects
++72000ms :1.1 Introspect hci0
++74000ms :1.1 Introspect hci0
++75000ms :1.1 GetManagedObjects
++76000ms :1.1 Introspect hci0
++78000ms :1.1 GetManagedObjects
++78000ms :1.1 Introspect hci0
++78000ms [info] Still scanning...
++80000ms :1.1 Introspect hci0
++81000ms :1.1 GetManagedObjects
++82000ms :1.1 Introspect hci0
++84000ms :1.1 GetManagedObjects
++84000ms :1.1 Introspect hci0
++86000ms :1.1 Introspect hci0
++87000ms :1.1 GetManagedObjects
++88000ms :1.1 Introspect hci0
++88000ms [info] Still scanning...
++90000ms :1.1 GetManagedObjects
++90000ms :1.1 Introspect hci0
++92000ms :1.1 Introspect hci0
++93000ms :1.1 GetManagedObjects
++94000ms :1.1 Introspect hci0
++96000ms :1.1 GetManagedObjects
++96000ms :1.1 Introspect hci0
++98000ms :1.1 Introspect hci0
++98000ms [info] Still scanning...
++99000ms :1.1 GetManagedObjects
++100000ms :1.1 Introspect hci0
++102000ms :1.1 GetManagedObjects
++102000ms :1.1 Introspect hci0
++104000ms :1.1 Introspect hci0
++105000ms :1.1 GetManagedObjects
++106000ms :1.1 Introspect hci0
++108000ms :1.1 GetManagedObjects
++108000ms :1.1 Introspect hci0
++108000ms [info] Still scanning...
++110000ms :1.1 Introspect hci0
++111000ms :1.1 GetManagedObjects
++112000ms :1.1 Introspect hci0
++114000ms :1.1 GetManagedObjects
++114000ms :1.1 Introspect hci0
++116000ms :1.1 Introspect hci0
++117000ms :1.1 GetManagedObjects
++118000ms :1.1 Introspect hci0
++118000ms [info] Still scanning...
++120000ms :1.1 GetManagedObjects
++120000ms [debug] Scan heard the room 0s ago; no liveness probe needed
++120000ms => {"error":"No recognized scale found within 120s"}
++120000ms (5000 ms between cycles)
++125000ms :1.1 Get hci0 Adapter1.Powered
++125000ms :1.1 Get hci0 Adapter1.Discovering
++125000ms [debug] Discovery state at start: Discovering=true, our filtered session=yes
++125000ms [debug] Discovery already active and already filtered; continuing with it
++125000ms :1.1 Introspect hci0
++125000ms :1.1 Introspect hci0
++125000ms :1.1 Introspect hci0/dev_11_22_33_44_55_66
++125000ms :1.1 AddMatch hci0/dev_11_22_33_44_55_66 Properties.PropertiesChanged
++125000ms :1.1 Get hci0/dev_11_22_33_44_55_66 Device1.Name
++125000ms [debug] Discovered: Phone [11:22:33:44:55:66]
++125000ms :1.1 Get hci0/dev_11_22_33_44_55_66 Device1.AddressType
++125000ms :1.1 Get hci0/dev_11_22_33_44_55_66 Device1.AdvertisingFlags -> InvalidArgs
++125000ms :1.1 Get hci0/dev_11_22_33_44_55_66 Device1.UUIDs -> InvalidArgs
++125000ms :1.1 Get hci0/dev_11_22_33_44_55_66 Device1.ServiceData -> InvalidArgs
++125000ms :1.1 Get hci0/dev_11_22_33_44_55_66 Device1.ManufacturerData -> InvalidArgs
++125000ms :1.1 RemoveMatch hci0/dev_11_22_33_44_55_66 Properties.PropertiesChanged
++127000ms :1.1 Introspect hci0
++127000ms :1.1 Introspect hci0
++127000ms :1.1 Introspect hci0/dev_11_22_33_44_55_66
++127000ms :1.1 AddMatch hci0/dev_11_22_33_44_55_66 Properties.PropertiesChanged
++127000ms :1.1 Get hci0/dev_11_22_33_44_55_66 Device1.Name
++127000ms [debug] Discovered: Phone [11:22:33:44:55:66]
++127000ms :1.1 Get hci0/dev_11_22_33_44_55_66 Device1.AddressType
++127000ms :1.1 Get hci0/dev_11_22_33_44_55_66 Device1.AdvertisingFlags -> InvalidArgs
++127000ms :1.1 Get hci0/dev_11_22_33_44_55_66 Device1.UUIDs -> InvalidArgs
++127000ms :1.1 Get hci0/dev_11_22_33_44_55_66 Device1.ServiceData -> InvalidArgs
++127000ms :1.1 Get hci0/dev_11_22_33_44_55_66 Device1.ManufacturerData -> InvalidArgs
++127000ms :1.1 RemoveMatch hci0/dev_11_22_33_44_55_66 Properties.PropertiesChanged
++128000ms :1.1 GetManagedObjects
++129000ms :1.1 Introspect hci0
++129000ms :1.1 Introspect hci0
++129000ms :1.1 Introspect hci0/dev_11_22_33_44_55_66
++129000ms :1.1 AddMatch hci0/dev_11_22_33_44_55_66 Properties.PropertiesChanged
++129000ms :1.1 Get hci0/dev_11_22_33_44_55_66 Device1.Name
++129000ms [debug] Discovered: Phone [11:22:33:44:55:66]
++129000ms :1.1 Get hci0/dev_11_22_33_44_55_66 Device1.AddressType
++129000ms :1.1 Get hci0/dev_11_22_33_44_55_66 Device1.AdvertisingFlags -> InvalidArgs
++129000ms :1.1 Get hci0/dev_11_22_33_44_55_66 Device1.UUIDs -> InvalidArgs
++129000ms :1.1 Get hci0/dev_11_22_33_44_55_66 Device1.ServiceData -> InvalidArgs
++129000ms :1.1 Get hci0/dev_11_22_33_44_55_66 Device1.ManufacturerData -> InvalidArgs
++129000ms :1.1 RemoveMatch hci0/dev_11_22_33_44_55_66 Properties.PropertiesChanged
++131000ms :1.1 GetManagedObjects
++131000ms :1.1 Introspect hci0
++131000ms :1.1 Introspect hci0
++131000ms :1.1 Introspect hci0/dev_11_22_33_44_55_66
++131000ms :1.1 AddMatch hci0/dev_11_22_33_44_55_66 Properties.PropertiesChanged
++131000ms :1.1 Get hci0/dev_11_22_33_44_55_66 Device1.Name
++131000ms [debug] Discovered: Phone [11:22:33:44:55:66]
++131000ms :1.1 Get hci0/dev_11_22_33_44_55_66 Device1.AddressType
++131000ms :1.1 Get hci0/dev_11_22_33_44_55_66 Device1.AdvertisingFlags -> InvalidArgs
++131000ms :1.1 Get hci0/dev_11_22_33_44_55_66 Device1.UUIDs -> InvalidArgs
++131000ms :1.1 Get hci0/dev_11_22_33_44_55_66 Device1.ServiceData -> InvalidArgs
++131000ms :1.1 Get hci0/dev_11_22_33_44_55_66 Device1.ManufacturerData -> InvalidArgs
++131000ms :1.1 RemoveMatch hci0/dev_11_22_33_44_55_66 Properties.PropertiesChanged
++133000ms :1.1 Introspect hci0
++133000ms :1.1 Introspect hci0
++133000ms :1.1 Introspect hci0/dev_11_22_33_44_55_66
++133000ms :1.1 AddMatch hci0/dev_11_22_33_44_55_66 Properties.PropertiesChanged
++133000ms :1.1 Get hci0/dev_11_22_33_44_55_66 Device1.Name
++133000ms [debug] Discovered: Phone [11:22:33:44:55:66]
++133000ms :1.1 Get hci0/dev_11_22_33_44_55_66 Device1.AddressType
++133000ms :1.1 Get hci0/dev_11_22_33_44_55_66 Device1.AdvertisingFlags -> InvalidArgs
++133000ms :1.1 Get hci0/dev_11_22_33_44_55_66 Device1.UUIDs -> InvalidArgs
++133000ms :1.1 Get hci0/dev_11_22_33_44_55_66 Device1.ServiceData -> InvalidArgs
++133000ms :1.1 Get hci0/dev_11_22_33_44_55_66 Device1.ManufacturerData -> InvalidArgs
++133000ms [info] Still scanning...
++133000ms :1.1 RemoveMatch hci0/dev_11_22_33_44_55_66 Properties.PropertiesChanged
++134000ms :1.1 GetManagedObjects
++135000ms :1.1 Introspect hci0
++137000ms :1.1 GetManagedObjects
++137000ms :1.1 Introspect hci0
++139000ms :1.1 Introspect hci0
++140000ms :1.1 GetManagedObjects
++141000ms :1.1 Introspect hci0
++143000ms :1.1 GetManagedObjects
++143000ms :1.1 Introspect hci0
++143000ms [info] Still scanning...
++145000ms :1.1 Introspect hci0
++146000ms :1.1 GetManagedObjects
++147000ms :1.1 Introspect hci0
++149000ms :1.1 GetManagedObjects
++149000ms :1.1 Introspect hci0
++151000ms :1.1 Introspect hci0
++152000ms :1.1 GetManagedObjects
++153000ms :1.1 Introspect hci0
++153000ms [info] Still scanning...
++155000ms :1.1 GetManagedObjects
++155000ms :1.1 Introspect hci0
++157000ms :1.1 Introspect hci0
++158000ms :1.1 GetManagedObjects
++159000ms :1.1 Introspect hci0
++161000ms :1.1 GetManagedObjects
++161000ms :1.1 Introspect hci0
++163000ms :1.1 Introspect hci0
++163000ms [info] Still scanning...
++164000ms :1.1 GetManagedObjects
++165000ms :1.1 Introspect hci0
++167000ms :1.1 GetManagedObjects
++167000ms :1.1 Introspect hci0
++169000ms :1.1 Introspect hci0
++170000ms :1.1 GetManagedObjects
++171000ms :1.1 Introspect hci0
++173000ms :1.1 GetManagedObjects
++173000ms :1.1 Introspect hci0
++173000ms [info] Still scanning...
++175000ms :1.1 Introspect hci0
++176000ms :1.1 GetManagedObjects
++177000ms :1.1 Introspect hci0
++179000ms :1.1 GetManagedObjects
++179000ms :1.1 Introspect hci0
++181000ms :1.1 Introspect hci0
++182000ms :1.1 GetManagedObjects
++183000ms :1.1 Introspect hci0
++183000ms [info] Still scanning...
++185000ms :1.1 GetManagedObjects
++185000ms :1.1 Introspect hci0
++187000ms :1.1 Introspect hci0
++188000ms :1.1 GetManagedObjects
++189000ms :1.1 Introspect hci0
++191000ms :1.1 GetManagedObjects
++191000ms :1.1 Introspect hci0
++193000ms :1.1 Introspect hci0
++193000ms [info] Still scanning...
++194000ms :1.1 GetManagedObjects
++195000ms :1.1 Introspect hci0
++197000ms :1.1 GetManagedObjects
++197000ms :1.1 Introspect hci0
++199000ms :1.1 Introspect hci0
++200000ms :1.1 GetManagedObjects
++201000ms :1.1 Introspect hci0
++203000ms :1.1 GetManagedObjects
++203000ms :1.1 Introspect hci0
++203000ms [info] Still scanning...
++205000ms :1.1 Introspect hci0
++206000ms :1.1 GetManagedObjects
++207000ms :1.1 Introspect hci0
++209000ms :1.1 GetManagedObjects
++209000ms :1.1 Introspect hci0
++211000ms :1.1 Introspect hci0
++212000ms :1.1 GetManagedObjects
++213000ms :1.1 Introspect hci0
++213000ms [info] Still scanning...
++215000ms :1.1 GetManagedObjects
++215000ms :1.1 Introspect hci0
++217000ms :1.1 Introspect hci0
++218000ms :1.1 GetManagedObjects
++219000ms :1.1 Introspect hci0
++221000ms :1.1 GetManagedObjects
++221000ms :1.1 Introspect hci0
++223000ms :1.1 Introspect hci0
++223000ms [info] Still scanning...
++224000ms :1.1 GetManagedObjects
++225000ms :1.1 Introspect hci0
++227000ms :1.1 GetManagedObjects
++227000ms :1.1 Introspect hci0
++229000ms :1.1 Introspect hci0
++230000ms :1.1 GetManagedObjects
++231000ms :1.1 Introspect hci0
++233000ms :1.1 GetManagedObjects
++233000ms :1.1 Introspect hci0
++233000ms [info] Still scanning...
++235000ms :1.1 Introspect hci0
++236000ms :1.1 GetManagedObjects
++237000ms :1.1 Introspect hci0
++239000ms :1.1 GetManagedObjects
++239000ms :1.1 Introspect hci0
++241000ms :1.1 Introspect hci0
++242000ms :1.1 GetManagedObjects
++243000ms :1.1 Introspect hci0
++243000ms [info] Still scanning...
++245000ms :1.1 GetManagedObjects
++245000ms [debug] Scan heard the room 0s ago; no liveness probe needed
++245000ms => {"error":"No recognized scale found within 120s"}
+--- match rules held

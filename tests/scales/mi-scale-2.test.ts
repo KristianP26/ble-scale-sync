@@ -329,7 +329,7 @@ describe('Mi Scale 2 without impedance (D-05, D028)', () => {
   it('keeps the Xiaomi formula when an impedance was measured', () => {
     const payload = makeAdapter().computeMetrics({ weight: 60, impedance: 500 }, female);
     expect(payload.bodyFatPercent).not.toBeCloseTo(
-      buildPayload(60, 500, {}, female).bodyFatPercent,
+      buildPayload(60, 500, {}, female).bodyFatPercent!,
       1,
     );
   });

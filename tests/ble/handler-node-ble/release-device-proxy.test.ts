@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { createRequire } from 'node:module';
 import { readFileSync } from 'node:fs';
+import { EventEmitter } from 'node:events';
 
 /**
  * Pins the mechanism, not just the call sites.
@@ -59,5 +60,110 @@ describe('node-ble internals the release depends on', () => {
     const prepare = String(BusHelper.prototype._prepare);
     expect(prepare).toContain('usePropsEvents');
     expect(prepare).toContain("on('PropertiesChanged'");
+  });
+});
+
+/**
+ * #472. The Disconnect deadline exists because of three library behaviours.
+ * They pass today and are here to fail CI when a bump changes one, since the
+ * deadline would then be fixing something else, or nothing.
+ */
+describe('library behaviour the #472 deadlines rest on', () => {
+  it('node-ble Device.disconnect releases its listeners only after BlueZ answers', () => {
+    const Device = nodeRequire('node-ble/src/Device.js') as {
+      prototype: Record<string, unknown>;
+    };
+    const src = String(Device.prototype.disconnect);
+    const call = src.indexOf("callMethod('Disconnect')");
+    const release = src.indexOf('removeListeners()');
+    expect(call).toBeGreaterThanOrEqual(0);
+    expect(release).toBeGreaterThan(call);
+    // And with no timeout of its own.
+    expect(src).not.toMatch(/setTimeout|timeout/i);
+  });
+
+  it('node-ble GattServer.init waits for ServicesResolved with no limit', () => {
+    const GattServer = nodeRequire('node-ble/src/GattServer.js') as {
+      prototype: Record<string, unknown>;
+    };
+    const src = String(GattServer.prototype.init);
+    expect(src).toContain("waitPropChange('ServicesResolved')");
+    expect(src).not.toMatch(/setTimeout|timeout/i);
+  });
+
+  it('dbus-next MessageBus.disconnect leaves pending method calls unanswered', () => {
+    const MessageBus = nodeRequire('dbus-next/lib/bus.js') as {
+      prototype: Record<string, unknown>;
+    };
+    const src = String(MessageBus.prototype.disconnect);
+    expect(src).toContain('stream.end()');
+    expect(src).not.toContain('_methodReturnHandlers');
+  });
+});
+
+/**
+ * #471, D066. The link observer subscribes to Device1.Disconnected through a
+ * ProxyObject of its own and relies on dbus-next to add a match rule only for
+ * a signal the introspection declared, to drop it with the last listener, and
+ * to deliver (reason, message) only from the name's current owner.
+ */
+describe('library behaviour the D066 reason subscription rests on', () => {
+  const ProxyInterface = nodeRequire('dbus-next/lib/client/proxy-interface.js') as {
+    _fromXml(object: unknown, xml: unknown): (EventEmitter & { $signals: unknown[] }) | null;
+  };
+
+  function makeObject() {
+    const signals = new EventEmitter();
+    const bus = {
+      _addMatch: vi.fn(async (_rule: string) => undefined),
+      _removeMatch: vi.fn(async () => undefined),
+      _signals: signals,
+      _nameOwners: { 'org.bluez': ':1.7' } as Record<string, string>,
+      emit: vi.fn(),
+    };
+    return { bus, name: 'org.bluez', path: '/org/bluez/hci0/dev_AA_BB_CC_DD_EE_FF' };
+  }
+
+  const device1Xml = (withSignal: boolean) => ({
+    $: { name: 'org.bluez.Device1' },
+    ...(withSignal
+      ? {
+          signal: [
+            { $: { name: 'Disconnected' }, arg: [{ $: { type: 's' } }, { $: { type: 's' } }] },
+          ],
+        }
+      : {}),
+  });
+
+  it('adds no match rule for a signal the introspection did not declare (BlueZ 5.82)', () => {
+    const object = makeObject();
+    const iface = ProxyInterface._fromXml(object, device1Xml(false));
+    iface?.on('Disconnected', () => {});
+    expect(object.bus._addMatch).not.toHaveBeenCalled();
+  });
+
+  it('adds one match rule for a declared signal, removes it with the last listener, and delivers only from the owner', () => {
+    const object = makeObject();
+    const iface = ProxyInterface._fromXml(object, device1Xml(true));
+    expect(iface?.$signals).toEqual([{ name: 'Disconnected', signature: 'ss' }]);
+    const heard: unknown[][] = [];
+    const listener = (...args: unknown[]) => heard.push(args);
+    iface?.on('Disconnected', listener);
+    expect(object.bus._addMatch).toHaveBeenCalledTimes(1);
+    expect(String(object.bus._addMatch.mock.calls[0][0])).toContain("member='Disconnected'");
+
+    const detailed = JSON.stringify({
+      path: object.path,
+      interface: 'org.bluez.Device1',
+      member: 'Disconnected',
+    });
+    const body = ['org.bluez.Reason.Authentication', 'Connection terminated'];
+    object.bus._signals.emit(detailed, { body, signature: 'ss', sender: ':1.99' });
+    object.bus._signals.emit(detailed, { body, signature: 'ss', sender: ':1.7' });
+    expect(heard).toEqual([body]);
+
+    iface?.removeListener('Disconnected', listener);
+    expect(object.bus._removeMatch).toHaveBeenCalledTimes(1);
+    expect(object.bus._signals.listenerCount(detailed)).toBe(0);
   });
 });

@@ -1,13 +1,13 @@
 import { describe, it, expect, vi } from 'vitest';
-import { jieliAuthResponseFrame } from '../../src/scales/jieli-auth.js';
+import { jieliAuthResponseFrame } from '../../src/scales/qn-scale/jieli-auth.js';
+import { QnScaleAdapter } from '../../src/scales/qn-scale/index.js';
 import {
-  QnScaleAdapter,
-  buildMeasurementTrigger,
-  buildTimeSync,
+  buildA2Frame,
   buildConfig,
+  buildMeasurementTrigger,
+  buildStoredDataQuery,
+  buildTimeSync,
   buildUserProfileFrame,
-} from '../../src/scales/qn-scale/index.js';
-import {
   decodeStoredRecord,
   decryptQnResistance,
   hasValidSumChecksum,
@@ -18,8 +18,10 @@ import { NINETEEN_BYTE_RESULT_HOLD_MS } from '../../src/scales/qn-scale/constant
 import { bleLog } from '../../src/ble/types.js';
 import { uuid16 } from '../../src/scales/body-comp-helpers.js';
 import type {
+  AdapterRuntimeConfig,
   BleDeviceInfo,
   ConnectionContext,
+  ScaleReading,
   UserProfile,
 } from '../../src/interfaces/scale-adapter.js';
 import {
@@ -35,10 +37,15 @@ function makeAdapter() {
 /**
  * #461, the Physiq's 18-byte 0x12 (es26m), byte for byte from the reporter's
  * public DEBUG log, as are READY_461 and CONFIG_REQ_461 (2026-10-11 session).
+ *
+ * In every #461 and #463 frame of this file the MAC the Physiq echoes (0x12
+ * [3..8], advertisement [5..10]) is the fake 02:00:00:00:00:01, bytes
+ * `01 00 00 00 00 02`, and the 0x12 sum is recomputed; "byte for byte" below
+ * means apart from that.
  */
 const INFO_461 = Buffer.from([
-  0x12, 0x12, 0xff, 0x25, 0xe0, 0x16, 0x00, 0x05, 0xff, 0x13, 0x07, 0x16, 0x00, 0x00, 0x05, 0x9f,
-  0x32, 0x48,
+  0x12, 0x12, 0xff, 0x01, 0x00, 0x00, 0x00, 0x00, 0x02, 0x13, 0x07, 0x16, 0x00, 0x00, 0x05, 0x9f,
+  0x32, 0x2c,
 ]);
 const READY_461 = Buffer.from([0x14, 0x0b, 0xff, 0x01, 0x00, 0x01, 0x09, 0x03, 0x00, 0x00, 0x2c]);
 const CONFIG_REQ_461 = Buffer.from([0x21, 0x05, 0xff, 0x01, 0x26]);
@@ -48,6 +55,245 @@ const INFO_283 = Buffer.from([
   0x12, 0x11, 0xff, 0xd3, 0x60, 0x18, 0x00, 0x01, 0xfb, 0x0a, 0x03, 0x19, 0x00, 0x04, 0x05, 0x07,
   0x9f,
 ]);
+/**
+ * #283's stable live 0x10 (61.70 kg / 502 Ohm), and the ready and
+ * config-request frames of the same session, from that public log.
+ */
+const LIVE_283 = Buffer.from([0x10, 0x0b, 0xff, 0x18, 0x1a, 0x01, 0x01, 0xf6, 0x01, 0xf7, 0x3c]);
+const READY_283 = Buffer.from([0x14, 0x0b, 0xff, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x1f]);
+const CONFIG_REQ_283 = Buffer.from([0x21, 0x04, 0xff, 0x01, 0x25]);
+
+/** #461, the Physiq's stored record: 71.65 kg at 2026-10-10T09:23:19Z, no user. */
+const RECORD_461 = Buffer.from([
+  0x23, 0x14, 0xff, 0x01, 0x01, 0xf0, 0x87, 0xc0, 0x5c, 0x32, 0x1b, 0xfd, 0x10, 0xcf, 0x10, 0xcd,
+  0x00, 0x00, 0x00, 0xd1,
+]);
+
+/*
+ * #463, the Physiq on 2026-10-20: public DEBUG logs posted 18:09Z (the 17:58
+ * session) and 19:53Z (the 19:39 session), image dev @ b958c53, byte for byte.
+ * Except FINAL_1020: the scale's body fat at [11..12] is zeroed and [14]
+ * recomputed, as for the other #463 frames in this file; nothing reads them.
+ * Both stored records are kept for no user (slot 0xf0) with no body fat of
+ * their own. The 17:58 session had the unit's advertisement (the bytes of
+ * ADVERT_1019); the 19:39 session had none.
+ */
+/** The 0x12 of both sessions, 18-byte es26m, [13] 04. */
+const INFO_1020 = Buffer.from([
+  0x12, 0x12, 0xff, 0x01, 0x00, 0x00, 0x00, 0x00, 0x02, 0x13, 0x07, 0x16, 0x00, 0x04, 0x05, 0x9f,
+  0x32, 0x30,
+]);
+/** 71.10 kg at 2026-10-20T17:58:08Z, no user, R50 4329 / R500 4303 (17:58:12.951). */
+const RECORD_1758 = Buffer.from([
+  0x23, 0x14, 0xff, 0x01, 0x01, 0xf0, 0x30, 0x68, 0x6a, 0x32, 0x1b, 0xc6, 0x10, 0xe9, 0x10, 0xcf,
+  0x00, 0x00, 0x00, 0x15,
+]);
+/** 72.60 kg at 2026-10-20T19:28:16Z, no user, R50 4303 / R500 4301 (19:39:52.648). */
+const RECORD_1928 = Buffer.from([
+  0x23, 0x14, 0xff, 0x01, 0x01, 0xf0, 0x50, 0x7d, 0x6a, 0x32, 0x1c, 0x5c, 0x10, 0xcf, 0x10, 0xcd,
+  0x00, 0x00, 0x00, 0xc5,
+]);
+/** Measuring (state 01), 72.55 kg, no resistance (19:39:52.257 and 53.185). */
+const MEASURING_1020 = Buffer.from([
+  0x10, 0x0f, 0xff, 0x01, 0x01, 0x1c, 0x57, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x93,
+]);
+/** Final of 19:39, 72.55 kg, R50 4317 / R500 4315; [11..12] zeroed (log: 00 77, [14] e3). */
+const FINAL_1020 = Buffer.from([
+  0x10, 0x0f, 0xff, 0x01, 0x02, 0x1c, 0x57, 0x10, 0xdd, 0x10, 0xdb, 0x00, 0x00, 0x00, 0x6c,
+]);
+/**
+ * #463, the Physiq on 2026-10-19 16:38, byte for byte from that public DEBUG
+ * log: its 0x12 and its final live frame, 71.15 kg, R50 4315 / R500 4313, no
+ * body fat in it.
+ */
+const INFO_1019 = Buffer.from([
+  0x12, 0x12, 0xff, 0x01, 0x00, 0x00, 0x00, 0x00, 0x02, 0x13, 0x07, 0x16, 0x00, 0x03, 0x05, 0x9f,
+  0x32, 0x2f,
+]);
+const FINAL_1019 = Buffer.from([
+  0x10, 0x0f, 0xff, 0x01, 0x02, 0x1b, 0xcb, 0x10, 0xdb, 0x10, 0xd9, 0x00, 0x00, 0x00, 0xdb,
+]);
+/**
+ * The Physiq's advertisement of 2026-10-19 16:38 (#463), byte for byte the
+ * same at 2026-10-20 17:57:58.247: model 129, impedance scrambled.
+ */
+const ADVERT_1019 = {
+  id: 0xffff,
+  data: Buffer.from([
+    0x08, 0x14, 0x01, 0x00, 0x03, 0x01, 0x00, 0x00, 0x00, 0x00, 0x02, 0x61, 0x08, 0x02, 0x00, 0x15,
+  ]),
+};
+
+/**
+ * #283, the 0x23 its classic scale answered with, in the classic layout the
+ * live weight of that session (61.70 kg).
+ */
+const RECORD_283 = Buffer.from([
+  0x23, 0x13, 0xff, 0x04, 0x01, 0x09, 0x11, 0xef, 0x31, 0x18, 0x1a, 0x01, 0xfc, 0x01, 0xf8, 0x00,
+  0x00, 0x00, 0x9c,
+]);
+
+/**
+ * #253, a Renpho's 18-byte 0x12 ([10] 0x17) and a stable 14-byte live 0x10 in
+ * the ES-30M layout (84.80 kg, R 501), from that public log.
+ */
+const INFO_253 = Buffer.from([
+  0x12, 0x12, 0xff, 0xcb, 0x89, 0x04, 0x00, 0x04, 0xff, 0x01, 0x17, 0x09, 0x00, 0x00, 0x05, 0x9f,
+  0x30, 0x73,
+]);
+const LIVE_253 = Buffer.from([
+  0x10, 0x0e, 0xff, 0x01, 0x02, 0x21, 0x20, 0x01, 0xf5, 0x01, 0xf3, 0x00, 0xf1, 0x3c,
+]);
+
+/**
+ * The maintainer's classic unit: its 17-byte 0x12 and the stable 11-byte 0x10
+ * of one weigh-in, byte for byte from its DEBUG log of 2026-10-19, in which
+ * ble-scale-sync read that weigh-in as 84.15 kg / 510 Ohm.
+ */
+const INFO_CLASSIC = Buffer.from([
+  0x12, 0x11, 0xff, 0x04, 0xa1, 0x13, 0x00, 0x03, 0xff, 0x02, 0x03, 0x05, 0x00, 0x00, 0x05, 0x07,
+  0xf2,
+]);
+const STABLE_CLASSIC = Buffer.from([
+  0x10, 0x0b, 0xff, 0x20, 0xdf, 0x01, 0x01, 0xfe, 0x01, 0xfc, 0x16,
+]);
+
+/**
+ * A real frame with the bytes at the given indices changed and its sum
+ * checksum (the last byte) recomputed. Every derived frame is listed in
+ * DERIVED, whose guard test checks both.
+ */
+function derive(source: Buffer, changes: Record<number, number>): Buffer {
+  const frame = Buffer.from(source);
+  for (const [index, value] of Object.entries(changes)) frame[Number(index)] = value;
+  frame[frame.length - 1] = [...frame.subarray(0, -1)].reduce((a, b) => a + b, 0) & 0xff;
+  return frame;
+}
+
+/** STABLE_CLASSIC at another weight: [3..4] set, [10] recomputed (D068). */
+const classicAt = (raw: number): Buffer => derive(STABLE_CLASSIC, { 3: raw >> 8, 4: raw & 0xff });
+const CLASSIC_8450 = classicAt(0x2102);
+const CLASSIC_8448 = classicAt(0x2100);
+const CLASSIC_8449 = classicAt(0x2101);
+const CLASSIC_2000 = classicAt(0x07d0);
+const CLASSIC_2499 = classicAt(0x09c3);
+/** LIVE_283 with [4] 1a -> 00 (61.44 kg), [10] recomputed. */
+const LIVE_283_6144 = derive(LIVE_283, { 4: 0x00 });
+/** INFO_CLASSIC with bit 0 of [10] cleared (03 -> 02), [16] recomputed: /10. */
+const INFO_CLASSIC_DIV10 = derive(INFO_CLASSIC, { 10: 0x02 });
+/**
+ * INFO_461 with bit 0 of [10] cleared (07 -> 06), [17] recomputed: a long 0x12
+ * naming /10, which no long unit has sent.
+ */
+const INFO_461_DIV10 = derive(INFO_461, { 10: 0x06 });
+/**
+ * RECORD_283 at 131.00 kg in the classic layout: [9..10] 18 1a -> 33 2c, [18]
+ * recomputed. Through the long layout its time lands in 2027.
+ */
+const RECORD_283_131 = derive(RECORD_283, { 9: 0x33, 10: 0x2c });
+/** LIVE_253 at 20.00 kg: [5..6] 21 20 -> 07 d0, [13] recomputed. */
+const LIVE_253_2000 = derive(LIVE_253, { 5: 0x07, 6: 0xd0 });
+/** LIVE_253 with [1] 0e -> 0b, so [1] no longer gives its length; [13] recomputed. */
+const LIVE_253_NOT_ITS_LENGTH = derive(LIVE_253, { 1: 0x0b });
+/** openScale #1239, an ES-CS20M's 15-byte classic 0x12 ([10] 0x01). */
+const INFO_1239 = Buffer.from([
+  0x12, 0x0f, 0x15, 0x79, 0x58, 0xcc, 0x38, 0xc1, 0xa4, 0x38, 0x01, 0x38, 0x00, 0x04, 0xe5,
+]);
+
+/** #331, an Arboleaf's 19-byte 0x12 ([10] 0x0f), from the reporter's log. */
+const INFO_ARBOLEAF_331 = Buffer.from([
+  0x12, 0x13, 0xff, 0x54, 0x0b, 0x04, 0x00, 0x07, 0xff, 0x15, 0x0f, 0x27, 0x00, 0x00, 0x05, 0x03,
+  0xe0, 0x6f, 0x2f,
+]);
+/** #235, a GE CS 10 G's 20-byte 0x12 ([10] 0x0f), from the reporter's capture. */
+const INFO_GE_235 = Buffer.from([
+  0x12, 0x14, 0xff, 0x4e, 0xc7, 0x0e, 0x00, 0x07, 0xff, 0x14, 0x0f, 0x42, 0x00, 0x08, 0x05, 0x03,
+  0xe0, 0x6f, 0x2b, 0x3d,
+]);
+
+/** #235, a live 0x10 from the GE CS 10 G vendor-app capture: 78.70 kg, user slot 1. */
+const LIVE_GE_235 = Buffer.from([
+  0x10, 0x14, 0x01, 0x00, 0x11, 0x1e, 0xbe, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x12,
+]);
+/** LIVE_GE_235 for user slot 2, as the #501 CS10G streams it: [2] 01 -> 02, [19] recomputed. */
+const LIVE_GE_SLOT2 = derive(LIVE_GE_235, { 2: 0x02 });
+
+/**
+ * #501, an Arboleaf CS10G on the 20-byte extended dialect, byte for byte from
+ * the public DEBUG log of its 23:33 session apart from the MAC (as for #461
+ * above): its 0x12, ready frame, config request and the refusal of openScale's
+ * profile frame for user slot 1.
+ */
+const INFO_501 = Buffer.from([
+  0x12, 0x14, 0xff, 0x01, 0x00, 0x00, 0x00, 0x00, 0x02, 0x0e, 0x0f, 0x4a, 0x00, 0x04, 0x05, 0x03,
+  0xe2, 0x6f, 0x3b, 0x27,
+]);
+const READY_501 = Buffer.from([
+  0x14, 0x0c, 0xff, 0x01, 0x00, 0x01, 0x0a, 0x02, 0x0d, 0x00, 0xfd, 0x37,
+]);
+const CONFIG_REQ_501 = Buffer.from([0x21, 0x07, 0xff, 0x01, 0x64, 0x2d, 0xb9]);
+const REFUSED_501 = Buffer.from([0xa1, 0x06, 0x02, 0x01, 0x00, 0xaa]);
+/** The CS10G's "no stored weigh-ins" of its 23:22 session, from the same log. */
+const NO_STORED_501 = Buffer.from([0x23, ...new Array<number>(18).fill(0), 0x23]);
+
+/**
+ * #501, an Arboleaf CS10G on the 20-byte extended dialect: the 0xB4 and the
+ * 0xB1 of its 23:38 session, byte for byte from the public DEBUG log. The 0xB4
+ * has [2] 03, which this dialect does not read, and no user ([4] f0); the
+ * 0xB1 is the result of user slot 2, 77.95 kg.
+ */
+const B4_501 = Buffer.from(
+  'b42d0301f00401544e7132501e000000000000000000000000000000000000000000000000000000000000008d',
+  'hex',
+);
+const B1_501 = Buffer.from(
+  'b12d030102731e9d0a7209af0a7e09bf09d20870098608aa0061005d0a3309730a4909510a2709240af308d485',
+  'hex',
+);
+
+/**
+ * #463, the Physiq's acceptance of the profile frame for user slot 1 and its
+ * stored record of 2026-10-13: 71.55 kg at 17:59:38Z, slot 1; the record's
+ * [16..17] zeroed, [19] recomputed.
+ */
+const VISIT_OK_463 = Buffer.from([0xa1, 0x06, 0x02, 0x01, 0x01, 0xab]);
+const RECORD_463 = Buffer.from([
+  0x23, 0x14, 0xff, 0x01, 0x01, 0x01, 0x0a, 0x2e, 0x61, 0x32, 0x1b, 0xf3, 0x10, 0xd9, 0x10, 0xfe,
+  0x00, 0x00, 0x00, 0x09,
+]);
+/**
+ * Answers and a record for user slot 2 (#501), derived: no 18-byte scale in
+ * the logs has a user in slot 2. ACCEPTED_SLOT2 is VISIT_OK_463 with [3] 02,
+ * byte for byte the CS10G's acceptance in the reporter's capture;
+ * REFUSED_SLOT2 is REFUSED_501 with [3] 02; RECORD_463_SLOT2 is RECORD_463
+ * with [5] 02.
+ */
+const ACCEPTED_SLOT2 = derive(VISIT_OK_463, { 3: 0x02 });
+/** VISIT_OK_463 with [3] 08, the last slot. */
+const ACCEPTED_SLOT8 = derive(VISIT_OK_463, { 3: 0x08 });
+const REFUSED_SLOT2 = derive(REFUSED_501, { 3: 0x02 });
+const RECORD_463_SLOT2 = derive(RECORD_463, { 5: 0x02 });
+
+/** Every derived frame: [name, frame, source, the indices changed on purpose]. */
+const DERIVED: [string, Buffer, Buffer, number[]][] = [
+  ['CLASSIC_8450', CLASSIC_8450, STABLE_CLASSIC, [3, 4]],
+  ['CLASSIC_8448', CLASSIC_8448, STABLE_CLASSIC, [3, 4]],
+  ['CLASSIC_8449', CLASSIC_8449, STABLE_CLASSIC, [3, 4]],
+  ['CLASSIC_2000', CLASSIC_2000, STABLE_CLASSIC, [3, 4]],
+  ['CLASSIC_2499', CLASSIC_2499, STABLE_CLASSIC, [3, 4]],
+  ['LIVE_283_6144', LIVE_283_6144, LIVE_283, [4]],
+  ['INFO_CLASSIC_DIV10', INFO_CLASSIC_DIV10, INFO_CLASSIC, [10]],
+  ['INFO_461_DIV10', INFO_461_DIV10, INFO_461, [10]],
+  ['RECORD_283_131', RECORD_283_131, RECORD_283, [9, 10]],
+  ['LIVE_253_2000', LIVE_253_2000, LIVE_253, [5, 6]],
+  ['LIVE_253_NOT_ITS_LENGTH', LIVE_253_NOT_ITS_LENGTH, LIVE_253, [1]],
+  ['LIVE_GE_SLOT2', LIVE_GE_SLOT2, LIVE_GE_235, [2]],
+  ['ACCEPTED_SLOT2', ACCEPTED_SLOT2, VISIT_OK_463, [3]],
+  ['ACCEPTED_SLOT8', ACCEPTED_SLOT8, VISIT_OK_463, [3]],
+  ['REFUSED_SLOT2', REFUSED_SLOT2, REFUSED_501, [3]],
+  ['RECORD_463_SLOT2', RECORD_463_SLOT2, RECORD_463, [5]],
+];
 
 /** Build a fake AABB broadcast buffer with the given weight and stability. */
 function makeBroadcast(weightKg: number, stable: boolean): Buffer {
@@ -535,12 +781,9 @@ describe('QnScaleAdapter', () => {
         await adapter.onConnected(ctx);
         // Feed a 0x12 scale-info frame so handleScaleInfo cancels the fallback
         // timer (which would otherwise send its own 0x22). Then flush its writes
-        // so we only count retry-driven queries.
-        const info = Buffer.alloc(11);
-        info[0] = 0x12;
-        info[2] = 0xff;
-        info[10] = 0;
-        adapter.parseNotification(info);
+        // so we only count retry-driven queries. A long one: a classic session
+        // reads no 0x23 at all, so it would never reach the stale check (D068).
+        adapter.parseNotification(INFO_461);
         await vi.advanceTimersByTimeAsync(1000);
         writes.length = 0;
 
@@ -744,16 +987,12 @@ describe('QnScaleAdapter', () => {
       }
     });
 
-    it('0x12 frame captures protocol type', () => {
+    it('reads a 14-byte frame in the ES-30M layout after a long 0x12 naming /10', () => {
       const adapter = makeAdapter();
-      const infoBuf = Buffer.alloc(11);
-      infoBuf[0] = 0x12;
-      infoBuf[2] = 0xff; // protocol type
-      infoBuf[10] = 0;
-      adapter.parseNotification(infoBuf);
+      // Bit 0 of [10] clear: no long unit has sent that, the divisor /10 is the
+      // vendor SDK's. The 14-byte shape picks the layout (D068).
+      adapter.parseNotification(INFO_461_DIV10);
 
-      // Verify protocol type was captured by checking ES-30M parsing
-      // works (requires weightScaleFactor=10 which was set by the 0x12 frame)
       const dataBuf = Buffer.alloc(14);
       dataBuf[0] = 0x10;
       dataBuf[1] = 0x0e;
@@ -771,18 +1010,16 @@ describe('QnScaleAdapter', () => {
     });
   });
 
+  // Each test opens with the synthetic long 0x12 naming /10 (INFO_461_DIV10,
+  // bit 0 clear); the 14-byte shape picks the layout (D068).
   describe('ES-30M format parsing', () => {
     it('parses ES-30M stable frame (state=0x02) with impedance', () => {
       const adapter = makeAdapter();
-      // Set weightScaleFactor=10 via 0x12
-      const infoBuf = Buffer.alloc(11);
-      infoBuf[0] = 0x12;
-      infoBuf[2] = 0xff;
-      infoBuf[10] = 0;
-      adapter.parseNotification(infoBuf);
+      adapter.parseNotification(INFO_461_DIV10);
 
-      // From actual Renpho Elis 1 packet capture:
-      // 10 0E FF 01 02 02 58 01 FD 01 FB 00 33 A7
+      // The #84 Renpho-app capture (Renpho.txt, 21:53:34.343):
+      // 10 0E FF 01 02 02 58 01 FD 01 FB 00 33 A7. That unit's own 0x12 has
+      // [10] 0x07, which names /100 (6.00 kg); /10 here is the synthetic 0x12's.
       const buf = Buffer.from([
         0x10, 0x0e, 0xff, 0x01, 0x02, 0x02, 0x58, 0x01, 0xfd, 0x01, 0xfb, 0x00, 0x33, 0xa7,
       ]);
@@ -795,10 +1032,7 @@ describe('QnScaleAdapter', () => {
 
     it('returns null for ES-30M measuring frame (state=0x00)', () => {
       const adapter = makeAdapter();
-      const infoBuf = Buffer.alloc(11);
-      infoBuf[0] = 0x12;
-      infoBuf[10] = 0;
-      adapter.parseNotification(infoBuf);
+      adapter.parseNotification(INFO_461_DIV10);
 
       const buf = Buffer.alloc(14);
       buf[0] = 0x10;
@@ -813,10 +1047,7 @@ describe('QnScaleAdapter', () => {
 
     it('returns null for ES-30M stabilizing frame (state=0x01)', () => {
       const adapter = makeAdapter();
-      const infoBuf = Buffer.alloc(11);
-      infoBuf[0] = 0x12;
-      infoBuf[10] = 0;
-      adapter.parseNotification(infoBuf);
+      adapter.parseNotification(INFO_461_DIV10);
 
       const buf = Buffer.alloc(14);
       buf[0] = 0x10;
@@ -831,10 +1062,7 @@ describe('QnScaleAdapter', () => {
 
     it('uses R2 when R1 is zero in ES-30M format', () => {
       const adapter = makeAdapter();
-      const infoBuf = Buffer.alloc(11);
-      infoBuf[0] = 0x12;
-      infoBuf[10] = 0;
-      adapter.parseNotification(infoBuf);
+      adapter.parseNotification(INFO_461_DIV10);
 
       const buf = Buffer.alloc(14);
       buf[0] = 0x10;
@@ -854,11 +1082,7 @@ describe('QnScaleAdapter', () => {
 
     it('skips ES-30M stable frame with impedance=0 (waits for impedance)', () => {
       const adapter = makeAdapter();
-      const infoBuf = Buffer.alloc(11);
-      infoBuf[0] = 0x12;
-      infoBuf[2] = 0xff;
-      infoBuf[10] = 0;
-      adapter.parseNotification(infoBuf);
+      adapter.parseNotification(INFO_461_DIV10);
 
       // Stable frame (state=0x02) but R1=R2=0 (impedance not measured yet)
       const buf = Buffer.alloc(14);
@@ -883,11 +1107,9 @@ describe('QnScaleAdapter', () => {
       expect(reading!.impedance).toBe(509);
     });
 
-    it('does not trigger ES-30M detection when weightScaleFactor=100', () => {
+    it('reads a 14-byte frame in the original layout when [4] is above 0x02', () => {
       const adapter = makeAdapter();
-      // Default weightScaleFactor=100, do not send 0x12
-
-      // Even with data[4]=0x02 and 14 bytes, factor=100 prevents ES-30M detection
+      // No 0x12: the shape alone decides, and [4] is the weight's low byte.
       const buf = Buffer.alloc(14);
       buf[0] = 0x10;
       buf[1] = 0x0e;
@@ -1044,6 +1266,32 @@ describe('QnScaleAdapter', () => {
       });
     });
 
+    it('names the user slot of the result in its debug line (#501)', async () => {
+      const debug = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+      try {
+        const results = () =>
+          debug.mock.calls
+            .map((c) => String(c[0]))
+            .filter((l) => l.startsWith('QN: extended result'));
+        await atConnect3(async () => {
+          const adapter = await extendedAdapter();
+          // [2] 03 is not a 0xB4 this dialect reads: dropped without a reading.
+          expect(adapter.parseNotification(B4_501)).toBeNull();
+          expect(adapter.parseNotification(B1_501)).toEqual({ weight: 77.95, impedance: 0 });
+          const fresh = stampB4(B4_PREVIOUS_SESSION, scaleSeconds('2026-08-19T18:06:30.000Z'));
+          expect((await extendedAdapter()).parseNotification(fresh)?.weight).toBe(75.2);
+        });
+        expect(results()).toEqual([
+          'QN: extended result 0xb1 decoded 77.95kg, user slot 2 (impedance sweep not yet ' +
+            'calibrated, emitting weight-only) #235',
+          'QN: extended result 0xb4 decoded 75.2kg, user slot 1 (impedance sweep not yet ' +
+            'calibrated, emitting weight-only) #235',
+        ]);
+      } finally {
+        debug.mockRestore();
+      }
+    });
+
     it('does not decode result frames on a non-extended dialect', async () => {
       await atConnect3(async () => {
         const adapter = makeAdapter(); // no extended 0x12 seen -> classic dialect
@@ -1179,13 +1427,19 @@ describe('QnScaleAdapter', () => {
       return buf;
     }
 
-    it('18B 0x12 frame sets isLongFrameVariant, proto=0x00, factor=10', () => {
+    it('18B 0x12 frame sets isLongFrameVariant, proto=0x00, and its own divisor (/100)', () => {
       const adapter = makeAdapter();
-      const result = adapter.parseNotification(makeLongScaleInfo());
-      expect(result).toBeNull(); // info frames return null
+      const lines: string[] = [];
+      const debug = vi.spyOn(bleLog, 'debug').mockImplementation((m) => void lines.push(m));
+      try {
+        expect(adapter.parseNotification(makeLongScaleInfo())).toBeNull(); // info frames return null
+      } finally {
+        debug.mockRestore();
+      }
+      // [10] 0x07, bit 0 set: /100 (D068).
+      expect(lines).toContain('QN: scale info (18B, dialect=es26m), factor=100, proto=0x00');
 
-      // Verify factor=10 by parsing a weight frame: rawWeight=9790,
-      // 9790/10=979 >=250 → heuristic tries /100 → 97.90 kg
+      // rawWeight=9790 at /100 = 97.90 kg, in the band as it stands
       const weightBuf = makeWeightFrame(9790, 0x02, 501, 499);
       const reading = adapter.parseNotification(weightBuf);
       expect(reading).not.toBeNull();
@@ -1227,7 +1481,7 @@ describe('QnScaleAdapter', () => {
 
       const reading = adapter.parseNotification(buf);
       expect(reading).not.toBeNull();
-      // 0x2639 = 9785, /10=978.5 >=250, heuristic /100 = 97.85
+      // 0x2639 = 9785 at the /100 bit 0 of its 0x12 [10] (0x07) names = 97.85
       expect(reading!.weight).toBeCloseTo(97.85);
       expect(reading!.impedance).toBe(501); // R1 = 0x01F5
     });
@@ -1253,7 +1507,7 @@ describe('QnScaleAdapter', () => {
       // Simulate grace period elapsed by manipulating internal state.
       // Access private field for testing. The grace period is 1500ms.
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (adapter as any).firstStableNoImpedanceAt = Date.now() - 2000;
+      (adapter as any).s.firstStableNoImpedanceAt = Date.now() - 2000;
 
       // Now it should be accepted
       const reading = adapter.parseNotification(buf);
@@ -1278,26 +1532,222 @@ describe('QnScaleAdapter', () => {
       expect(reading!.impedance).toBe(501);
     });
 
-    it('classic ES-30M: stable R1=R2=0 is still skipped (regression guard)', () => {
+    it('without a 0x12: stable R1=R2=0 is always skipped, no grace period', () => {
       const adapter = makeAdapter();
-      // Classic 11-byte 0x12 frame → isLongFrameVariant=false
-      const infoBuf = Buffer.alloc(11);
-      infoBuf[0] = 0x12;
-      infoBuf[2] = 0xff;
-      infoBuf[10] = 0; // factor=10
-      adapter.parseNotification(infoBuf);
-
-      // Stable frame with R1=R2=0
-      const buf = makeWeightFrame(600, 0x02, 0, 0);
+      // No 0x12, so not the long-frame variant; a classic 0x12 would not read
+      // this layout at all (D068). Raw 6000: 60.00 kg, 600 kg ruled out.
+      const buf = makeWeightFrame(6000, 0x02, 0, 0);
+      expect(adapter.parseNotification(buf)).toBeNull();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (adapter as any).s.firstStableNoImpedanceAt = Date.now() - 2000;
       expect(adapter.parseNotification(buf)).toBeNull();
 
       // Next frame with impedance should be accepted
-      const impBuf = makeWeightFrame(600, 0x02, 509, 507);
+      const impBuf = makeWeightFrame(6000, 0x02, 509, 507);
       const reading = adapter.parseNotification(impBuf);
       expect(reading).not.toBeNull();
       expect(reading!.weight).toBe(60);
       expect(reading!.impedance).toBe(509);
     });
+  });
+});
+
+// D068: the divisor is bit 0 of the 0x12 flags byte [10], as the vendor's
+// published SDK reads it. The frames are real (the maintainer's classic unit,
+// #283, openScale #1239) or derived from them (DERIVED, guarded below).
+describe('QN divisor, live layout and classic 0x23 (D068)', () => {
+  /** A frame to feed, or a number of milliseconds to let pass. */
+  type Step = Buffer | number;
+
+  /**
+   * One session in transport order, frames 100 ms apart unless a number says
+   * otherwise. Collects every reading, every write and every debug line.
+   */
+  async function run(steps: Step[], now = '2026-10-19T10:00:00Z', adapter = makeAdapter()) {
+    const readings: ScaleReading[] = [];
+    const writes: number[][] = [];
+    const lines: string[] = [];
+    const debug = vi.spyOn(bleLog, 'debug').mockImplementation((m) => void lines.push(m));
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date(now));
+      const ctx = {
+        write: async (_uuid: string, data: Buffer | number[]) => {
+          writes.push([...data]);
+        },
+        read: async () => Buffer.alloc(0),
+        subscribe: async () => {},
+        profile: defaultProfile(),
+        deviceAddress: '',
+        availableChars: new Set<string>(),
+      } as unknown as ConnectionContext;
+      adapter.onSessionStart?.();
+      await adapter.onConnected(ctx);
+      for (const step of steps) {
+        if (typeof step === 'number') {
+          await vi.advanceTimersByTimeAsync(step);
+          continue;
+        }
+        const reading = adapter.parseNotification(step);
+        if (reading) readings.push(reading);
+        await vi.advanceTimersByTimeAsync(100);
+      }
+      adapter.onSessionEnd?.();
+      return { readings, writes, lines };
+    } finally {
+      vi.useRealTimers();
+      debug.mockRestore();
+    }
+  }
+
+  it.each(DERIVED)(
+    'derives %s from a real frame, changing only the named bytes and the checksum',
+    (_name, frame, source, changed) => {
+      expect(frame).toHaveLength(source.length);
+      expect(hasValidSumChecksum(source)).toBe(true);
+      expect(hasValidSumChecksum(frame)).toBe(true);
+      const differs = [...frame.keys()].filter((i) => frame[i] !== source[i]);
+      const allowed = [...changed, frame.length - 1];
+      expect(differs.every((i) => allowed.includes(i))).toBe(true);
+      expect(changed.every((i) => differs.includes(i))).toBe(true);
+    },
+  );
+
+  it("reads the maintainer's weigh-in at the /100 its 0x12 names", async () => {
+    const { readings, lines } = await run([
+      INFO_CLASSIC,
+      READY_283,
+      CONFIG_REQ_283,
+      1000,
+      STABLE_CLASSIC,
+    ]);
+    expect(lines).toContain('QN: scale info (17B, dialect=classic), factor=100, proto=0xff');
+    expect(readings).toEqual([{ weight: 84.15, impedance: 510 }]);
+  });
+
+  // At the old /10 these left the band (84.50 read as 25.7 kg through the
+  // ES-30M layout, which [4] 0x02 picked), were dropped as measuring frames
+  // ([4] 0x00 or 0x01), or were exported ten times too heavy (20.00 -> 200 kg).
+  it.each([
+    ['84.50 kg ([4] 0x02)', INFO_CLASSIC, CLASSIC_8450, { weight: 84.5, impedance: 510 }],
+    ['84.48 kg ([4] 0x00)', INFO_CLASSIC, CLASSIC_8448, { weight: 84.48, impedance: 510 }],
+    ['84.49 kg ([4] 0x01)', INFO_CLASSIC, CLASSIC_8449, { weight: 84.49, impedance: 510 }],
+    ['20.00 kg', INFO_CLASSIC, CLASSIC_2000, { weight: 20, impedance: 510 }],
+    ['24.99 kg', INFO_CLASSIC, CLASSIC_2499, { weight: 24.99, impedance: 510 }],
+    ['#283 at 61.44 kg ([4] 0x00)', INFO_283, LIVE_283_6144, { weight: 61.44, impedance: 502 }],
+  ])('reads a classic weigh-in of %s at /100', async (_label, info, frame, want) => {
+    const { readings } = await run([info, frame]);
+    expect(readings).toEqual([want]);
+  });
+
+  // The live layout follows the frame's shape, not the divisor. A classic
+  // 0x12 naming /10 used to send a frame with [4] 0x02 down the ES-30M
+  // layout (25.7 kg); it reads 845.0 kg at /10, out of band, so /100 decides.
+  it('reads a classic frame in the original layout after a 0x12 naming /10', async () => {
+    const { readings } = await run([INFO_CLASSIC_DIV10, CLASSIC_8450]);
+    expect(readings).toEqual([{ weight: 84.5, impedance: 510 }]);
+  });
+
+  it('never reads the ES-30M layout after a classic 0x12, a 14-byte frame included', async () => {
+    // Synthetic: no capture has a 14-byte classic 0x10. The vendor's published
+    // SDK reads one on classic scales in the original layout (a second weight
+    // at [11..12]); [4] 0x02 is 84.50 kg's low byte here, not a state.
+    const frame14 = Buffer.from([
+      0x10, 0x0e, 0xff, 0x21, 0x02, 0x01, 0x01, 0xfe, 0x01, 0xfc, 0x00, 0x00, 0x00, 0x00,
+    ]);
+    const { readings } = await run([INFO_CLASSIC, frame14]);
+    expect(readings).toEqual([{ weight: 84.5, impedance: 510 }]);
+  });
+
+  it('reads a VA frame in the ES-30M layout in a session without a 0x12 (#253)', async () => {
+    const { readings } = await run([LIVE_253], '2026-07-10T13:28:40Z');
+    expect(readings).toEqual([{ weight: 84.8, impedance: 501 }]);
+  });
+
+  // Classic scales do lose their 0x12 (#283's cold connection, #336); the
+  // 11-byte frame keeps the original layout without it.
+  it('reads a classic frame in the original layout in a session without a 0x12', async () => {
+    const { readings } = await run([CLASSIC_8450]);
+    expect(readings).toEqual([{ weight: 84.5, impedance: 510 }]);
+  });
+
+  // At the /10 the long 0x12 used to imply, 20.00 kg read as a certain 200 kg.
+  it('reads a long-dialect weigh-in under 25 kg at the /100 its 0x12 names (#253)', async () => {
+    const { readings } = await run([INFO_253, LIVE_253_2000], '2026-07-10T13:28:40Z');
+    expect(readings).toEqual([{ weight: 20, impedance: 501 }]);
+  });
+
+  it('does not take a frame whose [1] is not its length for the ES-30M layout', async () => {
+    const { readings } = await run([LIVE_253_NOT_ITS_LENGTH], '2026-07-10T13:28:40Z');
+    expect(readings).toEqual([]);
+  });
+
+  // Through the long layout this record reads 112.65 kg stamped in 2027, so
+  // no freshness check caught it and it went out as the session's weigh-in.
+  it('does not read a classic 0x23 through the long layout, and says so (#283)', async () => {
+    const { readings, lines } = await run([INFO_283, RECORD_283_131], '2026-07-19T04:37:40Z');
+    expect(readings).toEqual([]);
+    expect(lines).toContain(
+      `QN: 0x23 on the classic dialect is not decoded (#461 S3), not read: [${[...RECORD_283_131]
+        .map((b) => b.toString(16).padStart(2, '0'))
+        .join(' ')}] (#463)`,
+    );
+  });
+
+  // A session without a 0x12 used to take such a record as its weigh-in: the
+  // stamp bound covered the long dialects only.
+  it.each([
+    [
+      '#283 at 131.00 kg (derived)',
+      RECORD_283_131,
+      '2026-07-19T04:37:40Z',
+      '112.65 kg at 2027-03-21T02:14:41.000Z, 21159421 s ahead',
+    ],
+    [
+      '#461',
+      RECORD_461,
+      '2026-10-10T04:00:00Z',
+      '71.65 kg at 2026-10-10T09:23:19.000Z, 19399 s ahead',
+    ],
+  ])(
+    'does not read a record stamped ahead in a session without a 0x12: %s',
+    async (_label, record, now, needle) => {
+      const { readings, lines } = await run([record], now);
+      expect(readings).toEqual([]);
+      const line = lines.find((l) => l.startsWith('QN: 0x23 in a session without a scale-info'));
+      expect(line ?? '(no line)').toContain(needle);
+    },
+  );
+
+  it('keeps the re-query after a record stamped ahead in a session without a 0x12', async () => {
+    const { writes } = await run([RECORD_461, 3000], '2026-10-10T04:00:00Z');
+    expect(writes.filter((w) => w[0] === 0x22)).toHaveLength(1);
+  });
+
+  it('keeps the re-query after a classic 0x23 (#283)', async () => {
+    const { writes } = await run([INFO_283, RECORD_283, 3000], '2026-07-19T04:37:40Z');
+    expect(writes.filter((w) => w[0] === 0x22)).toHaveLength(1);
+  });
+
+  it.each([
+    ["the maintainer's unit, [10] 0x03", INFO_CLASSIC, 100],
+    ['#283, [10] 0x03', INFO_283, 100],
+    ['openScale #1239, [10] 0x01', INFO_1239, 100],
+    ['bit 0 clear, [10] 0x02 (derived)', INFO_CLASSIC_DIV10, 10],
+    ['#461, 18 bytes, [10] 0x07', INFO_461, 100],
+    ['an Arboleaf (#331), 19 bytes, [10] 0x0f', INFO_ARBOLEAF_331, 100],
+    ['a GE CS 10 G (#235), 20 bytes, [10] 0x0f', INFO_GE_235, 100],
+    ['a long 0x12 with bit 0 clear, [10] 0x06 (derived)', INFO_461_DIV10, 10],
+  ])('logs the divisor of %s', (_label, info, factor) => {
+    const lines: string[] = [];
+    const debug = vi.spyOn(bleLog, 'debug').mockImplementation((m) => void lines.push(m));
+    try {
+      makeAdapter().parseNotification(info);
+    } finally {
+      debug.mockRestore();
+    }
+    const line = lines.find((l) => l.startsWith('QN: scale info'));
+    expect(line ?? '(no line)').toContain(`factor=${factor},`);
   });
 });
 
@@ -1361,7 +1811,7 @@ describe('AE02 dispatch (#75, #235)', () => {
 
   // The gate itself: without this write the scale never sends a 0x10 frame.
   // The expected bytes are the JieLi RcspAuth response for this exact
-  // challenge, computed by src/scales/jieli-auth.ts (verified in #235 against
+  // challenge, computed by src/scales/qn-scale/jieli-auth.ts (verified in #235 against
   // ten captured pairs).
   it('answers the challenge on AE01 with the JieLi response frame', async () => {
     const adapter = makeAdapter();
@@ -1672,8 +2122,8 @@ describe('AE02 dispatch (#75, #235)', () => {
         [
           'es26m 18-byte',
           Buffer.from([
-            0x12, 0x12, 0xff, 0x25, 0xe0, 0x16, 0x00, 0x05, 0xff, 0x13, 0x07, 0x16, 0x00, 0x00,
-            0x05, 0x9f, 0x32, 0x48,
+            0x12, 0x12, 0xff, 0x01, 0x00, 0x00, 0x00, 0x00, 0x02, 0x13, 0x07, 0x16, 0x00, 0x00,
+            0x05, 0x9f, 0x32, 0x2c,
           ]),
         ],
         ['extended 20-byte', makeExtendedScaleInfo()],
@@ -1810,11 +2260,7 @@ describe('AE02 dispatch (#75, #235)', () => {
       0x10, 0x14, 0x01, 0x00, 0x11, 0x1d, 0xc4, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
       0x00, 0x00, 0x00, 0x00, 0x17,
     ]);
-    /** A live 0x10 from the GE CS 10 G vendor-app capture (#235): 78.70 kg. */
-    const GE_LIVE = Buffer.from([
-      0x10, 0x14, 0x01, 0x00, 0x11, 0x1e, 0xbe, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-      0x00, 0x00, 0x00, 0x00, 0x12,
-    ]);
+    const GE_LIVE = LIVE_GE_235;
     const arboleaf2a: HandshakeOptions = {
       ready: ARBOLEAF_2A_READY,
       configReq: ARBOLEAF_2A_CONFIG_REQ,
@@ -2406,10 +2852,8 @@ describe('AE02 dispatch (#75, #235)', () => {
         }
       });
 
-      it.each([
-        ['20-byte extended', makeExtendedScaleInfo()],
-        ['17-byte classic (#283)', INFO_283],
-      ])('changes nothing on the %s dialect', async (_name, info) => {
+      it('changes nothing on the 17-byte classic dialect (#283)', async () => {
+        const info = INFO_283;
         const debug = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
         try {
           const profile = defaultProfile({ age: 51, height: 182, lastKnownWeight: 76 });
@@ -2426,6 +2870,518 @@ describe('AE02 dispatch (#75, #235)', () => {
         } finally {
           debug.mockRestore();
         }
+      });
+
+      // #501: the CS10G app sends the profile frame with key 1000 on this
+      // dialect, no A2 at ready time, and its 0x22 and A2 only after the
+      // scale's answer to the profile frame.
+      describe('on the 20-byte extended dialect (#501)', () => {
+        const P180 = defaultProfile({ age: 40, height: 180, lastKnownWeight: 78 });
+        // 7800 = 0x1e78.
+        const ANCHOR_78 = [0xa2, 0x06, 0x01, 0x1e, 0x78, 0x3f];
+        const START = [0x22, 0x06, 0xff, 0x00, 0x03, 0x2a];
+
+        /** Every write with its time in ms from the connect, after each step's frame and advance. */
+        async function driveTimed(
+          adapter: QnScaleAdapter,
+          steps: Array<{ frame?: Buffer; advance: number }>,
+        ): Promise<{ at: number; data: number[] }[]> {
+          vi.useFakeTimers();
+          try {
+            const t0 = Date.now();
+            const writes: { at: number; data: number[] }[] = [];
+            const ctx = {
+              write: async (_uuid: string, data: Buffer | number[]) => {
+                writes.push({ at: Date.now() - t0, data: [...data] });
+              },
+              read: async () => Buffer.alloc(0),
+              subscribe: async () => {},
+              profile: P180,
+              deviceAddress: '',
+              availableChars: new Set<string>(),
+            } as unknown as ConnectionContext;
+            adapter.onSessionStart?.();
+            await adapter.onConnected(ctx);
+            for (const step of steps) {
+              if (step.frame) adapter.parseNotification(step.frame);
+              await vi.advanceTimersByTimeAsync(step.advance);
+            }
+            return writes;
+          } finally {
+            vi.useRealTimers();
+          }
+        }
+
+        const HANDSHAKE_501 = [
+          { frame: INFO_501, advance: 300 },
+          { frame: READY_501, advance: 300 },
+          { frame: CONFIG_REQ_501, advance: 500 },
+        ];
+        const fff2 = (w: { data: number[] }[]) =>
+          w.map((x) => x.data).filter((d) => d[0] !== 0x20 && d[0] !== 0xfe && d[0] !== 0x02);
+
+        it('sends the vendor profile frame without the ready-time A2', async () => {
+          const debug = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+          try {
+            const adapter = makeAdapter();
+            adapter.configure({ qnUserKey: 1000 });
+            const writes = await driveTimed(adapter, [
+              ...HANDSHAKE_501,
+              { frame: REFUSED_501, advance: 500 },
+            ]);
+            const visit = buildUserProfileFrame(40, 180, 'male', { key: 1000 });
+            expect(profileFrames(writes.map((w) => w.data))).toEqual([visit]);
+            expect(fff2(writes).filter((d) => d[0] !== 0x01)).toEqual([
+              [0x13, 0x09, 0xff, 0x01, 0x10, 0x00, 0x00, 0x00, 0x2c],
+              visit,
+              START,
+              ANCHOR_78,
+              ANCHOR_78,
+            ]);
+            const lines = debug.mock.calls.map((c) => String(c[0]));
+            expect(lines).toContain(
+              'QN: no A2 before START on the 20-byte dialect, as the vendor app ' +
+                '(ble.qn_user_key, #463)',
+            );
+            expect(lines).toContain(
+              'QN: A00D profile frame with key 1000, age 40, height 1800 mm, sex male, athlete ' +
+                'no (ble.qn_user_key, 20-byte dialect, #463)',
+            );
+            expect(lines.filter((l) => l.includes('is not used on this dialect'))).toEqual([]);
+          } finally {
+            debug.mockRestore();
+          }
+        });
+
+        it("sends START and the anchor pair on the scale's answer, not before", async () => {
+          const adapter = makeAdapter();
+          adapter.configure({ qnUserKey: 1000 });
+          const writes = await driveTimed(adapter, [
+            ...HANDSHAKE_501,
+            { frame: REFUSED_501, advance: 500 },
+          ]);
+          const visitAt = writes.find((w) => w.data[0] === 0xa0)!.at;
+          const answerAt = 1100;
+          // Nothing between the profile frame and the answer, 800 ms later.
+          expect(writes.filter((w) => w.at > visitAt && w.at < answerAt)).toEqual([]);
+          const after = writes.filter((w) => w.at >= answerAt);
+          expect(after).toEqual([
+            { at: answerAt, data: START },
+            { at: answerAt, data: ANCHOR_78 },
+            { at: answerAt + 150, data: ANCHOR_78 },
+          ]);
+        });
+
+        it('sends them VISIT_ANSWER_TIMEOUT_MS after the profile frame without an answer', async () => {
+          const debug = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+          try {
+            const adapter = makeAdapter();
+            adapter.configure({ qnUserKey: 1000 });
+            const writes = await driveTimed(adapter, [...HANDSHAKE_501, { advance: 1500 }]);
+            const visitAt = writes.find((w) => w.data[0] === 0xa0)!.at;
+            expect(writes.filter((w) => w.at > visitAt)).toEqual([
+              { at: visitAt + 1000, data: START },
+              { at: visitAt + 1000, data: ANCHOR_78 },
+              { at: visitAt + 1150, data: ANCHOR_78 },
+            ]);
+            expect(debug.mock.calls.map((c) => String(c[0]))).toContain(
+              'QN: no answer to the profile frame within 1000 ms, sending START and the weight ' +
+                'anchor anyway (ble.qn_user_key, #501)',
+            );
+          } finally {
+            debug.mockRestore();
+          }
+        });
+
+        it('drops the ready-time anchor of qn_weight_ack and keeps the pair after START', async () => {
+          const adapter = makeAdapter();
+          adapter.configure({ qnUserKey: 1000, qnWeightAck: true });
+          const writes = (
+            await driveTimed(adapter, [...HANDSHAKE_501, { frame: REFUSED_501, advance: 500 }])
+          ).map((w) => w.data);
+          expect(preStartA2(writes)).toEqual([]);
+          const startIndex = writes.findIndex((w) => w[0] === 0x22);
+          expect(writes.slice(startIndex + 1)).toEqual([ANCHOR_78, ANCHOR_78]);
+        });
+
+        // The wait for the answer spans a whole second, so a session that ends
+        // and reconnects inside it must not get this one's START or anchor.
+        it('does not hand a reconnected session the START held for the answer', async () => {
+          const adapter = makeAdapter();
+          adapter.configure({ qnUserKey: 1000 });
+          const makeCtx = (sink: number[][]): ConnectionContext =>
+            ({
+              write: async (_uuid: string, data: Buffer | number[]) => {
+                sink.push([...data]);
+              },
+              read: async () => Buffer.alloc(0),
+              subscribe: async () => {},
+              profile: P180,
+              deviceAddress: '',
+              availableChars: new Set<string>(),
+            }) as unknown as ConnectionContext;
+          vi.useFakeTimers();
+          try {
+            const first: number[][] = [];
+            const second: number[][] = [];
+            adapter.onSessionStart?.();
+            await adapter.onConnected(makeCtx(first));
+            for (const step of HANDSHAKE_501) {
+              adapter.parseNotification(step.frame);
+              await vi.advanceTimersByTimeAsync(step.advance);
+            }
+            // The profile frame is out, START waits for the answer.
+            expect(first.some((w) => w[0] === 0xa0)).toBe(true);
+            expect(first.some((w) => w[0] === 0x22)).toBe(false);
+            adapter.onSessionEnd!();
+            adapter.onSessionStart?.();
+            await adapter.onConnected(makeCtx(second));
+            // Past the 1 s wait, short of the new session's 2 s fallback.
+            await vi.advanceTimersByTimeAsync(1000);
+            expect(second.filter((w) => w[0] === 0x22 || w[0] === 0xa2)).toEqual([]);
+            expect(first.filter((w) => w[0] === 0x22 || w[0] === 0xa2)).toEqual([]);
+          } finally {
+            vi.useRealTimers();
+          }
+        });
+
+        it("keeps openScale's frames and their timing without the key", async () => {
+          const writes = await driveTimed(makeAdapter(), [
+            ...HANDSHAKE_501,
+            { frame: REFUSED_501, advance: 500 },
+          ]);
+          expect(profileFrames(writes.map((w) => w.data))).toEqual([OPENSCALE_PROFILE]);
+          expect(preStartA2(writes.map((w) => w.data))).toEqual([
+            [0xa2, 0x06, 0x01, 0x32, 0x28, 0x03],
+          ]);
+          const visitAt = writes.find((w) => w.data[0] === 0xa0)!.at;
+          expect(writes.find((w) => w.data[0] === 0x22)!.at).toBe(visitAt + 200);
+        });
+      });
+
+      // #501: the slot of the profile frame, and of every A2 and 0x22 of the
+      // session, on the 18-, 19- and 20-byte dialects with the key. Each call
+      // site that sends an A2 or a 0x22 has its own test.
+      describe('ble.qn_user_slot (#501)', () => {
+        const P180 = defaultProfile({ age: 40, height: 180, lastKnownWeight: 78 });
+        const VISIT_SLOT2 = buildUserProfileFrame(40, 180, 'male', { slot: 2, key: 1000 });
+        // 7800 = 0x1e78.
+        const TRIGGER_SLOT2 = [0xa2, 0x06, 0x02, 0x1e, 0x78, 0x40];
+        const START_SLOT2 = [0x22, 0x06, 0xff, 0x00, 0x05, 0x2c];
+        const HANDSHAKE_501 = [
+          { frame: INFO_501, advance: 300 },
+          { frame: READY_501, advance: 300 },
+          { frame: CONFIG_REQ_501, advance: 500 },
+        ];
+        const slotted = (o: AdapterRuntimeConfig = {}): QnScaleAdapter => {
+          const adapter = makeAdapter();
+          adapter.configure({ qnUserKey: 1000, qnUserSlot: 2, ...o });
+          return adapter;
+        };
+        /** A2 and 0x22 frames for slot 1: `a2 06 01 ..` and the mask `00 03`. */
+        const slotOne = (writes: number[][]): number[][] =>
+          writes.filter(
+            (w) => (w[0] === 0xa2 && w[2] === 0x01) || (w[0] === 0x22 && w[4] === 0x03),
+          );
+
+        it('sends the profile frame, START and the anchor pair for slot 2 on the 20-byte dialect', async () => {
+          const debug = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+          try {
+            const writes = await driveSteps(slotted(), P180, [
+              ...HANDSHAKE_501,
+              { frame: ACCEPTED_SLOT2, advance: 500 },
+            ]);
+            expect(profileFrames(writes)).toEqual([VISIT_SLOT2]);
+            const startIndex = writes.findIndex((w) => w[0] === 0x22);
+            expect(writes.slice(startIndex)).toEqual([START_SLOT2, TRIGGER_SLOT2, TRIGGER_SLOT2]);
+            expect(slotOne(writes)).toEqual([]);
+            const lines = debug.mock.calls.map((c) => String(c[0]));
+            expect(lines).toContain(
+              'QN: A00D profile frame with key 1000, user slot 2, age 40, height 1800 mm, sex ' +
+                'male, athlete no (ble.qn_user_key, 20-byte dialect, #463)',
+            );
+            expect(lines).toContain('QN: the scale accepted the profile for user slot 2 (#331)');
+            expect(lines).toContain(
+              'QN: extended-dialect measurement trigger sent, weight anchor 78.00 kg for user ' +
+                'slot 2 (#235, #75)',
+            );
+          } finally {
+            debug.mockRestore();
+          }
+        });
+
+        it('sets the mask bit of slot 8 in the high byte of the 0x22', async () => {
+          const writes = await driveSteps(slotted({ qnUserSlot: 8 }), P180, [
+            ...HANDSHAKE_501,
+            { frame: ACCEPTED_SLOT8, advance: 500 },
+          ]);
+          expect(profileFrames(writes).map((w) => w[3])).toEqual([0x08]);
+          expect(writes.filter((w) => w[0] === 0x22)).toEqual([
+            [0x22, 0x06, 0xff, 0x01, 0x01, 0x29],
+          ]);
+          expect(writes.filter((w) => w[0] === 0xa2).map((w) => w[2])).toEqual([0x08, 0x08]);
+        });
+
+        it('asks for slot 2 again in the re-query after an empty 0x23', async () => {
+          const writes = await driveSteps(slotted(), P180, [
+            ...HANDSHAKE_501,
+            { frame: ACCEPTED_SLOT2, advance: 500 },
+            { frame: NO_STORED_501, advance: 3500 },
+          ]);
+          expect(writes.filter((w) => w[0] === 0x22)).toEqual([START_SLOT2, START_SLOT2]);
+        });
+
+        it('sends the 0x22 on the acceptance for slot 2 on the 18-byte dialect', async () => {
+          const writes = await driveSteps(slotted(), P180, [
+            { frame: INFO_461, advance: 300 },
+            { frame: READY_461, advance: 300 },
+            { frame: CONFIG_REQ_461, advance: 210 },
+            { frame: ACCEPTED_SLOT2, advance: 1000 },
+          ]);
+          expect(profileFrames(writes).map((w) => w[3])).toEqual([0x02]);
+          // Proto 0x00 on the 18-byte dialect; once, on the acceptance.
+          expect(writes.filter((w) => w[0] === 0x22)).toEqual([
+            [0x22, 0x06, 0x00, 0x00, 0x05, 0x2d],
+          ]);
+        });
+
+        it('sends the anchor pair after START and the weight echo for slot 2 on the 18-byte dialect', async () => {
+          const writes = await driveSteps(slotted({ qnWeightAck: true }), P180, [
+            { frame: INFO_461, advance: 300 },
+            { frame: READY_461, advance: 300 },
+            { frame: CONFIG_REQ_461, advance: 1000 },
+            { frame: LIVE_253, advance: 100 },
+          ]);
+          const a2 = writes.filter((w) => w[0] === 0xa2);
+          // The pair, then the echo of the live frame's own weight (0x2120).
+          expect(a2).toEqual([TRIGGER_SLOT2, TRIGGER_SLOT2, [0xa2, 0x06, 0x02, 0x21, 0x20, 0xeb]]);
+          expect(slotOne(writes)).toEqual([]);
+        });
+
+        it('sends the profile frame, START and the anchor pair for slot 2 on the 19-byte dialect', async () => {
+          const writes = await driveSteps(
+            slotted({ qnWeightAck: true }),
+            defaultProfile({ age: 51, height: 182, lastKnownWeight: 74.05 }),
+            [
+              { frame: ARBOLEAF_2A_INFO, advance: 300 },
+              { frame: ARBOLEAF_2A_READY, advance: 300 },
+              { frame: ARBOLEAF_2A_CONFIG_REQ, advance: 1000 },
+            ],
+          );
+          expect(profileFrames(writes)).toEqual([
+            buildUserProfileFrame(51, 182, 'male', { slot: 2, key: 1000 }),
+          ]);
+          const startIndex = writes.findIndex((w) => w[0] === 0x22);
+          // ANCHOR_2A for slot 2.
+          const anchor = [0xa2, 0x06, 0x02, 0x1c, 0xed, 0xb3];
+          expect(writes.slice(startIndex)).toEqual([START_SLOT2, anchor, anchor]);
+          expect(slotOne(writes)).toEqual([]);
+        });
+
+        // The fallback's ready step sent nothing for a slot and left the
+        // sequence undecided, so a 0x12 before its config request gets the
+        // vendor sequence for slot 2, not openScale's frame for slot 1.
+        it('sends the profile frame for slot 2 when the 0x12 comes after a fallback ready', async () => {
+          const writes = await driveSteps(slotted(), P180, [
+            { advance: 2701 },
+            { frame: INFO_501, advance: 3000 },
+          ]);
+          expect(profileFrames(writes)).toEqual([VISIT_SLOT2]);
+          const startIndex = writes.findIndex((w) => w[0] === 0x22);
+          expect(writes.slice(startIndex)).toEqual([START_SLOT2, TRIGGER_SLOT2, TRIGGER_SLOT2]);
+          expect(slotOne(writes)).toEqual([]);
+        });
+
+        // Without a 0x12 every frame this session could send for a slot is
+        // openScale's, for slot 1; the CS10G took that A2 in such a session.
+        /** Every frame that names a user slot: A00D, A2, A4 and 0x22. */
+        const slotFrames = (writes: number[][]): number[][] =>
+          writes.filter((w) => [0xa0, 0xa2, 0xa4, 0x22].includes(w[0]));
+        const HOLD_LINE =
+          'QN: no frame for a user slot until a scale-info frame (0x12) names the dialect: no ' +
+          'ready-time A2, no profile frame or START on the config request, no weight echo or ' +
+          're-query. ble.qn_user_slot is 2, and without a 0x12 they would be for user slot 1 ' +
+          '(#501)';
+
+        it.each<[string, AdapterRuntimeConfig, Array<{ frame?: Buffer; advance: number }>]>([
+          ['the fallback', {}, [{ advance: 6000 }]],
+          [
+            'the 0x14 and 0x21',
+            {},
+            [
+              { frame: READY_501, advance: 300 },
+              { frame: CONFIG_REQ_501, advance: 6000 },
+            ],
+          ],
+          [
+            'the fallback, with qn_report_byte, qn_weight_ack and qn_a4_prelude',
+            { qnReportByte: 252, qnWeightAck: true, qnA4Prelude: true },
+            [{ advance: 6000 }],
+          ],
+        ])(
+          'sends no frame for a user slot without a 0x12, the handshake driven by %s',
+          async (_name, o, steps) => {
+            const debug = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+            try {
+              const writes = await driveSteps(slotted(o), P180, steps);
+              expect(slotFrames(writes)).toEqual([]);
+              // AE01 init, 0x13, 0x20 and `pass` still go out.
+              expect(writes.filter((w) => w[0] === 0xfe)).toHaveLength(1);
+              expect(writes.some((w) => w[0] === 0x13)).toBe(true);
+              expect(writes.some((w) => w[0] === 0x20)).toBe(true);
+              expect(writes).toContainEqual([0x02, 0x70, 0x61, 0x73, 0x73]);
+              const lines = debug.mock.calls.map((c) => String(c[0]));
+              expect(lines.filter((l) => l === HOLD_LINE)).toHaveLength(1);
+              expect(lines).toContain(
+                'QN: config request: not sending the profile frame until a 0x12 (#501)',
+              );
+            } finally {
+              debug.mockRestore();
+            }
+          },
+        );
+
+        // The skipped step is not marked as sent, so a 0x21 after a late 0x12
+        // still runs it, for slot 2.
+        it('runs the config-request step on a 0x21 that comes after a late 0x12', async () => {
+          const writes = await driveSteps(slotted(), P180, [
+            { advance: 3500 },
+            { frame: INFO_501, advance: 300 },
+            { frame: CONFIG_REQ_501, advance: 300 },
+            { frame: ACCEPTED_SLOT2, advance: 500 },
+          ]);
+          expect(profileFrames(writes)).toEqual([VISIT_SLOT2]);
+          const startIndex = writes.findIndex((w) => w[0] === 0x22);
+          expect(writes.slice(startIndex)).toEqual([START_SLOT2, TRIGGER_SLOT2, TRIGGER_SLOT2]);
+          expect(slotFrames(writes.slice(0, startIndex))).toEqual([VISIT_SLOT2]);
+        });
+
+        it('sends no weight echo before a 0x12', async () => {
+          const writes = await driveSteps(slotted({ qnWeightAck: true }), P180, [
+            { frame: LIVE_253, advance: 100 },
+          ]);
+          expect(writes.filter((w) => w[0] === 0xa2)).toEqual([]);
+          expect(writes.filter((w) => w[0] === 0x1f)).toHaveLength(1);
+        });
+
+        it('sends no stored-data re-query before a 0x12', async () => {
+          const writes = await driveSteps(slotted(), P180, [
+            { frame: NO_STORED_501, advance: 3500 },
+          ]);
+          expect(writes.filter((w) => w[0] === 0x22)).toEqual([]);
+        });
+
+        it('keeps the fallback frames of slot 1 when set to 1', async () => {
+          const steps = [{ advance: 6000 }];
+          const one = await driveSteps(slotted({ qnUserSlot: 1 }), P180, steps);
+          const keyOnly = makeAdapter();
+          keyOnly.configure({ qnUserKey: 1000 });
+          const plain = await driveSteps(keyOnly, P180, steps);
+          expect(profileFrames(one)).toEqual([OPENSCALE_PROFILE]);
+          expect(one.filter((w) => w[0] !== 0x20)).toEqual(plain.filter((w) => w[0] !== 0x20));
+        });
+
+        it('sends openScale frames for slot 1 after a classic 0x12', async () => {
+          const writes = await driveSteps(slotted(), P180, [
+            { frame: INFO_CLASSIC, advance: 300 },
+            { frame: READY_501, advance: 300 },
+            { frame: CONFIG_REQ_501, advance: 1000 },
+          ]);
+          expect(profileFrames(writes)).toEqual([OPENSCALE_PROFILE]);
+          expect(writes.filter((w) => w[0] === 0xa2 && w[2] === 0x01)).toHaveLength(1);
+          expect(writes.filter((w) => w[0] === 0x22 && w[4] === 0x03)).toHaveLength(1);
+        });
+
+        it('is ignored with one warning without ble.qn_user_key', async () => {
+          const warn = vi.spyOn(bleLog, 'warn').mockImplementation(() => {});
+          try {
+            const adapter = makeAdapter();
+            adapter.configure({ qnUserSlot: 2 });
+            expect(warn.mock.calls.map((c) => String(c[0]))).toEqual([
+              'QN: ble.qn_user_slot is set (2) without ble.qn_user_key, so it is ignored and ' +
+                'the profile frame goes to user slot 1. Set ble.qn_user_key too (#501).',
+            ]);
+            const steps = [...HANDSHAKE_501, { frame: REFUSED_501, advance: 500 }];
+            const writes = await driveSteps(adapter, P180, steps);
+            const plain = await driveSteps(makeAdapter(), P180, steps);
+            expect(writes.filter((w) => w[0] !== 0x20)).toEqual(plain.filter((w) => w[0] !== 0x20));
+          } finally {
+            warn.mockRestore();
+          }
+        });
+
+        it('does not send the A4 prelude, which writes slot 1, for another slot', async () => {
+          const warn = vi.spyOn(bleLog, 'warn').mockImplementation(() => {});
+          try {
+            const adapter = slotted({ qnA4Prelude: true });
+            expect(warn.mock.calls.map((c) => String(c[0]))).toEqual([
+              'QN: ble.qn_a4_prelude is not sent with ble.qn_user_slot 2: its frames write user ' +
+                'slot 1 (#501).',
+            ]);
+            const writes = await driveSteps(adapter, P180, [
+              ...HANDSHAKE_501,
+              { frame: ACCEPTED_SLOT2, advance: 1000 },
+            ]);
+            expect(writes.filter((w) => w[0] === 0xa4)).toEqual([]);
+            // Slot 1 itself gets it as before.
+            const one = await driveSteps(slotted({ qnUserSlot: 1, qnA4Prelude: true }), P180, [
+              ...HANDSHAKE_501,
+              { frame: VISIT_OK_463, advance: 1000 },
+            ]);
+            expect(one.filter((w) => w[0] === 0xa4)).toHaveLength(2);
+          } finally {
+            warn.mockRestore();
+          }
+        });
+
+        it('warns when ble.qn_report_byte deletes the slot of ble.qn_user_slot', () => {
+          const warn = vi.spyOn(bleLog, 'warn').mockImplementation(() => {});
+          const lines = () =>
+            warn.mock.calls.map((c) => String(c[0])).filter((l) => l.includes('qn_user_slot'));
+          try {
+            // 252 deletes slots 3 to 8.
+            slotted({ qnUserSlot: 3, qnReportByte: 252 });
+            expect(lines()).toEqual([
+              'QN: ble.qn_report_byte 252 selects user slot 3, the slot of ble.qn_user_slot, so ' +
+                'every QN session deletes that user from the scale before it sends the profile ' +
+                'frame (#461, #501).',
+            ]);
+            warn.mockClear();
+            slotted({ qnUserSlot: 2, qnReportByte: 252 });
+            expect(lines()).toEqual([]);
+          } finally {
+            warn.mockRestore();
+          }
+        });
+
+        it('names both options when the scale refuses the profile for the slot', async () => {
+          const info = vi.spyOn(bleLog, 'info').mockImplementation(() => {});
+          try {
+            await driveSteps(slotted(), P180, [
+              ...HANDSHAKE_501,
+              { frame: REFUSED_SLOT2, advance: 500 },
+            ]);
+            expect(
+              info.mock.calls.map((c) => String(c[0])).filter((l) => l.includes('refused')),
+            ).toEqual([
+              'QN: the scale refused the profile frame sent with ble.qn_user_key 1000 for user ' +
+                'slot 2. Most likely the vendor app set up that slot with another key, or never ' +
+                'set it up. Check ble.qn_user_key and ble.qn_user_slot, and that the first user ' +
+                "in config.yaml is the vendor app's user in that slot (#463, #501).",
+            ]);
+          } finally {
+            info.mockRestore();
+          }
+        });
+
+        it('keeps every frame of slot 1 when set to 1', async () => {
+          const steps = [...HANDSHAKE_501, { frame: VISIT_OK_463, advance: 500 }];
+          const one = await driveSteps(slotted({ qnUserSlot: 1 }), P180, steps);
+          const keyOnly = makeAdapter();
+          keyOnly.configure({ qnUserKey: 1000 });
+          const plain = await driveSteps(keyOnly, P180, steps);
+          expect(one.filter((w) => w[0] !== 0x20)).toEqual(plain.filter((w) => w[0] !== 0x20));
+        });
       });
 
       it('changes nothing on the fallback handshake without a 0x12', async () => {
@@ -2990,6 +3946,29 @@ describe('AE02 dispatch (#75, #235)', () => {
       expect(writes.slice(before).filter((w) => w[0] === 0xa2)).toEqual([]);
     });
 
+    // [2] of the extended dialect's 20-byte live frame is the user slot (#501).
+    it.each([
+      ['user slot 1', GE_LIVE, 'QN: 20-byte live frame, weight 78.7 kg at [5..6], user slot 1, '],
+      [
+        'user slot 2',
+        LIVE_GE_SLOT2,
+        'QN: 20-byte live frame, weight 78.7 kg at [5..6], user slot 2, ',
+      ],
+    ])('names the %s of an extended 20-byte live frame', async (_name, frame, start) => {
+      const debug = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+      try {
+        const adapter = makeAdapter();
+        await driveHandshake(adapter, makeExtendedScaleInfo());
+        expect(adapter.parseNotification(frame)).toBeNull();
+        const lines = debug.mock.calls
+          .map((c) => String(c[0]))
+          .filter((l) => l.startsWith('QN: 20-byte live frame'));
+        expect(lines).toEqual([start + 'not echoed and not yet decoded (#331)']);
+      } finally {
+        debug.mockRestore();
+      }
+    });
+
     // The original layout reads [5] as its stability byte, which in this shape
     // is the weight's high byte, so a frame between 2.56 and 5.11 kg read as a
     // stable 1.7 kg, was acknowledged with 0x1F, and at exactly 2.56 kg ([6]
@@ -3275,8 +4254,8 @@ describe('AE02 dispatch (#75, #235)', () => {
         }
       });
 
-      // Before the stream as well: the scale answers our 0x22 before it starts
-      // measuring when the link is up first (#331, 2026-10-06 log).
+      // Before the stream as well. No log shows the scale answering before it
+      // measures; even so the answer is never re-queried (#331).
       it('reads the "no stored weigh-ins" answer before the stream without a re-query', async () => {
         vi.useFakeTimers();
         try {
@@ -3405,9 +4384,14 @@ describe('AE02 dispatch (#75, #235)', () => {
 
       // Scope: every other dialect, and the 19-byte one without a stream, stays
       // as it was. These pass on the code before D037 as well.
-      describe('other dialects are untouched', () => {
+      // With ble.qn_result_ack as well: it is for the 19-byte stream only.
+      describe.each([
+        ['by default', {}],
+        ['with ble.qn_result_ack', { qnResultAck: true }],
+      ])('other dialects are untouched, %s', (_label, config: AdapterRuntimeConfig) => {
         it('extended: a GE-shaped stable 20-byte frame is still not read or answered', async () => {
           const adapter = makeAdapter();
+          adapter.configure(config);
           const writes = await driveHandshake(adapter, makeExtendedScaleInfo());
           const before = writes.length;
           // GE_LIVE (#235) with [3] 00 -> 01 and its checksum recomputed.
@@ -3419,6 +4403,7 @@ describe('AE02 dispatch (#75, #235)', () => {
 
         it('18-byte es26m: the barefoot frame still reads weight and impedance at once', async () => {
           const adapter = makeAdapter();
+          adapter.configure(config);
           await driveHandshake(adapter, makeEs26mScaleInfo());
           const reading = adapter.parseNotification(
             hex('10 0e ff 01 02 26 39 01 f5 01 f3 01 34 9e'),
@@ -3436,6 +4421,7 @@ describe('AE02 dispatch (#75, #235)', () => {
           vi.useFakeTimers();
           try {
             const adapter = makeAdapter();
+            adapter.configure(config);
             const writes = await openSession(adapter, makeEs26mScaleInfo(), {});
             const starts = writes.filter((w) => w[0] === 0x22).length;
             expect(adapter.parseNotification(END_MARKER)).toBeNull();
@@ -3453,6 +4439,7 @@ describe('AE02 dispatch (#75, #235)', () => {
           const debug = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
           try {
             const adapter = makeAdapter();
+            adapter.configure(config);
             adapter.onSessionStart();
             if (which === 'classic') {
               const info = Buffer.alloc(11);
@@ -3593,8 +4580,9 @@ describe('AE02 dispatch (#75, #235)', () => {
       stableNoImpedance.writeUInt16BE(9790, 5);
       // First stable R1=R2=0 frame only starts the grace timer.
       expect(adapter.parseNotification(stableNoImpedance)).toBeNull();
-      (adapter as unknown as { firstStableNoImpedanceAt: number }).firstStableNoImpedanceAt =
-        Date.now() - 2000;
+      (
+        adapter as unknown as { s: { firstStableNoImpedanceAt: number } }
+      ).s.firstStableNoImpedanceAt = Date.now() - 2000;
       const reading = adapter.parseNotification(stableNoImpedance);
       expect(reading).not.toBeNull();
       expect(reading!.weight).toBeCloseTo(97.9);
@@ -3618,12 +4606,9 @@ describe('QN per-session reset ordering (#406)', () => {
       ]),
     );
     const first = adapter as unknown as {
-      seenProtocolType: number;
-      isLongFrameVariant: boolean;
-      configSent: boolean;
-      weightScaleFactor: number;
+      s: { seenProtocolType: number; kind: string; configSent: boolean; weightScaleFactor: number };
     };
-    expect(first.isLongFrameVariant).toBe(true);
+    expect(first.s.kind).toBe('va19');
 
     adapter.onSessionEnd?.();
     // Session 2 starts. onConnected has NOT run yet, which is the real
@@ -3631,9 +4616,9 @@ describe('QN per-session reset ordering (#406)', () => {
     // init, so a frame can arrive in this window.
     adapter.onSessionStart?.();
 
-    expect(first.isLongFrameVariant).toBe(false);
-    expect(first.configSent).toBe(false);
-    expect(first.weightScaleFactor).toBe(100);
+    expect(first.s.kind).toBe('unknown');
+    expect(first.s.configSent).toBe(false);
+    expect(first.s.weightScaleFactor).toBe(100);
   });
 
   // The test above checks three fields. This one covers every instance field
@@ -3650,16 +4635,9 @@ describe('QN per-session reset ordering (#406)', () => {
       'charWriteUuid',
       'altCharNotifyUuid',
       'altCharWriteUuid',
-      'normalizesWeight',
       // Configuration from configure(), not session state.
       'displayUnit',
-      'forcedProtocolType',
-      'forcedReportByte',
-      'forcedWeightAck',
-      'forcedUserKey',
-      'a4PreludeEnabled',
-      'configLong',
-      'timeSyncLong',
+      'opts',
       'userWeights',
       // Session-boundary values: set by onConnected / onSessionEnd, bumped
       // rather than reset, re-stamped with the current time, or replaced by a
@@ -3668,21 +4646,27 @@ describe('QN per-session reset ordering (#406)', () => {
       'sessionGeneration',
       'sessionStartedScaleSeconds',
       'ae01Chain',
+      // The answer to this session's profile frame (#501): a fresh promise and
+      // its resolver.
+      'visitAnswered',
+      'answerVisit',
       // Keyed by reading object; an earlier session's reading is never handed
       // back, so there is nothing to clear (#331).
       'provisionalReadings',
       // What a later session's stored records and result blocks are compared
       // with: the newest stored weigh-in reported and the recent live results
       // (#331).
-      'storedMark',
-      'recentLiveResults',
+      'ledger',
       // Keyed by reading, like provisionalReadings.
       'scaleComposition',
     ]);
     vi.useFakeTimers();
     try {
-      const fresh = new QnScaleAdapter() as unknown as Record<string, unknown>;
-      const used = new QnScaleAdapter() as unknown as Record<string, unknown>;
+      // The per-session fields live in the adapter's session object (D075).
+      expect(Object.keys(new QnScaleAdapter()).filter((k) => !SURVIVES.has(k))).toEqual(['s']);
+      const usedAdapter = new QnScaleAdapter();
+      const fresh = (new QnScaleAdapter() as unknown as { s: Record<string, unknown> }).s;
+      const used = (usedAdapter as unknown as { s: Record<string, unknown> }).s;
       const perSession = Object.keys(fresh).filter((k) => !SURVIVES.has(k));
       // Guards the filter itself: if these vanished, the loop below would
       // silently check nothing.
@@ -3690,7 +4674,7 @@ describe('QN per-session reset ordering (#406)', () => {
         expect.arrayContaining([
           'seenProtocolType',
           'weightScaleFactor',
-          'isExtendedLongFrame',
+          'kind',
           'extendedResultEmitted',
           'historyResponseSent',
           'timeSyncSent',
@@ -3706,16 +4690,18 @@ describe('QN per-session reset ordering (#406)', () => {
         if (key.endsWith('Timer')) used[key] = setTimeout(() => {}, 60_000);
         else if (typeof v === 'boolean') used[key] = !v;
         else if (typeof v === 'number') used[key] = v + 7;
+        else if (typeof v === 'string') used[key] = `${v}-dirty`;
         else if (v === null) used[key] = key === 'ae02Subscribe' ? Promise.resolve(true) : 12345;
         else if (v instanceof Set) used[key] = new Set([7]);
         else if (Array.isArray(v)) used[key] = [7];
         else throw new Error(`no dirty value for field ${key} (${typeof v}); extend this test`);
       }
 
-      (used as unknown as QnScaleAdapter).onSessionStart();
+      usedAdapter.onSessionStart();
 
+      const next = (usedAdapter as unknown as { s: Record<string, unknown> }).s;
       for (const key of perSession) {
-        expect({ [key]: used[key] }).toEqual({ [key]: fresh[key] });
+        expect({ [key]: next[key] }).toEqual({ [key]: fresh[key] });
       }
     } finally {
       vi.useRealTimers();
@@ -3779,28 +4765,53 @@ describe('buildUserProfileFrame (#331)', () => {
   });
 });
 
+// #501: the user slot of the A2, 0x22 and profile frames. Slot 1 is every
+// frame captured before #501; slot 2 is the Arboleaf CS10G app's, whose
+// `22 06 ff 00 05 2c` is in the reporter's capture. Every other slot is
+// derived from the vendor's published SDK.
+describe('user slot of the frame builders (#501)', () => {
+  it('keeps the slot-1 frames when no slot is given', () => {
+    expect(buildStoredDataQuery(0xff)).toEqual([0x22, 0x06, 0xff, 0x00, 0x03, 0x2a]);
+    expect(buildStoredDataQuery(0xff, 1)).toEqual(buildStoredDataQuery(0xff));
+    expect(buildA2Frame(0x1ced)).toEqual([0xa2, 0x06, 0x01, 0x1c, 0xed, 0xb2]);
+    expect(buildMeasurementTrigger(74.05, 1)).toEqual(buildMeasurementTrigger(74.05));
+    expect(buildUserProfileFrame(51, 182, 'male', { slot: 1 })).toEqual(
+      buildUserProfileFrame(51, 182),
+    );
+  });
+
+  it('asks the scale for slot 2 with the mask `00 05`, as the CS10G app does', () => {
+    expect(buildStoredDataQuery(0xff, 2)).toEqual([0x22, 0x06, 0xff, 0x00, 0x05, 0x2c]);
+  });
+
+  it('sets the mask bit of slot 8 in the high byte', () => {
+    expect(buildStoredDataQuery(0xff, 8)).toEqual([0x22, 0x06, 0xff, 0x01, 0x01, 0x29]);
+    expect(buildStoredDataQuery(0x00, 8)).toEqual([0x22, 0x06, 0x00, 0x01, 0x01, 0x2a]);
+  });
+
+  it('puts the slot at [2] of an A2 frame and [3] of the profile frame', () => {
+    expect(buildMeasurementTrigger(74.05, 2)).toEqual([0xa2, 0x06, 0x02, 0x1c, 0xed, 0xb3]);
+    expect(buildA2Frame(0x1ced, 8)).toEqual([0xa2, 0x06, 0x08, 0x1c, 0xed, 0xb9]);
+    expect(buildUserProfileFrame(51, 182, 'male', { slot: 2 })).toEqual([
+      0xa0, 0x0d, 0x02, 0x02, 0x03, 0xe8, 0x00, 0x33, 0x07, 0x1c, 0x04, 0x02, 0xf8,
+    ]);
+  });
+});
+
 // #461: a Physiq (QN-Scale, 18-byte es26m) that delivered its weigh-in as a
 // 0x23 stored record. Every frame below is byte for byte from the reporter's
 // public DEBUG log (node-ble); the address is the one the log shows.
 describe('QN stored record and impedance (#461)', () => {
-  const RECORD_461 = Buffer.from([
-    0x23, 0x14, 0xff, 0x01, 0x01, 0xf0, 0x87, 0xc0, 0x5c, 0x32, 0x1b, 0xfd, 0x10, 0xcf, 0x10, 0xcd,
-    0x00, 0x00, 0x00, 0xd1,
-  ]);
   const EMPTY_461 = Buffer.from([0x23, 0x14, 0xff, ...new Array<number>(16).fill(0), 0x36]);
   /** Connect time in the log; the record is stamped 09:23:19. */
   const CONNECTED_461 = '2026-10-10T09:23:02.077Z';
-
-  /** #283, the 0x23 its classic scale (INFO_283) answered with. */
-  const RECORD_283 = Buffer.from([
-    0x23, 0x13, 0xff, 0x04, 0x01, 0x09, 0x11, 0xef, 0x31, 0x18, 0x1a, 0x01, 0xfc, 0x01, 0xf8, 0x00,
-    0x00, 0x00, 0x9c,
-  ]);
 
   interface SessionOptions {
     now: string;
     deviceAddress?: string;
     manufacturerData?: { id: number; data: Buffer };
+    /** Frames parsed after onSessionStart and before onConnected. */
+    beforeConnect?: Buffer[];
   }
 
   /**
@@ -3828,8 +4839,11 @@ describe('QN stored record and impedance (#461)', () => {
         ...(opts.manufacturerData ? { manufacturerData: opts.manufacturerData } : {}),
       } as unknown as ConnectionContext;
       adapter.onSessionStart?.();
-      await adapter.onConnected(ctx);
       let reading = null;
+      for (const frame of opts.beforeConnect ?? []) {
+        reading = adapter.parseNotification(frame) ?? reading;
+      }
+      await adapter.onConnected(ctx);
       for (const frame of frames) {
         reading = adapter.parseNotification(frame) ?? reading;
         await vi.advanceTimersByTimeAsync(100);
@@ -3855,11 +4869,13 @@ describe('QN stored record and impedance (#461)', () => {
     });
   });
 
-  it('reads the #461 record without an advertisement as the raw R50', async () => {
+  // No body sends 4303 as it is, so without an advertisement the 18-byte
+  // dialect reads it unscrambled (#463, D071).
+  it('reads the #461 record without an advertisement unscrambled, as no body sends 4303', async () => {
     const reading = await runSession(makeAdapter(), [INFO_461, RECORD_461], {
       now: CONNECTED_461,
     });
-    expect(reading).toEqual({ weight: 71.65, impedance: 4303 });
+    expect(reading).toEqual({ weight: 71.65, impedance: 502 });
   });
 
   it('still re-queries after the empty record #461 sent first', async () => {
@@ -3878,8 +4894,7 @@ describe('QN stored record and impedance (#461)', () => {
     }
   });
 
-  // A classic scale's 0x23 has its own layout; the session that saw its short
-  // 0x12 keeps reading it exactly as before, which drops this one as stale.
+  // A classic scale's 0x23 has its own layout, which is not read at all (D068).
   it('leaves a classic session alone (#283)', async () => {
     const reading = await runSession(makeAdapter(), [INFO_283, RECORD_283], {
       now: '2026-07-19T04:37:40Z',
@@ -3893,11 +4908,11 @@ describe('QN stored record and impedance (#461)', () => {
   const ADVERT_461 = {
     id: 0xffff,
     data: Buffer.from([
-      0x08, 0x14, 0x01, 0x00, 0x00, 0x25, 0xe0, 0x16, 0x00, 0x05, 0xff, 0x61, 0x08, 0x01, 0x00,
+      0x08, 0x14, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x02, 0x61, 0x08, 0x01, 0x00,
       0x15,
     ]),
   };
-  const ADDRESS_461 = 'FF050016E025';
+  const ADDRESS_461 = '020000000001';
   const ADVERT_ELIS1 = {
     id: 0xffff,
     data: Buffer.from([
@@ -3976,6 +4991,9 @@ describe('QN stored record and impedance (#461)', () => {
     expect(reading).toEqual({ weight: 71.65, impedance: 502 });
   });
 
+  // The next session has an advertisement without the flag (the classic
+  // one, address check skipped): without one at all it would be read
+  // unscrambled for another reason (D071).
   it('does not carry the flag into the next session', async () => {
     const adapter = makeAdapter();
     await runSession(adapter, [INFO_461], {
@@ -3983,7 +5001,10 @@ describe('QN stored record and impedance (#461)', () => {
       deviceAddress: ADDRESS_461,
       manufacturerData: ADVERT_461,
     });
-    const reading = await runSession(adapter, [INFO_461, RECORD_461], { now: CONNECTED_461 });
+    const reading = await runSession(adapter, [INFO_461, RECORD_461], {
+      now: CONNECTED_461,
+      manufacturerData: ADVERT_CLASSIC,
+    });
     expect(reading).toEqual({ weight: 71.65, impedance: 4303 });
   });
 
@@ -4010,14 +5031,6 @@ describe('QN stored record and impedance (#461)', () => {
   // unit (#253, R 501 sent as is): it checks the wiring and the refutation
   // warning, not a value.
   describe('live frame', () => {
-    const INFO_253 = Buffer.from([
-      0x12, 0x12, 0xff, 0xcb, 0x89, 0x04, 0x00, 0x04, 0xff, 0x01, 0x17, 0x09, 0x00, 0x00, 0x05,
-      0x9f, 0x30, 0x73,
-    ]);
-    const LIVE_253 = Buffer.from([
-      0x10, 0x0e, 0xff, 0x01, 0x02, 0x21, 0x20, 0x01, 0xf5, 0x01, 0xf3, 0x00, 0xf1, 0x3c,
-    ]);
-
     it('reads it as sent without the flag', async () => {
       const reading = await runSession(makeAdapter(), [INFO_253, LIVE_253], {
         now: '2026-07-10T13:28:40Z',
@@ -4052,6 +5065,1355 @@ describe('QN stored record and impedance (#461)', () => {
       });
       // R1 reads as 0 (no contact) after unscrambling.
       expect(reading).toEqual({ weight: 84.8, impedance: 0 });
+    });
+  });
+
+  // #463, 2026-10-20 19:39: no advertisement reached the session, and the
+  // scrambled 4317 went out as sent and was dropped. On the 18-byte dialect a
+  // resistance with high byte 0x10 or 0x12 is now read unscrambled, and the
+  // connection says once that the flag is unknown (D071). The finals are the
+  // module's real frames; the derived ones say what they change.
+  describe('impedance without an advertisement (#463, D071)', () => {
+    const UNKNOWN =
+      'QN: no advertisement reached this connection, so whether the scale scrambles its ' +
+      'impedance is not known: one of 4096-4351 or 4608-4863 Ohm, which only a scrambled body ' +
+      'gives, is read unscrambled, any other as sent, so a scrambled one of 151-255, 512-767 ' +
+      'or 1024-1200 Ohm can be off by up to 39 Ohm (#463)';
+    async function withInfo(
+      adapter: QnScaleAdapter,
+      frames: Buffer[],
+      opts: SessionOptions,
+    ): Promise<{ reading: ScaleReading | null; infoLines: string[] }> {
+      const infoLines: string[] = [];
+      const info = vi.spyOn(bleLog, 'info').mockImplementation((m) => void infoLines.push(m));
+      try {
+        const reading = await runSession(adapter, frames, opts);
+        return { reading, infoLines };
+      } finally {
+        info.mockRestore();
+      }
+    }
+    const AT_1019 = { now: '2026-10-19T16:38:13.480Z', deviceAddress: ADDRESS_461 };
+    /** FINAL_1019 with R50 at [7..8] set to `raw`, [14] recomputed. */
+    const finalWithR50 = (raw: number): Buffer =>
+      derive(FINAL_1019, { 7: raw >> 8, 8: raw & 0xff });
+
+    it('reads the 2026-10-19 final unscrambled and says once that the flag is unknown', async () => {
+      // 0x12 three times, as the scale repeats it.
+      const { reading, infoLines } = await withInfo(
+        makeAdapter(),
+        [INFO_1019, INFO_1019, INFO_1019, FINAL_1019],
+        AT_1019,
+      );
+      expect(reading).toEqual({ weight: 71.15, impedance: 499 });
+      expect(infoLines.filter((l) => l === UNKNOWN)).toHaveLength(1);
+    });
+
+    it('reads the 2026-10-20 17:58 record the same way without its advertisement', async () => {
+      const { reading } = await withInfo(makeAdapter(), [INFO_1020, RECORD_1758], {
+        now: '2026-10-20T17:58:11.269Z',
+        deviceAddress: ADDRESS_461,
+      });
+      expect(reading).toEqual({ weight: 71.1, impedance: 504 });
+    });
+
+    it('reads it as the log of 17:58 did with the advertisement, without the line', async () => {
+      const { reading, infoLines } = await withInfo(makeAdapter(), [INFO_1020, RECORD_1758], {
+        now: '2026-10-20T17:58:11.269Z',
+        deviceAddress: ADDRESS_461,
+        manufacturerData: ADVERT_1019,
+      });
+      expect(reading).toEqual({ weight: 71.1, impedance: 504 });
+      expect(infoLines).not.toContain(UNKNOWN);
+    });
+
+    it('leaves it to an advertisement without the flag', async () => {
+      const { reading, infoLines } = await withInfo(makeAdapter(), [INFO_1019, FINAL_1019], {
+        ...AT_1019,
+        deviceAddress: '',
+        manufacturerData: ADVERT_CLASSIC,
+      });
+      expect(reading).toEqual({ weight: 71.15, impedance: 4315 });
+      expect(infoLines).not.toContain(UNKNOWN);
+    });
+
+    it('leaves a session without a 0x12 as sent, and says nothing', async () => {
+      const { reading, infoLines } = await withInfo(makeAdapter(), [FINAL_1019], AT_1019);
+      expect(reading).toEqual({ weight: 71.15, impedance: 4315 });
+      expect(infoLines).not.toContain(UNKNOWN);
+    });
+
+    it('says nothing on the 19-byte dialect', async () => {
+      const { infoLines } = await withInfo(makeAdapter(), [INFO_ARBOLEAF_331], AT_1019);
+      expect(infoLines).not.toContain(UNKNOWN);
+    });
+
+    it.each([
+      // Out of the body range, but unscrambled into it too: edge values a
+      // clear resistance can have, so they stay as sent.
+      ['1205 (0x04b5)', 1205, 1205],
+      ['140 (0x008c)', 140, 140],
+      // In the range: never touched, scrambled or not.
+      ['513 (0x0201)', 0x0201, 0x0201],
+      // High byte 0x12: unscrambled into 768-1023.
+      ['4829 (0x12dd)', decryptQnResistance(0x12dd), 0x12dd],
+    ])('reads R50 %s as %s', async (_label, expected, raw) => {
+      const frame = finalWithR50(raw);
+      expect(hasValidSumChecksum(frame)).toBe(true);
+      const { reading, infoLines } = await withInfo(makeAdapter(), [INFO_1019, frame], AT_1019);
+      expect(reading).toEqual({ weight: 71.15, impedance: expected });
+      // Said whether or not this value is changed.
+      expect(infoLines.filter((l) => l === UNKNOWN)).toHaveLength(1);
+    });
+
+    // BlueZ can expose a company id with an empty payload, and the transports
+    // hand none over then; a company id without bytes still carries no flag.
+    it('counts a company id without bytes as no advertisement', async () => {
+      const { reading, infoLines } = await withInfo(makeAdapter(), [INFO_1019, FINAL_1019], {
+        ...AT_1019,
+        manufacturerData: { id: 0xffff, data: Buffer.alloc(0) },
+      });
+      expect(reading).toEqual({ weight: 71.15, impedance: 499 });
+      expect(infoLines.filter((l) => l === UNKNOWN)).toHaveLength(1);
+    });
+
+    // QN's comments allow a 0x12 before onConnected; with no 0x12 after it,
+    // the line has to come from onConnected, and a later 0x12 adds none.
+    it('says it once when the 0x12 came before onConnected', async () => {
+      const once = await withInfo(makeAdapter(), [FINAL_1019], {
+        ...AT_1019,
+        beforeConnect: [INFO_1019],
+      });
+      expect(once.reading).toEqual({ weight: 71.15, impedance: 499 });
+      expect(once.infoLines.filter((l) => l === UNKNOWN)).toHaveLength(1);
+      const { reading, infoLines } = await withInfo(makeAdapter(), [INFO_1019, FINAL_1019], {
+        ...AT_1019,
+        beforeConnect: [INFO_1019],
+      });
+      expect(reading).toEqual({ weight: 71.15, impedance: 499 });
+      expect(infoLines.filter((l) => l === UNKNOWN)).toHaveLength(1);
+    });
+
+    it('unscrambles 0x12dd into the body range', () => {
+      expect(decryptQnResistance(0x12dd)).toBeGreaterThanOrEqual(768);
+      expect(decryptQnResistance(0x12dd)).toBeLessThanOrEqual(1023);
+    });
+
+    it('decides per session: with an advertisement after one without, and the line again', async () => {
+      const adapter = makeAdapter();
+      const first = await withInfo(adapter, [INFO_1019, FINAL_1019], AT_1019);
+      expect(first.reading).toEqual({ weight: 71.15, impedance: 499 });
+      const second = await withInfo(adapter, [INFO_1019, FINAL_1019], {
+        ...AT_1019,
+        deviceAddress: '',
+        manufacturerData: ADVERT_CLASSIC,
+      });
+      expect(second.reading).toEqual({ weight: 71.15, impedance: 4315 });
+      const third = await withInfo(adapter, [INFO_1019, FINAL_1019], AT_1019);
+      expect(third.reading).toEqual({ weight: 71.15, impedance: 499 });
+      expect(third.infoLines.filter((l) => l === UNKNOWN)).toHaveLength(1);
+    });
+  });
+
+  // #463: the Physiq's first connection after step 3 of the reporter's test,
+  // from the public DEBUG log of 2026-10-16. The record in it is a weigh-in
+  // the scale kept from 259 s before the session (2026-10-13T17:59:38Z, user
+  // slot 1). Frames are from that log; where a frame carries the scale's own
+  // body fat (0x23 [16..17], live 0x10 [11..12]) those two bytes are zeroed
+  // and the checksum recomputed. Nothing here reads them.
+  describe('18-byte stored weigh-in from before the session (#463)', () => {
+    const INFO_463 = Buffer.from([
+      0x12, 0x12, 0xff, 0x01, 0x00, 0x00, 0x00, 0x00, 0x02, 0x13, 0x07, 0x16, 0x00, 0x01, 0x05,
+      0x9f, 0x32, 0x2d,
+    ]);
+    const MEASURING_463 = Buffer.from([
+      0x10, 0x0f, 0xff, 0x01, 0x01, 0x1b, 0xf8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x33,
+    ]);
+    /** The live result after it, 71.60 kg / 507 Ohm; [11..12] zeroed, [14] recomputed. */
+    const LIVE_463 = Buffer.from([
+      0x10, 0x0f, 0xff, 0x01, 0x02, 0x1b, 0xf8, 0x10, 0xfb, 0x10, 0xf9, 0x00, 0x00, 0x00, 0x48,
+    ]);
+    /**
+     * The final live frame of the 2026-10-13 18:10 session (#463 comment of
+     * 2026-10-13T18:39Z), 71.55 kg / R50 4349; [11..12] zeroed, [14] recomputed.
+     */
+    const LIVE_463B = Buffer.from([
+      0x10, 0x0f, 0xff, 0x01, 0x02, 0x1b, 0xf3, 0x10, 0xfd, 0x10, 0xfb, 0x00, 0x00, 0x00, 0x47,
+    ]);
+    const ADVERT_463 = {
+      id: 0xffff,
+      data: Buffer.from([
+        0x08, 0x14, 0x01, 0x00, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x02, 0x61, 0x08, 0x01, 0x00,
+        0x15,
+      ]),
+    };
+    /** Session start in the log (onSessionStart), 259 s after the record. */
+    const STARTED_463 = '2026-10-13T18:03:57.411Z';
+    /** Real 20-byte 0x12 from a GE CS 10 G (#235), as makeExtendedScaleInfo. */
+    const INFO_235 = Buffer.from([
+      0x12, 0x14, 0xff, 0x4e, 0xc7, 0x0e, 0x00, 0x07, 0xff, 0x14, 0x0f, 0x42, 0x00, 0x08, 0x05,
+      0x03, 0xe0, 0x6f, 0x2b, 0x3d,
+    ]);
+    /**
+     * The #461 "no stored weigh-ins" 0x24 and 0x25 and its refused profile,
+     * byte for byte from that log. The 0x24 and 0x25 after the 2026-10-20
+     * 19:39 record are these bytes too, as are those of the 10-13 record with
+     * their payload zeroed.
+     */
+    const EMPTY_24_461 = Buffer.from([0x24, 0x10, 0xff, ...new Array<number>(12).fill(0), 0x33]);
+    const EMPTY_25_461 = Buffer.from([0x25, 0x0f, 0xff, ...new Array<number>(12).fill(0), 0x33]);
+    const REFUSED_461 = Buffer.from([0xa1, 0x06, 0x02, 0x01, 0x00, 0xaa]);
+
+    /** What a session has collected so far. */
+    interface Collected {
+      readings: ScaleReading[];
+      writes: number[][];
+      lines: string[];
+      /** The info lines alone, in order (also in `lines`). */
+      infoLines: string[];
+    }
+
+    /**
+     * A frame to feed, a number of milliseconds to let pass, or a check to run
+     * on what has been collected at that point.
+     */
+    type Step = Buffer | number | ((collected: Collected) => void);
+
+    /**
+     * One session in transport order, frames 100 ms apart unless a number
+     * says otherwise, ended with onSessionEnd. Collects every reading, every
+     * write and every debug and info line, and the info lines apart.
+     */
+    async function session(
+      adapter: QnScaleAdapter,
+      steps: Step[],
+      now: string,
+      advert: { id: number; data: Buffer } | null = ADVERT_463,
+    ) {
+      const writes: number[][] = [];
+      const readings: ScaleReading[] = [];
+      const lines: string[] = [];
+      const infoLines: string[] = [];
+      const debug = vi.spyOn(bleLog, 'debug').mockImplementation((m) => void lines.push(m));
+      const info = vi.spyOn(bleLog, 'info').mockImplementation((m) => {
+        lines.push(m);
+        infoLines.push(m);
+      });
+      vi.useFakeTimers();
+      try {
+        vi.setSystemTime(new Date(now));
+        const ctx = {
+          write: async (_uuid: string, data: Buffer | number[]) => {
+            writes.push([...data]);
+          },
+          read: async () => Buffer.alloc(0),
+          subscribe: async () => {},
+          profile: defaultProfile(),
+          deviceAddress: ADDRESS_461,
+          availableChars: new Set<string>(),
+          ...(advert ? { manufacturerData: advert } : {}),
+        } as unknown as ConnectionContext;
+        adapter.onSessionStart?.();
+        await adapter.onConnected(ctx);
+        for (const step of steps) {
+          if (typeof step === 'number') {
+            await vi.advanceTimersByTimeAsync(step);
+            continue;
+          }
+          if (typeof step === 'function') {
+            step({ readings, writes, lines, infoLines });
+            continue;
+          }
+          const reading = adapter.parseNotification(step);
+          if (reading) readings.push(reading);
+          await vi.advanceTimersByTimeAsync(100);
+        }
+        adapter.onSessionEnd?.();
+        return { readings, writes, lines, infoLines };
+      } finally {
+        vi.useRealTimers();
+        debug.mockRestore();
+        info.mockRestore();
+      }
+    }
+
+    // The other dialects keep dropping such a record; the line says why. The
+    // 20-byte case pairs the GE CS 10 G's 0x12 with the #463 record, which no
+    // log shows together: it checks the wiring of the line, not a decode.
+    it.each([
+      [
+        'classic (#283)',
+        [INFO_283, RECORD_283],
+        '2026-07-19T04:37:40Z',
+        '0x23 on the classic dialect is not decoded (#461 S3), not read: [23 13 ff 04',
+      ],
+      [
+        'without a scale-info frame (#461)',
+        [RECORD_461],
+        '2026-10-10T09:30:00Z',
+        '0x23 in a session without a scale-info frame, not read: [23 14 ff 01 01 f0',
+      ],
+      [
+        '20-byte extended',
+        [INFO_235, RECORD_463],
+        '2026-10-13T18:09:00Z',
+        'stored weigh-in 71.55 kg at 2026-10-13T17:59:38.000Z, user slot 1, is 562 s older ' +
+          'than this session (window 90 s), not read',
+      ],
+    ])(
+      'logs why it does not read an old record on the %s dialect',
+      async (_label, frames, now, needle) => {
+        const { readings, lines } = await session(makeAdapter(), frames, now, null);
+        expect(readings).toEqual([]);
+        const line = lines.find((l) => l.startsWith('QN: 0x23') || l.startsWith('QN: stored'));
+        expect(line ?? '(no line)').toContain(needle);
+      },
+    );
+
+    it('does not read VA values into the classic line', async () => {
+      const { lines } = await session(
+        makeAdapter(),
+        [INFO_283, RECORD_283],
+        '2026-07-19T04:37:40Z',
+        null,
+      );
+      const line = lines.find((l) => l.includes('classic dialect is not decoded'));
+      expect(line).toBeDefined();
+      expect(line).not.toContain('kg');
+    });
+
+    it('names the reason, not an age, for an out-of-range record without a 0x12 (#461)', async () => {
+      // The empty record #461 sent first, here without its 0x12 before it.
+      const { lines } = await session(makeAdapter(), [EMPTY_461], '2026-10-10T09:23:05.302Z', null);
+      const line = lines.find((l) => l.includes('without a scale-info frame')) ?? '(no line)';
+      expect(line).toContain(
+        'read as the VA layout it is 0 kg at 2000-01-01T00:00:00.000Z, out of range',
+      );
+      expect(line).not.toContain('before the session');
+    });
+
+    it('says the scale holds no stored weigh-ins when the 0x23 count is 0 (#461)', async () => {
+      // The empty record #461 sent first, after its own 0x12.
+      const { lines } = await session(
+        makeAdapter(),
+        [INFO_461, EMPTY_461],
+        '2026-10-10T09:23:05.302Z',
+      );
+      expect(lines).toContain('QN: 0x23 says the scale holds no stored weigh-ins (#463)');
+    });
+
+    describe('with ble.qn_user_key (D065)', () => {
+      /** The #463 handshake up to and past our 0x22, as in the log. */
+      const HANDSHAKE: Step[] = [INFO_463, READY_461, CONFIG_REQ_461, VISIT_OK_463, 1000];
+      /** The record as the reading it must become. */
+      const STORED: ScaleReading = {
+        weight: 71.55,
+        impedance: 497,
+        timestamp: new Date('2026-10-13T17:59:38.000Z'),
+        fromMemory: true,
+      };
+      const keyed = (): QnScaleAdapter => {
+        const adapter = makeAdapter();
+        adapter.configure({ qnUserKey: 1000 });
+        return adapter;
+      };
+
+      // The session time is chosen (562 s after the record); the frames are real.
+      it('reports a record from minutes before the session as history with its own time', async () => {
+        const { readings, lines } = await session(
+          keyed(),
+          [...HANDSHAKE, MEASURING_463, RECORD_463],
+          '2026-10-13T18:09:00Z',
+        );
+        expect(readings).toEqual([STORED]);
+        expect(lines).toContain(
+          'QN: stored weigh-in 71.55 kg at 2026-10-13T17:59:38.000Z, user slot 1, record 1 of 1, ' +
+            'reported as history (#463)',
+        );
+      });
+
+      it('reports the #463 record from 259 s before the session as history, too', async () => {
+        const { readings } = await session(
+          keyed(),
+          [...HANDSHAKE, MEASURING_463, RECORD_463],
+          STARTED_463,
+        );
+        expect(readings).toEqual([STORED]);
+      });
+
+      it('reports it once: not in the next session, nor after a restart that kept the mark', async () => {
+        const adapter = keyed();
+        await session(adapter, [...HANDSHAKE, RECORD_463], '2026-10-13T18:09:00Z');
+        expect(adapter.dedupMark()).toBe(845229578);
+
+        const next = await session(adapter, [...HANDSHAKE, RECORD_463], '2026-10-13T18:20:00Z');
+        expect(next.readings).toEqual([]);
+        expect(next.lines).toContain(
+          'QN: stored weigh-in 71.55 kg at 2026-10-13T17:59:38.000Z was already reported (#463)',
+        );
+
+        const restarted = keyed();
+        restarted.restoreDedupMark(845229578);
+        const after = await session(restarted, [...HANDSHAKE, RECORD_463], '2026-10-13T18:20:00Z');
+        expect(after.lines).toContain(
+          'QN: stored weigh-in 71.55 kg at 2026-10-13T17:59:38.000Z was already reported (#463)',
+        );
+        expect(after.readings).toEqual([]);
+      });
+
+      it("does not export #461's record with no user from a session without an accepted profile", async () => {
+        // #461's record (slot 0xf0, 09:23:19Z) after its own 0x12, 401 s later.
+        // No ready frame, so no profile went out at all: the scale cannot have
+        // accepted one.
+        const { readings, lines } = await session(
+          keyed(),
+          [INFO_461, RECORD_461],
+          '2026-10-10T09:30:00Z',
+        );
+        expect(readings).toEqual([]);
+        expect(lines).toContain(
+          'QN: a stored weigh-in (71.65 kg at 2026-10-10T09:23:19.000Z, assigned to no user) is ' +
+            'not exported: the scale did not accept the profile for user slot 1 in this ' +
+            'session, and a stored weigh-in goes out only in a connection in which it has (#463)',
+        );
+      });
+
+      it('names ble.qn_user_key for a record with no user without the option', async () => {
+        // With the option it can go out (D072), so the line points at it.
+        const { lines } = await session(
+          makeAdapter(),
+          [INFO_461, RECORD_461],
+          '2026-10-10T09:30:00Z',
+        );
+        expect(lines).toContain(
+          'QN: a stored weigh-in (71.65 kg at 2026-10-10T09:23:19.000Z, assigned to no user) is ' +
+            'not exported: without ble.qn_user_key ble-scale-sync does not export a weigh-in ' +
+            'this scale kept from before the connection (#463)',
+        );
+      });
+
+      // #463, 2026-10-20 19:39 (D072): the scale kept the 19:28 weigh-in for no
+      // user, and every offline weigh-in of that day was such a record. The
+      // frames are the module's 2026-10-20 ones, with the acceptance 293 ms
+      // after the config request as in the log; the repeated 0x12 and the AE02
+      // challenge of that session are left out. The sessions carry the unit's
+      // advertisement (ADVERT_1019, which the 17:58 session had byte for byte),
+      // so the impedance does not depend on how a session without one is read.
+      describe('a weigh-in the scale kept for no user (0xf0)', () => {
+        /** onConnected in the 19:39 log; the record is 694 s older. */
+        const STARTED_1020 = '2026-10-20T19:39:50.232Z';
+        const SESSION_1020: Step[] = [INFO_1020, READY_461, CONFIG_REQ_461, 193, VISIT_OK_463];
+        /** RECORD_1928 as the reading it must become: R50 4303 unscrambled. */
+        const NO_USER: ScaleReading = {
+          weight: 72.6,
+          impedance: 502,
+          timestamp: new Date('2026-10-20T19:28:16.000Z'),
+          fromMemory: true,
+        };
+        const run1020 = (adapter: QnScaleAdapter, steps: Step[], now = STARTED_1020) =>
+          session(adapter, steps, now, ADVERT_1019);
+
+        it('reports the weigh-in the scale kept for no user as history, next to the live one', async () => {
+          const adapter = keyed();
+          const { readings, lines, infoLines } = await run1020(adapter, [
+            ...SESSION_1020,
+            MEASURING_1020,
+            RECORD_1928,
+            EMPTY_24_461,
+            EMPTY_25_461,
+            MEASURING_1020,
+            FINAL_1020,
+          ]);
+          expect(readings).toEqual([NO_USER, { weight: 72.55, impedance: 501 }]);
+          // No slot to name: the runtime attributes it by its weight (D027).
+          expect('userIndex' in readings[0]).toBe(false);
+          expect(adapter.isFinal(readings[1])).toBe(true);
+          expect(adapter.completionHoldMs).toBeUndefined();
+          expect(lines).toContain(
+            'QN: stored weigh-in 72.6 kg at 2026-10-20T19:28:16.000Z, assigned to no user, ' +
+              'record 1 of 1, reported as history (#463)',
+          );
+          expect(infoLines.some((l) => l.includes('is not exported'))).toBe(false);
+          expect(adapter.dedupMark()).toBe(845839696);
+        });
+
+        it.each([
+          [
+            'without ble.qn_user_key',
+            makeAdapter,
+            [INFO_1020, READY_461, CONFIG_REQ_461, 193, REFUSED_461, RECORD_1928],
+            'without ble.qn_user_key ble-scale-sync does not export a weigh-in this scale kept ' +
+              'from before the connection (#463)',
+          ],
+          [
+            'when the scale refused the profile',
+            keyed,
+            [INFO_1020, READY_461, CONFIG_REQ_461, 193, REFUSED_461, RECORD_1928],
+            'the scale did not accept the profile for user slot 1 in this session, and a ' +
+              'stored weigh-in goes out only in a connection in which it has (#463)',
+          ],
+          [
+            "after openScale's profile went out (the 0x12 after the ready frame)",
+            keyed,
+            [READY_461, INFO_1020, CONFIG_REQ_461, 193, VISIT_OK_463, RECORD_1928],
+            "this session sent openScale's profile, not the first user with ble.qn_user_key " +
+              '(the 18-byte 0x12 came after the handshake), and a stored weigh-in goes out only ' +
+              "in a connection in which the scale accepted the first user's profile (#463)",
+          ],
+        ] as const)('does not export it, and says why, %s', async (_label, make, steps, why) => {
+          const { readings, infoLines } = await run1020(make(), [...steps]);
+          expect(readings).toEqual([]);
+          const line =
+            'QN: a stored weigh-in (72.6 kg at 2026-10-20T19:28:16.000Z, assigned to no user) ' +
+            `is not exported: ${why}`;
+          expect(infoLines.filter((l) => l === line)).toHaveLength(1);
+        });
+
+        it('reports a weigh-in kept for no user once: not in the next session, nor after a restart that kept the mark', async () => {
+          const adapter = keyed();
+          const first = await run1020(adapter, [...SESSION_1020, RECORD_1928]);
+          expect(first.readings).toEqual([NO_USER]);
+          expect(adapter.dedupMark()).toBe(845839696);
+          const already =
+            'QN: stored weigh-in 72.6 kg at 2026-10-20T19:28:16.000Z was already reported (#463)';
+
+          const next = await run1020(
+            adapter,
+            [...SESSION_1020, RECORD_1928],
+            '2026-10-20T19:50:00Z',
+          );
+          expect(next.readings).toEqual([]);
+          expect(next.lines).toContain(already);
+
+          const restarted = keyed();
+          restarted.restoreDedupMark(845839696);
+          const after = await run1020(
+            restarted,
+            [...SESSION_1020, RECORD_1928],
+            '2026-10-20T19:50:00Z',
+          );
+          expect(after.readings).toEqual([]);
+          expect(after.lines).toContain(already);
+        });
+
+        // The 17:58 session (onConnected 17:58:11.272), and the same record
+        // handed over again at a time chosen: no log shows that.
+        it("takes the 17:58 weigh-in with no user as that session's own, and drops it as that one when handed over again", async () => {
+          const adapter = keyed();
+          const first = await run1020(
+            adapter,
+            [...SESSION_1020, RECORD_1758],
+            '2026-10-20T17:58:11.272Z',
+          );
+          expect(first.readings).toEqual([{ weight: 71.1, impedance: 504 }]);
+          const again = await run1020(
+            adapter,
+            [...SESSION_1020, RECORD_1758],
+            '2026-10-20T18:05:00Z',
+          );
+          expect(again.readings).toEqual([]);
+          expect(again.lines.some((l) => l.includes('is the live result reported at'))).toBe(true);
+        });
+
+        it('does not read one from more than a year ago', async () => {
+          const { readings, lines } = await run1020(
+            keyed(),
+            [...SESSION_1020, RECORD_1928],
+            '2027-10-21T00:00:00Z',
+          );
+          expect(readings).toEqual([]);
+          expect(lines).toContain(
+            'QN: stored weigh-in 72.6 kg at 2026-10-20T19:28:16.000Z is not from the past year, ' +
+              'dropped (#463)',
+          );
+        });
+
+        // RECORD_1928 with its slot [5] set to 2, [19] recomputed: no real
+        // record of slot 2 exists.
+        it.each([
+          ['with ble.qn_user_key', keyed],
+          ['without it', makeAdapter],
+        ] as const)('still drops a record of another user slot, %s', async (_label, make) => {
+          const slot2 = derive(RECORD_1928, { 5: 2 });
+          const { readings, infoLines } = await run1020(make(), [...SESSION_1020, slot2]);
+          expect(readings).toEqual([]);
+          expect(infoLines).toEqual([
+            'QN: a stored weigh-in (72.6 kg at 2026-10-20T19:28:16.000Z) is not exported: the ' +
+              'scale assigned it to its user slot 2, and ble-scale-sync sends the profile of ' +
+              'slot 1 (#463)',
+          ]);
+        });
+      });
+
+      it('does not export a record of another user slot', async () => {
+        // No real record of slot 2 exists; the 0x22 mask asks for slot 1 and
+        // unassigned records only.
+        const { readings, lines } = await session(
+          keyed(),
+          [...HANDSHAKE, RECORD_463_SLOT2],
+          '2026-10-13T18:09:00Z',
+        );
+        expect(readings).toEqual([]);
+        expect(lines).toContain(
+          'QN: a stored weigh-in (71.55 kg at 2026-10-13T17:59:38.000Z) is not exported: the ' +
+            'scale assigned it to its user slot 2, and ble-scale-sync sends the profile of ' +
+            'slot 1 (#463)',
+        );
+      });
+
+      describe('with ble.qn_user_slot (#501)', () => {
+        const SLOT2_HANDSHAKE: Step[] = [INFO_463, READY_461, CONFIG_REQ_461, ACCEPTED_SLOT2, 1000];
+        const slotted = (): QnScaleAdapter => {
+          const adapter = makeAdapter();
+          adapter.configure({ qnUserKey: 1000, qnUserSlot: 2 });
+          return adapter;
+        };
+
+        it('reports a record of that slot as history', async () => {
+          const { readings, lines } = await session(
+            slotted(),
+            [...SLOT2_HANDSHAKE, RECORD_463_SLOT2],
+            '2026-10-13T18:09:00Z',
+          );
+          expect(readings).toEqual([STORED]);
+          expect(lines).toContain(
+            'QN: stored weigh-in 71.55 kg at 2026-10-13T17:59:38.000Z, user slot 2, record 1 ' +
+              'of 1, reported as history (#463)',
+          );
+        });
+
+        it('does not export a record of slot 1', async () => {
+          const { readings, lines } = await session(
+            slotted(),
+            [...SLOT2_HANDSHAKE, RECORD_463],
+            '2026-10-13T18:09:00Z',
+          );
+          expect(readings).toEqual([]);
+          expect(lines).toContain(
+            'QN: a stored weigh-in (71.55 kg at 2026-10-13T17:59:38.000Z) is not exported: the ' +
+              'scale assigned it to its user slot 1, and ble-scale-sync sends the profile of ' +
+              'slot 2 (#463)',
+          );
+        });
+
+        it('does not hold a live weigh-in when the scale accepted another slot', async () => {
+          const adapter = slotted();
+          const { readings, lines } = await session(
+            adapter,
+            [INFO_463, READY_461, CONFIG_REQ_461, 350, VISIT_OK_463, 1000, MEASURING_463, LIVE_463],
+            STARTED_463,
+          );
+          expect(readings).toHaveLength(1);
+          expect(adapter.isFinal(readings[0])).toBe(true);
+          expect(lines.some((l) => l.startsWith('QN: holding the weigh-in'))).toBe(false);
+        });
+
+        it('does not export it when the scale accepted another slot than the one sent', async () => {
+          const { readings, lines } = await session(
+            slotted(),
+            [INFO_463, READY_461, CONFIG_REQ_461, VISIT_OK_463, 1000, RECORD_463_SLOT2],
+            '2026-10-13T18:09:00Z',
+          );
+          expect(readings).toEqual([]);
+          expect(lines).toContain(
+            'QN: a stored weigh-in (71.55 kg at 2026-10-13T17:59:38.000Z) is not exported: the ' +
+              'scale did not accept the profile for user slot 2 in this session, so it is not ' +
+              'known whose it is (#463)',
+          );
+        });
+      });
+
+      it('does not export it when the scale refused the profile in this session', async () => {
+        // Refused, `a1 06 02 01 00 aa`, from the #461 log, in place of the
+        // accepted answer of the #463 session.
+        const REFUSED = Buffer.from([0xa1, 0x06, 0x02, 0x01, 0x00, 0xaa]);
+        const { readings, lines } = await session(
+          keyed(),
+          [INFO_463, READY_461, CONFIG_REQ_461, REFUSED, 1000, RECORD_463],
+          '2026-10-13T18:09:00Z',
+        );
+        expect(readings).toEqual([]);
+        expect(lines).toContain(
+          'QN: a stored weigh-in (71.55 kg at 2026-10-13T17:59:38.000Z) is not exported: the ' +
+            'scale did not accept the profile for user slot 1 in this session, so it is not ' +
+            'known whose it is (#463)',
+        );
+      });
+
+      it("does not export it when the scale accepted openScale's profile, not the first user's", async () => {
+        // The #463 frames with the ready frame before the 0x12: the ready step
+        // has already chosen openScale's frames, so the accepted visit is
+        // openScale's constant (key 8), and slot 1 need not be users[0].
+        const { readings, writes, lines } = await session(
+          keyed(),
+          [READY_461, INFO_463, CONFIG_REQ_461, VISIT_OK_463, 1000, RECORD_463],
+          '2026-10-13T18:09:00Z',
+        );
+        const visit = writes.find((w) => w[0] === 0xa0 && w[1] === 0x0d && w[2] === 0x02);
+        expect(visit).toEqual([
+          0xa0, 0x0d, 0x02, 0x01, 0x00, 0x08, 0x00, 0x21, 0x06, 0xb8, 0x04, 0x02, 0x9d,
+        ]);
+        expect(readings).toEqual([]);
+        expect(lines).toContain(
+          'QN: a stored weigh-in (71.55 kg at 2026-10-13T17:59:38.000Z) is not exported: this ' +
+            "session sent openScale's profile, not the first user with ble.qn_user_key (the " +
+            '18-byte 0x12 came after the handshake), so it is not known whose it is (#463)',
+        );
+      });
+
+      it("does not take a record stamped hours after its receipt as this session's weigh-in", async () => {
+        // The session time is chosen: 13:00Z, five hours before the record's
+        // stamp, as a scale whose clock a vendor app set with a UTC+8 base
+        // would show a 09:59Z weigh-in (R-6). Read as fresh it ended the
+        // session as a live 71.55 kg without a time, before the real weigh-in.
+        const adapter = keyed();
+        const { readings, lines } = await session(
+          adapter,
+          [INFO_463, RECORD_463],
+          '2026-10-13T13:00:00Z',
+        );
+        expect(readings).toEqual([]);
+        expect(lines).toContain(
+          'QN: stored weigh-in 71.55 kg at 2026-10-13T17:59:38.000Z, user slot 1, is stamped ' +
+            "17978 s ahead of this host's clock, so it is not the weigh-in of this session, not " +
+            'read (#463)',
+        );
+      });
+
+      // The record arrives 100 ms after the session's start time, so these two
+      // put it exactly 60.000 s and 60.001 s ahead of the host's clock.
+      it('still takes a record stamped up to a minute ahead as the weigh-in of this session', async () => {
+        const { readings } = await session(
+          keyed(),
+          [INFO_463, RECORD_463],
+          '2026-10-13T17:58:37.900Z',
+        );
+        expect(readings).toEqual([{ weight: 71.55, impedance: 497 }]);
+      });
+
+      it('does not take one stamped a millisecond more than a minute ahead', async () => {
+        const { readings, lines } = await session(
+          keyed(),
+          [INFO_463, RECORD_463],
+          '2026-10-13T17:58:37.899Z',
+        );
+        expect(readings).toEqual([]);
+        expect(lines).toContain(
+          'QN: stored weigh-in 71.55 kg at 2026-10-13T17:59:38.000Z, user slot 1, is stamped ' +
+            "60 s ahead of this host's clock, so it is not the weigh-in of this session, not " +
+            'read (#463)',
+        );
+      });
+
+      it('keeps the re-query after a record stamped ahead', async () => {
+        const { writes } = await session(
+          keyed(),
+          [INFO_463, RECORD_463, 3000],
+          '2026-10-13T13:00:00Z',
+        );
+        expect(writes.filter((w) => w[0] === 0x22)).toHaveLength(1);
+      });
+
+      it('without ble.qn_user_key only logs it, once per session', async () => {
+        const { readings, lines } = await session(
+          makeAdapter(),
+          [INFO_463, RECORD_463, 3000, RECORD_463],
+          '2026-10-13T18:09:00Z',
+        );
+        expect(readings).toEqual([]);
+        const line =
+          'QN: a stored weigh-in (71.55 kg at 2026-10-13T17:59:38.000Z, user slot 1) is not ' +
+          'exported: without ble.qn_user_key ble-scale-sync cannot tell whose it is (#463)';
+        expect(lines.filter((l) => l === line)).toHaveLength(1);
+      });
+
+      // Real frames in a made-up order of events: the live result 10 s after
+      // the record, and the record handed over again in the next session.
+      it('drops a stored record that is the live weigh-in reported just before', async () => {
+        const adapter = keyed();
+        const first = await session(adapter, [INFO_463, LIVE_463B], '2026-10-13T17:59:48Z');
+        expect(first.readings).toHaveLength(1);
+        const { readings, lines } = await session(
+          adapter,
+          [...HANDSHAKE, RECORD_463],
+          '2026-10-13T18:09:00Z',
+        );
+        expect(readings).toEqual([]);
+        expect(lines.some((l) => l.includes('is the live result reported at'))).toBe(true);
+      });
+
+      it('drops a stored record it already reported as the weigh-in of an earlier session', async () => {
+        // The record taken 42 s after it was stored, as this session's
+        // weigh-in, and the scale handing it over again in the next session.
+        const adapter = keyed();
+        const first = await session(adapter, [INFO_463, RECORD_463], '2026-10-13T18:00:20Z');
+        expect(first.readings).toEqual([{ weight: 71.55, impedance: 497 }]);
+        const { readings, lines } = await session(
+          adapter,
+          [...HANDSHAKE, RECORD_463],
+          '2026-10-13T18:09:00Z',
+        );
+        expect(readings).toEqual([]);
+        expect(lines.some((l) => l.includes('is the live result reported at'))).toBe(true);
+      });
+
+      it('does not read a record from more than a year ago', async () => {
+        const { readings, lines } = await session(
+          keyed(),
+          [...HANDSHAKE, RECORD_463],
+          '2027-10-14T00:00:00Z',
+        );
+        expect(readings).toEqual([]);
+        expect(lines).toContain(
+          'QN: stored weigh-in 71.55 kg at 2026-10-13T17:59:38.000Z is not from the past year, ' +
+            'dropped (#463)',
+        );
+      });
+
+      it('keeps the re-query after a stored weigh-in', async () => {
+        const { writes } = await session(
+          keyed(),
+          [INFO_463, RECORD_463, 3000],
+          '2026-10-13T18:09:00Z',
+        );
+        expect(writes.filter((w) => w[0] === 0x22)).toHaveLength(1);
+      });
+
+      it('still ends the session on the live weigh-in after it, without a hold', async () => {
+        const adapter = keyed();
+        const { readings } = await session(
+          adapter,
+          [...HANDSHAKE, RECORD_463, LIVE_463],
+          STARTED_463,
+        );
+        expect(readings).toEqual([STORED, { weight: 71.6, impedance: 507 }]);
+        expect(adapter.isComplete(readings[1])).toBe(true);
+        expect(adapter.isFinal(readings[1])).toBe(true);
+        expect(adapter.completionHoldMs).toBeUndefined();
+      });
+
+      it('counts a stored weigh-in as complete whatever its impedance', async () => {
+        // RECORD_463 with R50 and R500 overwritten to 150 Ohm (no real record
+        // has one that low), read without the advertisement, so as sent.
+        const lowR = Buffer.from(RECORD_463);
+        lowR.writeUInt16BE(150, 12);
+        lowR.writeUInt16BE(150, 14);
+        const adapter = keyed();
+        const { readings } = await session(
+          adapter,
+          [...HANDSHAKE, lowR],
+          '2026-10-13T18:09:00Z',
+          null,
+        );
+        expect(readings).toEqual([{ ...STORED, impedance: 150 }]);
+        expect(adapter.isComplete(readings[0])).toBe(true);
+        // A live reading with the same impedance still does not complete.
+        expect(adapter.isComplete({ weight: 71.55, impedance: 150 })).toBe(false);
+      });
+
+      // #463, 2026-10-19 16:38: the scale accepted the profile and sent its
+      // final live frame 49 ms later, before our 0x22 went out, and the session
+      // ended on it (10-13 18:10 had the same 49 ms). INFO_1019, FINAL_1019
+      // (no body fat in it) and ADVERT_1019 are byte for byte from that DEBUG
+      // log; EMPTY_461, EMPTY_24_461 and EMPTY_25_461 are the "no stored
+      // weigh-ins" answer from the #461 log, and EMPTY_24_461/EMPTY_25_461 are
+      // also what the 0x24 and 0x25 of the 10-13 record are with their payload
+      // zeroed. The answers with a record use the file's fat-zeroed copies of
+      // real frames (RECORD_463, LIVE_463, LIVE_463B) in orders and at times no
+      // log shows. No 18-byte log has a batch of more than one record, so the
+      // batch of two (ofTwo) is derived from RECORD_463, and the incomplete
+      // weigh-in (LOW_R_1019) from FINAL_1019.
+      describe('a weigh-in that comes before the answer to the stored-record query', () => {
+        /** onSessionStart in the log. */
+        const STARTED_1019 = '2026-10-19T16:38:13.480Z';
+        /**
+         * Up to the final live frame. The profile frame goes out 200 ms after
+         * the config request, so the 175 puts the acceptance 75 ms after it,
+         * as in the log (14.624 -> 14.699).
+         */
+        const BEFORE_QUERY: Step[] = [
+          INFO_1019,
+          READY_461,
+          CONFIG_REQ_461,
+          175,
+          VISIT_OK_463,
+          FINAL_1019,
+        ];
+        /** 71.15 kg, R50 4315 unscrambled with the advertisement's flag. */
+        const HELD: ScaleReading = { weight: 71.15, impedance: 499 };
+        const QUERY = [0x22, 0x06, 0x00, 0x00, 0x03, 0x2b];
+        const ACK = [0x1f, 0x05, 0x00, 0x10, 0x34];
+        /**
+         * RECORD_463 as record `index` of a batch of two, stamped `later`
+         * seconds after its own time: [3], [4] and [6..9] changed, [19]
+         * recomputed.
+         */
+        const ofTwo = (index: number, later: number): Buffer => {
+          const stamp = RECORD_463.readUInt32LE(6) + later;
+          return derive(RECORD_463, {
+            3: 2,
+            4: index,
+            6: stamp & 0xff,
+            7: (stamp >>> 8) & 0xff,
+            8: (stamp >>> 16) & 0xff,
+            9: stamp >>> 24,
+          });
+        };
+        const STORED_2: ScaleReading = {
+          ...STORED,
+          timestamp: new Date('2026-10-13T18:00:38.000Z'),
+        };
+        /**
+         * FINAL_1019 with R50 and R500 at 150 Ohm (read without the
+         * advertisement, so as sent), which no live frame has: a stable weigh-in
+         * that is not complete. [7..10] changed, [14] recomputed.
+         */
+        const LOW_R_1019 = derive(FINAL_1019, { 7: 0x00, 8: 0x96, 9: 0x00, 10: 0x96 });
+        const same = (a: number[], b: number[]): boolean =>
+          a.length === b.length && a.every((x, i) => x === b[i]);
+        const count = (writes: number[][], frame: number[]): number =>
+          writes.filter((w) => same(w, frame)).length;
+        const isVisit = (w: number[]): boolean => w[0] === 0xa0 && w[1] === 0x0d && w[2] === 0x02;
+        const ACCEPTED =
+          'QN: the scale accepted the profile, asking it for its stored weigh-ins now, as the ' +
+          'vendor app does (#463)';
+        const holding = (kg: number): string =>
+          `QN: holding the weigh-in (${kg} kg) for the scale's answer to the stored-record ` +
+          'query, up to 3 s, longer while stored weigh-ins are still arriving (#463)';
+        const ends = (why: string): string =>
+          `QN: ${why}; the session ends on the weigh-in held for it (71.15 kg) (#463)`;
+        const run = (adapter: QnScaleAdapter, steps: Step[], now = STARTED_1019) =>
+          session(adapter, steps, now, ADVERT_1019);
+
+        it('derives its frames only in the bytes they name', () => {
+          for (const [frame, later] of [
+            [ofTwo(1, 0), 0],
+            [ofTwo(2, 60), 60],
+          ] as const) {
+            expect(hasValidSumChecksum(frame)).toBe(true);
+            const changed = [...frame.keys()].filter((i) => frame[i] !== RECORD_463[i]);
+            expect(changed.every((i) => [3, 4, 6, 7, 8, 9, 19].includes(i))).toBe(true);
+            expect(frame.readUInt32LE(6) - RECORD_463.readUInt32LE(6)).toBe(later);
+          }
+          expect(hasValidSumChecksum(LOW_R_1019)).toBe(true);
+          const changed = [...LOW_R_1019.keys()].filter((i) => LOW_R_1019[i] !== FINAL_1019[i]);
+          expect(changed.every((i) => [7, 8, 9, 10, 14].includes(i))).toBe(true);
+        });
+
+        it('holds only a complete weigh-in', async () => {
+          const adapter = keyed();
+          const { readings } = await session(
+            adapter,
+            [...BEFORE_QUERY.slice(0, -1), LOW_R_1019, FINAL_1019, EMPTY_461],
+            STARTED_1019,
+            null,
+          );
+          // No advertisement: 150 is read as sent, 4315 unscrambled (D071).
+          const full = { weight: 71.15, impedance: 499 };
+          expect(readings).toEqual([{ weight: 71.15, impedance: 150 }, full, full]);
+          expect(readings.map((r) => adapter.isFinal(r))).toEqual([true, false, true]);
+        });
+
+        it('asks for the stored weigh-ins as soon as the scale accepts the profile', async () => {
+          const { writes, lines } = await run(keyed(), [
+            ...BEFORE_QUERY.slice(0, -1),
+            // 100 ms after the acceptance, still before the handshake's 0x22.
+            (c) => expect(count(c.writes, QUERY)).toBe(1),
+            FINAL_1019,
+            1000,
+          ]);
+          expect(count(writes, QUERY)).toBe(1);
+          const visit = writes.findIndex(isVisit);
+          expect(writes.slice(visit + 1, visit + 3)).toEqual([QUERY, ACK]);
+          expect(lines).toContain(ACCEPTED);
+        });
+
+        // An acceptance 250 ms after the profile frame (a slow link; the logs
+        // have 75 and 84 ms) comes after the handshake's 0x22, which stays the
+        // only one; the weigh-in is held for its answer all the same.
+        it('asks once when the acceptance comes after the handshake has asked', async () => {
+          const adapter = keyed();
+          const { readings, writes } = await run(adapter, [
+            INFO_1019,
+            READY_461,
+            CONFIG_REQ_461,
+            350,
+            (c) => expect(count(c.writes, QUERY)).toBe(1),
+            VISIT_OK_463,
+            FINAL_1019,
+            EMPTY_461,
+          ]);
+          expect(count(writes, QUERY)).toBe(1);
+          expect(readings).toEqual([HELD, HELD]);
+          expect(readings.map((r) => adapter.isFinal(r))).toEqual([false, true]);
+        });
+
+        it('holds the weigh-in that came before the answer', async () => {
+          const adapter = keyed();
+          const { readings, writes, lines } = await run(adapter, BEFORE_QUERY);
+          expect(readings).toEqual([HELD]);
+          expect(adapter.isFinal(readings[0])).toBe(false);
+          expect(adapter.completionHoldMs).toBe(3000);
+          expect(count(writes, ACK)).toBe(1);
+          expect(lines).toContain(holding(71.15));
+        });
+
+        it('ends the session on it once the scale says it holds no stored weigh-ins', async () => {
+          const adapter = keyed();
+          const { readings, lines } = await run(adapter, [...BEFORE_QUERY, EMPTY_461]);
+          expect(readings).toEqual([HELD, HELD]);
+          expect(readings[1]).not.toBe(readings[0]);
+          expect(adapter.isFinal(readings[1])).toBe(true);
+          expect(adapter.completionHoldMs).toBeUndefined();
+          expect(lines).toContain(ends('the scale has answered the stored-record query'));
+        });
+
+        it("still holds it after a record's 0x24", async () => {
+          const adapter = keyed();
+          const { readings } = await run(adapter, [...BEFORE_QUERY, RECORD_463, EMPTY_24_461]);
+          expect(readings).toEqual([HELD, STORED]);
+          expect(adapter.completionHoldMs).toBe(3000);
+        });
+
+        it('ends it on the 0x25 of the last record, with the record as history, once', async () => {
+          const adapter = keyed();
+          const { readings, lines } = await run(adapter, [
+            ...BEFORE_QUERY,
+            RECORD_463,
+            EMPTY_24_461,
+            EMPTY_25_461,
+            EMPTY_25_461,
+            EMPTY_461,
+          ]);
+          expect(readings).toEqual([HELD, STORED, HELD]);
+          expect(adapter.isFinal(readings[2])).toBe(true);
+          expect(adapter.dedupMark()).toBe(845229578);
+          expect(lines).toContain(
+            'QN: stored weigh-in 71.55 kg at 2026-10-13T17:59:38.000Z, user slot 1, record 1 of ' +
+              '1, reported as history (#463)',
+          );
+          expect(lines.filter((l) => l.includes('the session ends on the weigh-in held'))).toEqual([
+            ends('the scale has answered the stored-record query'),
+          ]);
+        });
+
+        // BEFORE_QUERY (2026-10-19 frames) with the 2026-10-20 19:28 record,
+        // at the 19:39 session's time: real frames in an order and at a time
+        // no log shows.
+        it('ends it on the 0x25 of a last record kept for no user, with that record as history', async () => {
+          const adapter = keyed();
+          const { readings } = await run(
+            adapter,
+            [...BEFORE_QUERY, RECORD_1928, EMPTY_24_461, EMPTY_25_461],
+            '2026-10-20T19:39:50.232Z',
+          );
+          expect(readings).toEqual([
+            HELD,
+            {
+              weight: 72.6,
+              impedance: 502,
+              timestamp: new Date('2026-10-20T19:28:16.000Z'),
+              fromMemory: true,
+            },
+            HELD,
+          ]);
+          expect(adapter.isFinal(readings[2])).toBe(true);
+        });
+
+        // The 19:39 final held, and the 17:58 record (32 s old at the chosen
+        // time) coming during the hold: an order no log shows.
+        it('names a record kept for no user as such when it comes during the hold', async () => {
+          const { readings, infoLines } = await run(
+            keyed(),
+            [
+              INFO_1020,
+              READY_461,
+              CONFIG_REQ_461,
+              193,
+              VISIT_OK_463,
+              FINAL_1020,
+              RECORD_1758,
+              EMPTY_24_461,
+              EMPTY_25_461,
+            ],
+            '2026-10-20T17:58:40Z',
+          );
+          expect(readings).toEqual([
+            { weight: 72.55, impedance: 501 },
+            { weight: 72.55, impedance: 501 },
+          ]);
+          expect(infoLines).toEqual([
+            'QN: a stored weigh-in (71.1 kg at 2026-10-20T17:58:08.000Z, assigned to no user) is ' +
+              'not exported: it came while this connection held its own weigh-in for the stored ' +
+              'ones, and one from the last 90 seconds may be that weigh-in again (#463)',
+          ]);
+        });
+
+        it('reports the hold as pending while records of a batch are still to come', async () => {
+          const adapter = keyed();
+          const { readings } = await run(adapter, [
+            ...BEFORE_QUERY,
+            (c) => expect(c.readings).toHaveLength(1),
+            ofTwo(1, 0),
+            () => expect(adapter.isCompositionPending()).toBe(true),
+            EMPTY_24_461,
+            EMPTY_25_461,
+            (c) => expect(c.readings).toHaveLength(2),
+            ofTwo(2, 60),
+            () => expect(adapter.isCompositionPending()).toBe(false),
+            EMPTY_24_461,
+            EMPTY_25_461,
+          ]);
+          expect(readings).toEqual([HELD, STORED, STORED_2, HELD]);
+        });
+
+        it('says when the scale did not answer within the hold', async () => {
+          const { lines } = await run(keyed(), [...BEFORE_QUERY, 3000]);
+          expect(lines).toContain(
+            ends('the scale did not answer the stored-record query within 3 s'),
+          );
+        });
+
+        it('says when the scale did not finish its answer within the hold', async () => {
+          const { lines } = await run(keyed(), [...BEFORE_QUERY, RECORD_463, 3000]);
+          expect(lines).toContain(
+            ends('the scale did not finish its answer to the stored-record query within 3 s'),
+          );
+        });
+
+        // The session time is chosen: 42 s after the record's stamp, so the
+        // record is from the last 90 seconds. It comes twice, as a re-query
+        // can bring it again, and gets one line, in the normal log.
+        it('does not export a record from the last 90 seconds that comes during the hold', async () => {
+          const { readings, infoLines } = await run(
+            keyed(),
+            [...BEFORE_QUERY, RECORD_463, RECORD_463, EMPTY_24_461, EMPTY_25_461],
+            '2026-10-13T18:00:20Z',
+          );
+          expect(readings).toEqual([HELD, HELD]);
+          const line =
+            'QN: a stored weigh-in (71.55 kg at 2026-10-13T17:59:38.000Z, user slot 1) is not ' +
+            'exported: it came while this connection held its own weigh-in for the stored ' +
+            'ones, and one from the last 90 seconds may be that weigh-in again (#463)';
+          expect(infoLines.filter((l) => l === line)).toHaveLength(1);
+        });
+
+        // The 10-13 18:10 order (final 84 + 49 ms after the profile frame)
+        // with the record being that very weigh-in, as the scale may hand it
+        // over (R2): the session time is chosen 42 s after the record.
+        it('drops a record during the hold that is the held weigh-in itself', async () => {
+          const { readings, lines } = await run(
+            keyed(),
+            [
+              INFO_1019,
+              READY_461,
+              CONFIG_REQ_461,
+              184,
+              VISIT_OK_463,
+              LIVE_463B,
+              RECORD_463,
+              EMPTY_24_461,
+              EMPTY_25_461,
+            ],
+            '2026-10-13T18:00:20Z',
+          );
+          expect(readings).toEqual([
+            { weight: 71.55, impedance: 509 },
+            { weight: 71.55, impedance: 509 },
+          ]);
+          expect(lines.some((l) => l.includes('is the live result reported at'))).toBe(true);
+          expect(lines.some((l) => l.includes('is not exported'))).toBe(false);
+        });
+
+        it('ends the session on the held weigh-in when another one comes, and does not acknowledge that one', async () => {
+          const adapter = keyed();
+          const { readings, writes, lines } = await run(adapter, [...BEFORE_QUERY, LIVE_463]);
+          expect(readings).toEqual([HELD, HELD]);
+          expect(adapter.isFinal(readings[1])).toBe(true);
+          expect(count(writes, ACK)).toBe(1);
+          expect(lines).toContain(ends('another weigh-in (71.6 kg) came during the wait'));
+        });
+
+        it('acknowledges the same weigh-in again without handing it over twice', async () => {
+          const adapter = keyed();
+          const { readings, writes } = await run(adapter, [...BEFORE_QUERY, FINAL_1019, EMPTY_461]);
+          expect(readings).toHaveLength(2);
+          expect(readings.map((r) => adapter.isFinal(r))).toEqual([false, true]);
+          expect(count(writes, ACK)).toBe(2);
+        });
+
+        // The 10-13 18:03 order, with the 0x22 on the acceptance: the answer
+        // came before the final live frame, so nothing is held.
+        it('does not hold a weigh-in that comes after the answer', async () => {
+          const adapter = keyed();
+          const { readings, writes } = await run(
+            adapter,
+            [
+              INFO_463,
+              READY_461,
+              CONFIG_REQ_461,
+              175,
+              VISIT_OK_463,
+              (c) => expect(count(c.writes, QUERY)).toBe(1),
+              MEASURING_463,
+              RECORD_463,
+              EMPTY_24_461,
+              EMPTY_25_461,
+              LIVE_463,
+            ],
+            STARTED_463,
+          );
+          expect(readings).toEqual([STORED, { weight: 71.6, impedance: 507 }]);
+          expect(adapter.isFinal(readings[1])).toBe(true);
+          expect(count(writes, QUERY)).toBe(1);
+        });
+
+        it('does not hold it after a "no stored weigh-ins" answer', async () => {
+          const adapter = keyed();
+          const { readings } = await run(adapter, [
+            ...BEFORE_QUERY.slice(0, -1),
+            EMPTY_461,
+            EMPTY_24_461,
+            EMPTY_25_461,
+            FINAL_1019,
+          ]);
+          expect(readings).toEqual([HELD]);
+          expect(adapter.isFinal(readings[0])).toBe(true);
+        });
+
+        // The 19-byte scale answers the 0x22 only once it has measured (D037),
+        // and nothing says it wants the 0x22 earlier. The Arboleaf 0x12 with
+        // the #461 ready and config-request frames, a pairing no log shows.
+        it('leaves the 0x22 of the 19-byte dialect after the profile frame where it was', async () => {
+          const { writes } = await run(keyed(), [
+            INFO_ARBOLEAF_331,
+            READY_461,
+            CONFIG_REQ_461,
+            175,
+            VISIT_OK_463,
+            (c) => expect(c.writes.filter((w) => w[0] === 0x22)).toEqual([]),
+            100,
+          ]);
+          expect(writes.filter((w) => w[0] === 0x22)).toEqual([
+            [0x22, 0x06, 0xff, 0x00, 0x03, 0x2a],
+          ]);
+        });
+
+        it.each([
+          ['without ble.qn_user_key', makeAdapter, BEFORE_QUERY],
+          [
+            'when the scale refused the profile',
+            keyed,
+            [INFO_1019, READY_461, CONFIG_REQ_461, 175, REFUSED_461, FINAL_1019],
+          ],
+          [
+            "after openScale's profile went out (the 0x12 after the ready frame)",
+            keyed,
+            [READY_461, INFO_1019, CONFIG_REQ_461, 175, VISIT_OK_463, FINAL_1019],
+          ],
+        ] as const)('does not hold it, nor ask early, %s', async (_label, make, steps) => {
+          const adapter = make();
+          const { readings, writes } = await run(adapter, [...steps, 1000]);
+          expect(readings).toEqual([HELD]);
+          expect(adapter.isFinal(readings[0])).toBe(true);
+          expect(adapter.completionHoldMs).toBeUndefined();
+          expect(writes.findIndex((w) => same(w, ACK))).toBeLessThan(
+            writes.findIndex((w) => same(w, QUERY)),
+          );
+        });
+      });
+    });
+
+    describe('the weigh-in ending the session before the stored-record answer', () => {
+      const RACE =
+        'QN: the weigh-in ends the session before the scale answered the stored-record query; ' +
+        'a stored weigh-in it sends after this is not read (#463)';
+
+      // Real frames of the #463 session. The order of these first two cases,
+      // our 0x22 written and the final live frame before any 0x23, is in no
+      // log: the 18-byte scale answered 0x22 within a second in every sample
+      // we have, and the two weigh-ins that beat it came before our 0x22.
+      it('says so when the final live frame comes first, without ble.qn_user_key', async () => {
+        const { readings, writes, lines } = await session(
+          makeAdapter(),
+          [INFO_463, READY_461, CONFIG_REQ_461, VISIT_OK_463, 1000, MEASURING_463, LIVE_463],
+          STARTED_463,
+        );
+        expect(writes.some((w) => w[0] === 0x22)).toBe(true);
+        expect(readings).toEqual([{ weight: 71.6, impedance: 507 }]);
+        expect(lines).toContain(RACE);
+      });
+
+      // With the option the weigh-in is held for the answer instead. Here the
+      // acceptance comes 250 ms after our profile frame (a slow link, the
+      // logs have 75 and 84 ms), after the handshake's 0x22, so that 0x22 is
+      // the only one.
+      it('holds the weigh-in instead with ble.qn_user_key, also after a slow acceptance', async () => {
+        const adapter = makeAdapter();
+        adapter.configure({ qnUserKey: 1000 });
+        const { readings, writes, lines } = await session(
+          adapter,
+          [
+            INFO_463,
+            READY_461,
+            CONFIG_REQ_461,
+            350,
+            (c) => expect(c.writes.filter((w) => w[0] === 0x22)).toHaveLength(1),
+            VISIT_OK_463,
+            1000,
+            MEASURING_463,
+            LIVE_463,
+          ],
+          STARTED_463,
+        );
+        expect(writes.filter((w) => w[0] === 0x22)).toHaveLength(1);
+        expect(adapter.isFinal(readings[0])).toBe(false);
+        expect(lines).not.toContain(RACE);
+        expect(lines.some((l) => l.startsWith('QN: holding the weigh-in (71.6 kg)'))).toBe(true);
+        expect(lines.some((l) => l.includes('asking it for its stored weigh-ins now'))).toBe(false);
+      });
+
+      it('says nothing when the scale answered first', async () => {
+        const adapter = makeAdapter();
+        adapter.configure({ qnUserKey: 1000 });
+        const { lines } = await session(
+          adapter,
+          [
+            INFO_463,
+            READY_461,
+            CONFIG_REQ_461,
+            VISIT_OK_463,
+            1000,
+            MEASURING_463,
+            RECORD_463,
+            LIVE_463,
+          ],
+          STARTED_463,
+        );
+        expect(lines).not.toContain(RACE);
+      });
+
+      it('says nothing before our 0x22 went out', async () => {
+        const { lines } = await session(makeAdapter(), [INFO_463, LIVE_463], STARTED_463);
+        expect(lines).not.toContain(RACE);
+      });
+
+      it('says nothing on the classic dialect', async () => {
+        // The maintainer's classic weigh-in (INFO_CLASSIC, STABLE_CLASSIC) at
+        // the /100 bit 0 of its [10] names (D068). That log's ready and
+        // config-request frames are not in hand, so #283's classic ones drive
+        // the handshake to our 0x22, which the line needs.
+        const { readings, writes, lines } = await session(
+          makeAdapter(),
+          [INFO_CLASSIC, READY_283, CONFIG_REQ_283, 1000, STABLE_CLASSIC],
+          STARTED_463,
+          null,
+        );
+        expect(lines).toContain('QN: scale info (17B, dialect=classic), factor=100, proto=0xff');
+        expect(writes.some((w) => w[0] === 0x22)).toBe(true);
+        expect(readings).toEqual([{ weight: 84.15, impedance: 510 }]);
+        expect(lines).not.toContain(RACE);
+      });
     });
   });
 });

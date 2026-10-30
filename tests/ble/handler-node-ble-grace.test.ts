@@ -6,6 +6,7 @@ import type {
   BleDeviceInfo,
   BodyComposition,
 } from '../../src/interfaces/scale-adapter.js';
+import { makeBodyComposition } from '../helpers/scale-test-utils.js';
 
 // Suppress log output during tests.
 vi.spyOn(console, 'log').mockImplementation(() => {});
@@ -40,7 +41,7 @@ vi.mock('node-ble', () => ({
 }));
 
 const { _internals } = await import('../../src/ble/handler-node-ble/index.js');
-const { IMPEDANCE_GRACE_MS } = await import('../../src/ble/types.js');
+const { bleLog, IMPEDANCE_GRACE_MS } = await import('../../src/ble/types.js');
 
 // ─── Mocks ───────────────────────────────────────────────────────────────────
 
@@ -98,7 +99,8 @@ function makePassiveAdapter(
       }
     }) as ScaleAdapter['parseServiceData'],
     isComplete: (r: ScaleReading): boolean => r.weight > 0 && r.impedance > 0,
-    computeMetrics: (_r: ScaleReading): BodyComposition => ({ weight: 70.0, impedance: 500 }),
+    computeMetrics: (_r: ScaleReading): BodyComposition =>
+      makeBodyComposition({ weight: 70.0, impedance: 500 }),
     parseNotification: () => null,
     charNotifyUuid: undefined as unknown as string,
     charWriteUuid: undefined as unknown as string,
@@ -291,6 +293,61 @@ describe('handler-node-ble broadcastScanNodeBle grace timer (#163 follow-up)', (
     });
   });
 
+  it('logs each Device1 drop once and resolves once the device advertises again', async () => {
+    vi.useFakeTimers({
+      toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'],
+    });
+    const adapter = makePassiveAdapter('complete');
+    const device = makeDevice();
+    const btAdapter = makeAdapter();
+
+    const dropped = Object.assign(
+      new Error(
+        `Method "Get" with signature "ss" on interface "org.freedesktop.DBus.Properties" doesn't exist\n`,
+      ),
+      { name: 'DBusError', type: 'org.freedesktop.DBus.Error.UnknownObject' },
+    );
+    let gets = 0;
+    device.helper.prop = vi.fn(async (name: string) => {
+      if (name !== 'ServiceData') return undefined;
+      gets += 1;
+      // Dropped twice, back without data, dropped again, then a reading: the
+      // second drop must be logged again after the successful read in between.
+      if (gets === 3) return undefined;
+      if (gets <= 4) throw dropped;
+      return serviceDataPayload();
+    });
+
+    const debug = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+    try {
+      const promise = _internals.broadcastScanNodeBle(
+        adapter,
+        btAdapter as never,
+        device as never,
+        'AA:BB:CC:DD:EE:FF',
+        {},
+      );
+      await new Promise((r) => setImmediate(r));
+      for (let i = 0; i < 5; i++) await vi.advanceTimersByTimeAsync(600);
+
+      const result = await promise;
+      expect(result.reading.impedance).toBe(500);
+      expect(gets).toBe(5);
+      expect(
+        debug.mock.calls.filter(([message]) =>
+          String(message).includes('BlueZ dropped the device'),
+        ),
+      ).toHaveLength(2);
+      expect(
+        debug.mock.calls.filter(([message]) =>
+          String(message).includes('Advertisement poll error'),
+        ),
+      ).toHaveLength(0);
+    } finally {
+      debug.mockRestore();
+    }
+  });
+
   it('deadline with nothing held: rejects as before', async () => {
     vi.useFakeTimers({
       toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'],
@@ -326,7 +383,8 @@ function makeMfgAdapter(): ScaleAdapter {
       data.length === 4 ? { weight: 91.22, impedance: 0 } : null,
     ) as ScaleAdapter['parseBroadcast'],
     isComplete: (r: ScaleReading): boolean => r.weight > 0,
-    computeMetrics: (_r: ScaleReading): BodyComposition => ({ weight: 91.22, impedance: 0 }),
+    computeMetrics: (_r: ScaleReading): BodyComposition =>
+      makeBodyComposition({ weight: 91.22, impedance: 0 }),
     parseNotification: () => null,
     charNotifyUuid: undefined as unknown as string,
     charWriteUuid: undefined as unknown as string,

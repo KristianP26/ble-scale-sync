@@ -1,0 +1,133 @@
+{
+  "returned": true,
+  "exports": [
+    {
+      "to": "dad/garmin@global:0",
+      "weight": 84,
+      "impedance": 0,
+      "user": "dad",
+      "timestamp": "2026-10-21T07:40:00.000Z",
+      "historical": true
+    },
+    {
+      "to": "mom/garmin@global:0",
+      "weight": 61.05,
+      "impedance": 0,
+      "user": "mom",
+      "timestamp": "2026-10-21T07:30:00.000Z",
+      "historical": true
+    },
+    {
+      "to": "mom/garmin@global:0",
+      "weight": 61.2,
+      "impedance": 500,
+      "user": "mom",
+      "timestamp": "2026-10-21T08:00:00.000Z"
+    }
+  ],
+  "computeMetrics": [
+    {
+      "weight": 84,
+      "impedance": 0,
+      "profile": {
+        "height": 183,
+        "age": 36,
+        "gender": "male",
+        "isAthlete": false,
+        "birthDate": "1990-06-15",
+        "lastKnownWeight": 82
+      }
+    },
+    {
+      "weight": 61.05,
+      "impedance": 0,
+      "profile": {
+        "height": 165,
+        "age": 34,
+        "gender": "female",
+        "isAthlete": false,
+        "birthDate": "1992-03-20",
+        "lastKnownWeight": 60
+      }
+    },
+    {
+      "weight": 61.2,
+      "impedance": 500,
+      "profile": {
+        "height": 165,
+        "age": 34,
+        "gender": "female",
+        "isAthlete": false,
+        "birthDate": "1992-03-20",
+        "lastKnownWeight": 60
+      }
+    }
+  ],
+  "queued": [],
+  "lastKnownWeightWrites": [],
+  "replayAnchorWrites": [
+    {
+      "slug": "mom",
+      "weight": 61.2,
+      "time": "2026-10-21T08:00:00.000Z"
+    }
+  ],
+  "updateChecks": 1,
+  "display": [
+    [
+      "beep",
+      1200,
+      200,
+      2
+    ],
+    [
+      "reading",
+      "mom",
+      "Mom",
+      61.2,
+      500,
+      [
+        "garmin"
+      ]
+    ],
+    [
+      "result",
+      "mom",
+      "Mom",
+      61.2,
+      [
+        {
+          "name": "garmin",
+          "ok": true
+        }
+      ]
+    ]
+  ],
+  "after": {
+    "lastExportedWeights": {
+      "dad": 84,
+      "mom": 61.2
+    },
+    "lastExportedAt": {
+      "dad": "2026-10-21T07:00:00.000Z",
+      "mom": "2026-10-21T08:00:00.000Z"
+    },
+    "lastKnownWeight": {
+      "dad": 82,
+      "mom": 61.2
+    }
+  },
+  "log": [
+    "[Sync] Raw reading: 61.20 kg / 500 Ohm (+ 2 historical)",
+    "[Sync] [Mom] Matched (tier: exact)",
+    "[Sync] [Dad] [historic 2026-10-21T07:40:00.000Z] Measurement: 84.00 kg / 0 Ohm",
+    "[Sync] Exporting to: garmin...",
+    "[Sync] Done.",
+    "[Sync] [Mom] [historic 2026-10-21T07:30:00.000Z] Measurement: 61.05 kg / 0 Ohm",
+    "[Sync] Exporting to: garmin...",
+    "[Sync] Done.",
+    "[Sync] [Mom] Measurement: 61.20 kg / 500 Ohm",
+    "[Sync] Exporting to: garmin...",
+    "[Sync] Done."
+  ]
+}

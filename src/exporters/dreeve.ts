@@ -4,7 +4,8 @@ import type { Exporter, ExportContext, ExportResult } from '../interfaces/export
 import type { ExporterSchema } from '../interfaces/exporter-schema.js';
 import type { DreeveConfig } from './config.js';
 import { toLocalDate } from './intervals.js';
-import { withRetry, httpError, httpHealthcheck, NonRetryableError } from '../utils/retry.js';
+import { NonRetryableError } from '../utils/retry.js';
+import { sendWithRetry, probe } from './http.js';
 
 const log = createLogger('Dreeve');
 /** Exact: 1 lb = 0.45359237 kg by definition, the factor Dreeve converts back with. */
@@ -67,12 +68,7 @@ export class DreeveExporter implements Exporter {
   }
 
   async healthcheck(): Promise<ExportResult> {
-    return httpHealthcheck(() =>
-      fetch(this.statusUrl, {
-        headers: { Authorization: `Bearer ${this.config.token}` },
-        signal: AbortSignal.timeout(5000),
-      }),
-    );
+    return probe(this.statusUrl, { headers: { Authorization: `Bearer ${this.config.token}` } });
   }
 
   async export(data: BodyComposition, context?: ExportContext): Promise<ExportResult> {
@@ -81,30 +77,23 @@ export class DreeveExporter implements Exporter {
       this.config.unitSystem === 'metric' ? data.weight : data.weight * POUNDS_PER_KILOGRAM;
     const body = JSON.stringify({ on, weight: Number(weight.toFixed(2)) });
 
-    return withRetry(
-      async () => {
-        const response = await fetch(this.weightsUrl, {
-          method: 'POST',
-          headers: this.headers(),
-          body,
-          signal: AbortSignal.timeout(10_000),
-        });
-
-        if (response.status === 404) {
+    return sendWithRetry(
+      this.weightsUrl,
+      { method: 'POST', headers: this.headers(), body },
+      {
+        log,
+        label: 'Dreeve weight update',
+        onStatus: (response) => {
           // Dreeve 5.3.0-5.3.2 already answer /api/v1/status, so the
           // healthcheck passes, but have no weight endpoint yet.
-          throw new NonRetryableError(
-            'HTTP 404: no weight API here, it needs Dreeve 5.3.3 or newer (or base_url is wrong)',
-          );
-        }
-        if (!response.ok) {
-          throw httpError(response.status);
-        }
-
-        log.info(`Dreeve weight recorded for ${on}.`);
-        return { success: true };
+          if (response.status === 404) {
+            throw new NonRetryableError(
+              'HTTP 404: no weight API here, it needs Dreeve 5.3.3 or newer (or base_url is wrong)',
+            );
+          }
+        },
+        onOk: () => log.info(`Dreeve weight recorded for ${on}.`),
       },
-      { log, label: 'Dreeve weight update' },
     );
   }
 }

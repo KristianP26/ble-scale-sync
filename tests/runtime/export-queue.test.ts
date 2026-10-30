@@ -76,6 +76,26 @@ describe('export retry queue (#412)', () => {
     expect(loaded[0].exporter).toBe('garmin');
   });
 
+  // #497: a withheld composition value is null, and a retry must send null
+  // again, not drop the key or turn it into 0.
+  it('round-trips a payload with withheld (null) values', () => {
+    const withheld = {
+      weight: 80,
+      impedance: 0,
+      bmi: 23.9,
+      bodyFatPercent: null,
+      waterPercent: null,
+      boneMass: null,
+      muscleMass: null,
+      visceralFat: null,
+      physiqueRating: null,
+      bmr: 1750,
+      metabolicAge: 30,
+    } satisfies BodyComposition;
+    saveQueue(file, [entry({ payload: withheld })]);
+    expect(loadQueue(file, NOW)[0].payload).toEqual(withheld);
+  });
+
   it('writes the file 0600, because it holds body composition and a name', () => {
     saveQueue(file, [entry({ userName: 'Kristian' })]);
     // Windows does not model POSIX permission bits, so assert only where it means something.
@@ -532,7 +552,7 @@ describe('export retry queue: two exporters of one type (D029) and shutdown (E-1
 
     await flushQueue(file, lookupIn(garmin, fileExp), NOW, ac.signal);
 
-    const lines = warn.mock.calls.map((c) => c.map(String).join(' ')).join(' | ');
+    const lines = warn.mock.calls.map((c: unknown[]) => c.map(String).join(' ')).join(' | ');
     expect(lines).toMatch(
       /Shutdown requested while retrying a queued garmin export for 'dad' measured at 2026-09-09T07:00:00\.000Z/,
     );
@@ -553,7 +573,7 @@ describe('export retry queue: the log says what waits and when (#460)', () => {
   let info: ReturnType<typeof vi.spyOn>;
   let warn: ReturnType<typeof vi.spyOn>;
   const linesOf = (spy: ReturnType<typeof vi.spyOn>): string[] =>
-    spy.mock.calls.map((c) => c.map(String).join(' '));
+    spy.mock.calls.map((c: unknown[]) => c.map(String).join(' '));
 
   // The reporter's three entries after their first retries.
   const A = '2026-10-09T11:10:03.643Z';

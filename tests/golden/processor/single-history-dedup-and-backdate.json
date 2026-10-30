@@ -1,0 +1,137 @@
+{
+  "returned": true,
+  "exports": [
+    {
+      "to": "dad/garmin@global:0",
+      "weight": 84.3,
+      "impedance": 475,
+      "user": "dad",
+      "timestamp": "2026-10-21T06:00:00.000Z",
+      "historical": true
+    },
+    {
+      "to": "dad/garmin@global:0",
+      "weight": 84.6,
+      "impedance": 0,
+      "user": "dad",
+      "timestamp": "2026-10-21T08:00:00.000Z",
+      "historical": true
+    },
+    {
+      "to": "dad/garmin@global:0",
+      "weight": 84.4,
+      "impedance": 480,
+      "user": "dad",
+      "timestamp": "2026-10-21T07:59:00.000Z"
+    },
+    {
+      "to": "dad/mqtt@global:1",
+      "weight": 84.4,
+      "impedance": 480,
+      "user": "dad",
+      "timestamp": "2026-10-21T07:59:00.000Z"
+    }
+  ],
+  "computeMetrics": [
+    {
+      "weight": 84.3,
+      "impedance": 475,
+      "profile": {
+        "height": 183,
+        "age": 36,
+        "gender": "male",
+        "isAthlete": false,
+        "birthDate": "1990-06-15",
+        "lastKnownWeight": 82
+      }
+    },
+    {
+      "weight": 84.6,
+      "impedance": 0,
+      "profile": {
+        "height": 183,
+        "age": 36,
+        "gender": "male",
+        "isAthlete": false,
+        "birthDate": "1990-06-15",
+        "lastKnownWeight": 82
+      }
+    },
+    {
+      "weight": 84.4,
+      "impedance": 480,
+      "profile": {
+        "height": 183,
+        "age": 36,
+        "gender": "male",
+        "isAthlete": false,
+        "birthDate": "1990-06-15",
+        "lastKnownWeight": 82
+      }
+    }
+  ],
+  "queued": [],
+  "lastKnownWeightWrites": [],
+  "replayAnchorWrites": [
+    {
+      "slug": "dad",
+      "weight": 84.4,
+      "time": "2026-10-21T07:59:00.000Z"
+    }
+  ],
+  "updateChecks": 1,
+  "display": [
+    [
+      "reading",
+      "dad",
+      "Dad",
+      84.4,
+      480,
+      [
+        "garmin",
+        "mqtt"
+      ]
+    ],
+    [
+      "result",
+      "dad",
+      "Dad",
+      84.4,
+      [
+        {
+          "name": "garmin",
+          "ok": true
+        },
+        {
+          "name": "mqtt",
+          "ok": true
+        }
+      ]
+    ]
+  ],
+  "after": {
+    "lastExportedWeights": {
+      "dad": 84.4
+    },
+    "lastExportedAt": {
+      "dad": "2026-10-21T07:59:00.000Z"
+    },
+    "lastKnownWeight": {
+      "dad": 84.4
+    }
+  },
+  "log": [
+    "[Sync] [historic 2026-10-20T08:00:00.000Z] Skipping replay: weight 82.05 kg matches the last exported weight within +/-0.1 kg and no measurement time is saved for that weight yet (last_known_weight from the config), so a newer weigh-in cannot be told apart from a replay",
+    "[Sync] [historic 2026-10-21T06:00:00.000Z] Measurement: 84.30 kg / 475 Ohm",
+    "[Sync] Historical reading (2026-10-21T06:00:00.000Z): skipping non-back-date exporters [mqtt]",
+    "[Sync] Exporting to: garmin...",
+    "[Sync] Done.",
+    "[Sync] [historic 2026-10-21T08:00:00.000Z] Measurement: 84.60 kg / 0 Ohm",
+    "[Sync] Historical reading (2026-10-21T08:00:00.000Z): skipping non-back-date exporters [mqtt]",
+    "[Sync] Exporting to: garmin...",
+    "[Sync] Done.",
+    "[Sync] Measurement: 84.40 kg / 480 Ohm",
+    "[Sync] Exporting to: garmin, mqtt...",
+    "[Sync] Done."
+  ]
+}

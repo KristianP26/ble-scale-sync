@@ -3,7 +3,7 @@
 import { connectWithRecovery } from './connect.js';
 import { broadcastScanNodeBle } from './broadcast.js';
 
-export { scanAndReadRaw, scanAndRead, scanDevices } from './scan.js';
+export { scanAndReadRaw, scanDevices } from './scan.js';
 export { isPeerFresh, startPeerFreshnessTracker } from './freshness.js';
 export { resetConnection as releaseTransport } from './connection.js';
 

@@ -5,7 +5,7 @@
 // display) sits in its own file. Callers import the same names from the same
 // path (handler-mqtt-proxy/index.js) so behaviour is unchanged.
 
-export { scanAndReadRaw, scanAndRead, scanDevices } from './scan.js';
+export { scanAndReadRaw, scanDevices } from './scan.js';
 export {
   publishConfig,
   registerScaleMac,

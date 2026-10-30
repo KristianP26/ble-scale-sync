@@ -7,13 +7,30 @@ import { redactSecrets } from '../utils/error.js';
 export function formatNotification(data: BodyComposition, context?: ExportContext): string {
   const unit = context?.weightUnit ?? 'kg';
   const prefix = context?.userName ? `[${context.userName}] ` : '';
+  const pct = (v: number | null | undefined): string | null =>
+    v == null ? null : `${v.toFixed(1)}%`;
+  const mass = (v: number | null): string | null => (v === null ? null : fmtWeight(v, unit));
+  const part = (label: string, value: string | number | null | undefined): string | null =>
+    value == null ? null : `${label} ${value}`;
+  // A value that is not there is left out of its line, and a line with
+  // nothing left goes too: a withheld composition value is null, and only a
+  // scale that measured it sends a skeletal muscle percentage (#497).
+  const line = (emoji: string, ...parts: Array<string | null>): string | null => {
+    const present = parts.filter((p): p is string => p !== null);
+    return present.length ? `${emoji} ${present.join(' | ')}` : null;
+  };
   const lines = [
     `${prefix}⚖️ ${fmtWeight(data.weight, unit)} | BMI ${data.bmi.toFixed(1)}`,
-    `🏋️ Body Fat ${data.bodyFatPercent.toFixed(1)}% | Muscle ${fmtWeight(data.muscleMass, unit)}`,
-    `💧 Water ${data.waterPercent.toFixed(1)}% | 🦴 Bone ${fmtWeight(data.boneMass, unit)}`,
-    `🫀 Visceral Fat ${data.visceralFat} | BMR ${data.bmr} kcal`,
-    `📅 Metabolic Age ${data.metabolicAge} yr | Physique ${data.physiqueRating}`,
-  ];
+    line(
+      '🏋️',
+      part('Body Fat', pct(data.bodyFatPercent)),
+      part('Muscle', mass(data.muscleMass)),
+      part('Skeletal', pct(data.skeletalMusclePercent)),
+    ),
+    line('💧', part('Water', pct(data.waterPercent)), part('🦴 Bone', mass(data.boneMass))),
+    line('🫀', part('Visceral Fat', data.visceralFat), `BMR ${data.bmr} kcal`),
+    line('📅', `Metabolic Age ${data.metabolicAge} yr`, part('Physique', data.physiqueRating)),
+  ].filter((l): l is string => l !== null);
   if (context?.driftWarning) {
     lines.push(`⚠️ ${context.driftWarning}`);
   }

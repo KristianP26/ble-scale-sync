@@ -5,7 +5,6 @@ import type {
   SessionProfileSelector,
 } from '../interfaces/scale-adapter.js';
 import type { RawReading } from './shared.js';
-import type { WeightUnit } from '../config/schema.js';
 
 /**
  * The user profile a watcher hands to a GATT session: a fixed value, or a
@@ -26,7 +25,7 @@ export function currentProfile(src: ProfileSource | undefined): UserProfile | un
 /**
  * Config delivered to a {@link Watcher} on construction and on hot reload. The
  * shape is uniform across transports; a watcher ignores fields it does not use
- * (ha-bluetooth reads no GATT, so it ignores `scaleAuth` and `weightUnit`).
+ * (ha-bluetooth reads no GATT, so it ignores `scaleAuth`).
  * See #246.
  */
 export interface WatcherConfig {
@@ -35,12 +34,6 @@ export interface WatcherConfig {
   profile?: ProfileSource;
   selectProfile?: SessionProfileSelector;
   scaleAuth?: ScaleAuth;
-  /**
-   * Configured `scale.weight_unit`, for the GATT reads: a reading from an
-   * adapter without `normalizesWeight` is converted from lbs when this is
-   * 'lbs', exactly as on the native transports.
-   */
-  weightUnit?: WeightUnit;
 }
 
 /**

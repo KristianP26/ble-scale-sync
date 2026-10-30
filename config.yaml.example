@@ -20,7 +20,8 @@ version: 1
 #   adapter: hci0                     # Linux only: select BLE adapter (omit for default)
 #   force_scale_adapter: "Hutbit"     # override protocol auto-detection (requires scale_mac)
 #   session_timeout_sec: 20           # seconds one GATT session waits for a reading (default 120)
-#   preemptive_adapter_reset: false   # Linux node-ble: skip the btmgmt power-cycle after each session (default true)
+#   pairing_retry_max_min: 60         # Linux node-ble: longest wait before asking again after an unconfirmed pairing (0 = every scan)
+#   preemptive_adapter_reset: false   # Linux node-ble: skip the btmgmt power-cycle after each session (default true; a link stuck in BlueZ is still recovered)
 #   adapter_privacy: true             # Linux node-ble: LE privacy so Beurer scales keep the pairing (adapter-wide, see docs)
 #   qn_protocol_byte: 0               # QN scales only: 0 to 255, see below
 #
@@ -98,6 +99,7 @@ users:
     is_athlete: false
     weight_range: { min: 50, max: 75 }   # always in kg
     last_known_weight: null               # auto-updated after each measurement
+    # estimate_body_composition: false    # no BMI estimate when the scale measured no body composition
 
     # Beurer BF7xx / BF9xx only (consent-gated SIG scales):
     # beurer_pin: 1234                    # code the scale was paired with; 0 on a wiped scale
@@ -210,8 +212,9 @@ global_exporters:
 
 runtime:
   continuous_mode: false    # true = keep scanning in a loop (ideal for Raspberry Pi)
-  scan_cooldown: 30         # seconds between scans in continuous mode (5–3600)
-  idle_rescan_delay: 5      # seconds before rescanning when no scale was found (0-3600)
+  scan_cooldown: 30         # seconds to wait after a reading before scanning again (5-3600); built-in Bluetooth only
+  idle_rescan_delay: 5      # seconds before rescanning when no scale was found (0-3600); Linux (node-ble) only
+  no_reading_rescan_delay: 0 # min seconds before rescanning after the scale answered but sent no reading (0-3600, 0 = normal backoff); Linux (node-ble) only
   retry_failed_exports: true # keep a reading whose export failed and retry it later
   dry_run: false            # true = read scale + compute body comp, skip all exports
   debug: false              # true = verbose BLE logging

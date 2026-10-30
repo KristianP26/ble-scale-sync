@@ -73,3 +73,53 @@ describe('pairing agent MAC gate', () => {
     expect(agent().RequestPasskey(SCALE_PATH)).toBe(1894);
   });
 });
+
+/**
+ * The count a scan cycle compares to tell that the scale waited for somebody
+ * to confirm a pairing on it (#471, D063).
+ */
+describe('pairing agent prompt count (#471)', () => {
+  beforeEach(async () => {
+    agentModule._resetUserPromptsForTests();
+    agentModule.setPairingTarget(() => ({ mac: SCALE }));
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await agentModule.ensurePairingAgent(bus as any);
+  });
+
+  it('counts RequestConfirmation for the scale', () => {
+    agent().RequestConfirmation(SCALE_PATH, 123456);
+    agent().RequestConfirmation(SCALE_PATH, 654321);
+    expect(agentModule.userPromptCount(SCALE)).toBe(2);
+    expect(agentModule.userPromptCount(SCALE.toLowerCase())).toBe(2);
+  });
+
+  it('does not count a request it declined', () => {
+    expect(() => agent().RequestConfirmation(OTHER_PATH, 123456)).toThrow();
+    expect(agentModule.userPromptCount('AA:BB:CC:DD:EE:FF')).toBe(0);
+    expect(agentModule.userPromptCount(SCALE)).toBe(0);
+  });
+
+  it('counts DisplayPasskey and DisplayPinCode only for the scale', () => {
+    agent().DisplayPasskey(SCALE_PATH, 123456, 0);
+    agent().DisplayPinCode(SCALE_PATH, '0000');
+    agent().DisplayPasskey(OTHER_PATH, 123456, 0);
+    agent().DisplayPinCode(OTHER_PATH, '0000');
+    expect(agentModule.userPromptCount(SCALE)).toBe(2);
+    expect(agentModule.userPromptCount('AA:BB:CC:DD:EE:FF')).toBe(0);
+  });
+
+  it('does not count what the app answers by itself', () => {
+    agentModule.setPairingTarget(() => ({ pin: 1894, mac: SCALE }));
+    agent().RequestPasskey(SCALE_PATH);
+    agent().RequestPinCode(SCALE_PATH);
+    agent().RequestAuthorization(SCALE_PATH);
+    agent().AuthorizeService(SCALE_PATH, '0000181d-0000-1000-8000-00805f9b34fb');
+    expect(agentModule.userPromptCount(SCALE)).toBe(0);
+  });
+
+  it('keeps the count across forgetPairingAgent', () => {
+    agent().RequestConfirmation(SCALE_PATH, 123456);
+    agentModule.forgetPairingAgent();
+    expect(agentModule.userPromptCount(SCALE)).toBe(1);
+  });
+});

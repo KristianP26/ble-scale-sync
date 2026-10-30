@@ -1,300 +1,185 @@
 ---
 title: Home Assistant Add-on
-description: Install BLE Scale Sync as a Home Assistant add-on, read measurements from Bluetooth smart scales, and expose them as HA sensors via MQTT auto-discovery.
-head:
-  - - meta
-    - name: keywords
-      content: home assistant ble scale, hassio bluetooth scale, home assistant addon, mqtt auto discovery, ble scale sync hassio, smart scale home assistant, hacs bluetooth scale
+description: Install and configure the BLE Scale Sync add-on on Home Assistant OS or Supervised, including Bluetooth transports, Garmin with MFA, custom config and persistent data.
 ---
 
 # Home Assistant Add-on
 
-BLE Scale Sync ships as a native Home Assistant add-on for Home Assistant OS and Supervised installations. The add-on generates a working config from the UI, auto-detects the Mosquitto broker, exposes every metric as an MQTT auto-discovery sensor, and can optionally upload to Garmin Connect.
+The add-on runs BLE Scale Sync on Home Assistant OS and Supervised installs. It builds its config from the add-on options, finds the Mosquitto broker and publishes every metric as an MQTT auto-discovery sensor. Home Assistant 2026.2 and later shows add-ons as apps, under **Settings** > **Apps**.
 
 ## Install
 
 [![Add BLE Scale Sync repository to your Home Assistant](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2FKristianP26%2Fble-scale-sync)
 
-The badge above uses [My Home Assistant](https://www.home-assistant.io/integrations/my/) to open your instance, confirm the repository, and drop you on the Add-on Store with **BLE Scale Sync** visible. Click **Install**, then head to the **Configuration** tab and fill in your scale MAC and user profile. Start the add-on from the **Info** tab. The Supervisor pulls the arm64 / armv7 / amd64 image to match your host.
+1. Click the badge, or add `https://github.com/KristianP26/ble-scale-sync` under **Settings** > **Apps** > **Install app** > three-dot menu > **Repositories**.
+2. Open **BLE Scale Sync** in the store and click **Install**.
+3. If you have no MQTT broker yet, install and start the **Mosquitto broker** add-on.
 
-::: details Prefer manual steps?
+Images exist for amd64, aarch64 and armv7. The add-on uses `host_network`, `host_dbus` and the `NET_ADMIN` and `NET_RAW` capabilities to reach the host's Bluetooth adapter through BlueZ, and runs without AppArmor, whose default profile blocks the D-Bus calls BlueZ needs.
 
-1. **Settings** > **Add-ons** > **Add-on Store**.
-2. Three-dot menu > **Repositories** and add:
+## First Weigh-In {#quick-start}
 
-   ```
-   https://github.com/KristianP26/ble-scale-sync
-   ```
+1. On the **Configuration** tab, fill in the user profile (name, height, birth date, gender), and leave **Enable MQTT** and **Auto-detect MQTT broker** on.
+2. Leave **Scale MAC address** empty for the first weigh-in.
+3. If this host's Bluetooth adapter is out of range of the scale, or the host has none, pick another **Bluetooth transport** ([below](#bluetooth-transports)).
+4. Start the add-on on the **Info** tab and step on the scale.
+5. Copy the scale's address from the `Auto-discovered:` or `Matched:` line of the log into **Scale MAC address** and restart the add-on, so it never reads a neighbor's scale.
 
-3. Refresh the store. **BLE Scale Sync** appears under the new repository.
-4. Click **Install**, then open the **Configuration** tab and fill in your scale MAC and user profile. Start the add-on from the **Info** tab.
-   :::
+The sensors appear under **Settings** > **Devices & services** > **MQTT** after the first reading; the list is under [Home Assistant sensors](/exporters#home-assistant-sensors).
 
-::: tip
-The add-on requires `host_network`, `host_dbus`, and the `NET_ADMIN` / `NET_RAW` capabilities to access the host Bluetooth adapter through BlueZ. The Supervisor grants these automatically. The add-on also declares `apparmor: false`, because the Supervisor's default AppArmor profile blocks the D-Bus handshake that BlueZ needs. See [#271](https://github.com/KristianP26/ble-scale-sync/issues/271).
+## Bluetooth Transports
 
-It also declares `homeassistant_api`, shown as a **Home Assistant** badge on the add-on's Info page. Only the `ha-bluetooth` transport uses it, to read Home Assistant's Bluetooth advertisements through the Supervisor without a long-lived token. See [Bluetooth transports](#bluetooth-transports).
-:::
+**Bluetooth transport** (`ble_transport`) picks the radio: `local` (default, this host's adapter), `ha-bluetooth`, `esphome-proxy` or `mqtt-proxy`. [Choose a transport](/guide/transports#choose-a-transport) compares them; [Home Assistant Bluetooth](/guide/ha-bluetooth#home-assistant-add-on), [ESPHome proxy](/guide/esphome-proxy#home-assistant-add-on) and [ESP32 proxy](/guide/esp32-proxy#home-assistant-add-on) each have an add-on section.
 
-## Quick start
+With any transport but `local`:
 
-Minimal config for a single-user Renpho / Xiaomi / Eufy scale with MQTT and Home Assistant auto-discovery:
+- the options that steer this host's adapter (`ble_adapter`, `auto_clear_stale_bond`, `preemptive_adapter_reset`, `adapter_privacy`, `pairing_retry_max_min`) are left out of the config, and the log names any you set;
+- the adapter reset at startup is skipped;
+- `scan_cooldown`, `idle_rescan_delay` and `no_reading_rescan_delay` do nothing, since the add-on listens all the time.
 
-1. Install the **Mosquitto broker** add-on (if you do not already run an MQTT broker) and start it.
-2. In the BLE Scale Sync config:
-   - Leave **Scale MAC address** empty for auto-discovery, or paste the MAC you found with the `scan` command.
-   - Fill **User profile** (name, height, birth date, gender).
-   - Leave **MQTT enabled** and **MQTT auto-detect** on. The add-on reads the Mosquitto broker details from the Supervisor API, so no broker URL or credentials are needed.
-3. Start the add-on and step on the scale. Within a few minutes new sensors appear under **Settings** > **Devices & Services** > **MQTT**.
+A transport that cannot run with the options given stops the add-on with an `ERROR` line naming the option to fix; it never falls back to the host adapter.
 
-The exposed sensors cover weight, body fat, water, muscle mass, bone mass, BMI, BMR, visceral fat, metabolic age, and impedance.
+## Options {#configuration-reference}
 
-## Configuration reference
+The add-on writes `/data/config.yaml` from these options on every start, so a change applies after a restart. The third column names the `config.yaml` key each option sets.
 
-All options live under the **Configuration** tab. The add-on regenerates `/data/config.yaml` on every restart, so changes here take effect on the next start.
+### Scale and Bluetooth {#scale-and-ble}
 
-### Scale and BLE
+| Option                            | Default           | `config.yaml` key and details                                                  |
+| --------------------------------- | ----------------- | ------------------------------------------------------------------------------ |
+| `scale_mac`                       | empty             | `ble.scale_mac`, [BLE](/guide/configuration#ble)                               |
+| `ble_transport`                   | `local`           | `ble.handler`, [Bluetooth transports](#bluetooth-transports)                   |
+| `ble_adapter`                     | empty             | `ble.adapter`, `local` only                                                    |
+| `reset_bluetooth`                 | `true`            | Add-on only: power-cycles the adapter at startup, `local` only                 |
+| `force_scale_adapter`             | empty             | `ble.force_scale_adapter`, needs `scale_mac`                                   |
+| `qn_protocol_byte`, `qn_report_byte`, `qn_weight_ack`, `qn_user_key`, `qn_user_slot`, `qn_a4_prelude`, `qn_time_sync_long`, `qn_config_long`, `qn_result_ack` | empty | `ble.qn_*`, [QN scales](/guide/scales/qn) |
+| `rmsc04_profile_byte`             | empty             | `ble.rmsc04_profile_byte`, [Renpho scales](/guide/scales/renpho)               |
+| `auto_clear_stale_bond`           | `false`           | `ble.auto_clear_stale_bond`, [Beurer scales](/guide/scales/beurer)             |
+| `preemptive_adapter_reset`        | `true`            | `ble.preemptive_adapter_reset`, `local` only                                   |
+| `adapter_privacy`                 | `false`           | `ble.adapter_privacy`, [Beurer scales](/guide/scales/beurer#pairing)           |
+| `pairing_retry_max_min`           | `60`              | `ble.pairing_retry_max_min`, [Beurer scales](/guide/scales/beurer#pairing)     |
+| `esphome_proxy_host`, `esphome_proxy_port`, `esphome_proxy_encryption_key` | empty, `6053`, empty | `ble.esphome_proxy`, [ESPHome proxy](/guide/esphome-proxy) |
+| `mqtt_proxy_broker`               | `shared`          | `shared` uses the MQTT options below, `embedded` a broker in the add-on        |
+| `mqtt_proxy_device_id`, `mqtt_proxy_topic_prefix` | `esp32-ble-proxy`, `ble-proxy` | `ble.mqtt_proxy`, [ESP32 proxy](/guide/esp32-proxy#home-assistant-add-on) |
+| `mqtt_proxy_embedded_broker_port`, `mqtt_proxy_username`, `mqtt_proxy_password` | `1883`, empty, empty | Embedded broker only; username and password are required there |
+| `proxy_liveness_timeout_min`      | `30`              | `ble.proxy_liveness_timeout_min`, proxy transports only                        |
 
-| Option                                        | Default              | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| --------------------------------------------- | -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `scale_mac`                                   | empty                | Leave empty for auto-discovery. Set to a specific MAC like `AA:BB:CC:DD:EE:FF` to skip scanning. Required for scales with non-unique advertised names.                                                                                                                                                                                                                                                                                                                                                                                             |
-| `ble_transport`                               | `local`              | How the add-on reaches the scale: `local` (this host's adapter), `ha-bluetooth`, `esphome-proxy` or `mqtt-proxy`. See [Bluetooth transports](#bluetooth-transports).                                                                                                                                                                                                                                                                                                                                                                               |
-| `ble_adapter`                                 | empty (uses default) | `local` only. Set to `hci0`, `hci1`, ... on hosts with multiple Bluetooth adapters.                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| `reset_bluetooth`                             | `true`               | Runs `btmgmt power off/on` at startup. Leave on unless you run other HA Bluetooth integrations that lose connectivity when the adapter is power-cycled. Skipped with any `ble_transport` but `local`.                                                                                                                                                                                                                                                                                                                                              |
-| `force_scale_adapter`                         | empty                | Overrides protocol auto-detection with the adapter name exactly as printed in the `Adapters:` line in the log. Requires `scale_mac`, because a forced adapter claims every device it is shown. Please also report the misdetection.                                                                                                                                                                                                                                                                                                                |
-| `qn_protocol_byte`                            | empty                | QN-family scales only. The protocol byte the handshake echoes back, 0 to 255. Set it only when a QN scale completes the whole handshake in the log and then never reports a weight.                                                                                                                                                                                                                                                                                                                                                                |
-| `qn_report_byte`                              | empty                | QN-family scales only. Opt-in, and it deletes data on the scale: sends the frame that deletes the user slots this value selects (0 to 255) on every connection, which the add-on no longer sends otherwise. Leave empty unless your scale stopped reporting without it. See [the configuration notes](/guide/configuration#config-yaml-reference).                                                                                                                                                                                                 |
-| `auto_clear_stale_bond`                       | `false`              | Bonded scales only (Beurer BF7xx / BF9xx). Delete a pairing key the scale has forgotten and pair again, instead of failing every connect until `bluetoothctl remove` is run by hand.                                                                                                                                                                                                                                                                                                                                                               |
-| `preemptive_adapter_reset`                    | `true`               | Built-in Bluetooth only. Power-cycles the adapter after every connection to the scale, to clear a stuck scanning state. Leave on; turning it off only stops the brief adapter drop other HA Bluetooth integrations see after each weigh-in. It was not the cause of the Beurer BF915 re-pairing in #417 (see `adapter_privacy`).                                                                                                                                                                                                                   |
-| `adapter_privacy`                             | `false`              | Built-in Bluetooth only. For Beurer scales that ask for SET and a new pairing before every weigh-in. Turns on LE privacy on the adapter with a key derived from its address, so the scale keeps the pairing. Affects the whole adapter, Home Assistant's own Bluetooth integration included, and other paired LE devices may need pairing again; a dedicated adapter under `ble_adapter` avoids that. Remove the old pairing once after turning it on. See [the configuration notes](/guide/configuration#config-yaml-reference).                  |
-| `qn_weight_ack`                               | unset                | QN-family scales only. Sends your weight anchor right after the start command and acknowledges live weight frames, as the vendor apps do. On the 19-byte Arboleaf dialect it also sends the first user's age, height and sex as the app does, which lets the scale's own body composition be exported when it was computed for that profile; one such scale streamed its weight with this and `qn_time_sync_long` both `true` (not yet confirmed on hardware, #331). Try `true` if your QN scale completes the handshake and then reports nothing. |
-| `qn_user_key`                                 | unset                | QN-family scales with an 18- or 19-byte scale-info frame only. The user key the vendor app registered you with on the scale, 1 to 9999 (the Feelfit, Arboleaf and GE apps use 1000). Set it when the scale answers the profile frame with `a1 06 02 01 00` in the debug log and shows only the weight. The first user should be the first user in the vendor app. Not yet confirmed on an 18-byte scale (#463). See [the configuration notes](/guide/configuration#config-yaml-reference).                                                         |
-| `qn_a4_prelude`                               | unset                | QN-family scales only, and the last thing to try. Sends the two `0xA4` frames an Arboleaf vendor app sends between START and the first weight frame, replayed from one reporter's capture. They overwrite data the scale keeps for its first user, and a session that sends them does not use the scale's own body composition. Leave it unset unless `qn_weight_ack` did not help.                                                                                                                                                                |
-| `qn_time_sync_long`                           | unset                | QN-family scales only. Sends the 9-byte form of the clock-setting frame the same Arboleaf capture shows, instead of the 8-byte one. The extra byte is your UTC offset.                                                                                                                                                                                                                                                                                                                                                                             |
-| `qn_config_long`                              | unset                | QN-family scales only, and the last difference anyone has found between our start-up conversation and the vendor app's. Sends the 10-byte form of the settings frame instead of the 9-byte one. The extra bytes are undecoded.                                                                                                                                                                                                                                                                                                                     |
-| `display_unit`                                | `weight_unit`        | Unit requested on the physical display independently of exported values. Only QN-family and `AC 27` (Active Era) scales are told which unit to show.                                                                                                                                                                                                                                                                                                                                                                                               |
-| `esphome_proxy_host`                          | empty                | `esphome-proxy` only. IP address or host name of an ESPHome Bluetooth proxy that Home Assistant has not adopted.                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| `esphome_proxy_port`                          | `6053`               | `esphome-proxy` only. The node's native API port.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| `esphome_proxy_encryption_key`                | empty                | `esphome-proxy` only. The key under `api: encryption: key:` in the device's YAML (44 characters, ends in `=`). Empty for a device without API encryption.                                                                                                                                                                                                                                                                                                                                                                                          |
-| `mqtt_proxy_broker`                           | `shared`             | `mqtt-proxy` only. `shared` uses the broker of the MQTT options below (Mosquitto when auto-detected), `embedded` starts a broker inside the add-on.                                                                                                                                                                                                                                                                                                                                                                                                |
-| `mqtt_proxy_device_id`                        | `esp32-ble-proxy`    | `mqtt-proxy` only. Same as `device_id` in the ESP32's `config.json`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| `mqtt_proxy_topic_prefix`                     | `ble-proxy`          | `mqtt-proxy` only. Same as `topic_prefix` in the ESP32's `config.json`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| `mqtt_proxy_embedded_broker_port`             | `1883`               | `mqtt-proxy` with the `embedded` broker only. Port on this host; Mosquitto usually holds 1883, so pick another and set the same `mqtt_port` in the ESP32's `config.json`.                                                                                                                                                                                                                                                                                                                                                                          |
-| `mqtt_proxy_username` / `mqtt_proxy_password` | empty                | `mqtt-proxy` with the `embedded` broker only, and required there: the broker listens on this host's network, and the ESP32 logs in with them.                                                                                                                                                                                                                                                                                                                                                                                                      |
-| `proxy_liveness_timeout_min`                  | `30`                 | Proxy transports only: any `ble_transport` but `local`, or a proxy handler in a custom config. Minutes of total advertisement silence before the link is treated as wedged and the add-on restarts. 0 disables. A value in your custom config file takes precedence. No effect on the built-in Bluetooth adapter.                                                                                                                                                                                                                                  |
+### Units and User {#user-profile}
 
-`ble_adapter`, `auto_clear_stale_bond`, `preemptive_adapter_reset` and `adapter_privacy` only steer this host's adapter, so with any other `ble_transport` they are left out of the config and the log names any that is set.
+| Option                                | Default       | `config.yaml` key and details                                                   |
+| ------------------------------------- | ------------- | ------------------------------------------------------------------------------- |
+| `weight_unit`                         | `kg`          | `scale.weight_unit`, the unit of the log and notifications                      |
+| `height_unit`                         | `cm`          | `scale.height_unit`, the unit of `user_height`                                  |
+| `display_unit`                        | `weight_unit` | `scale.display_unit`, the unit on the scale's own display                       |
+| `user_name`, `user_height`, `user_birth_date`, `user_gender`, `user_is_athlete` | `Default`, `170`, `1990-01-01`, `male`, `false` | The first entry of `users`, [Users](/guide/configuration#users) |
+| `user_weight_min`, `user_weight_max`  | `40`, `150`   | `weight_range`, always in kg                                                    |
+| `user_estimate_body_composition`      | `true`        | `estimate_body_composition`, [Users](/guide/configuration#users)                |
+| `out_of_range`                        | `warn`        | `out_of_range`, [Out-of-range readings](/guide/configuration#out-of-range-readings) |
 
-The QN options, `auto_clear_stale_bond`, `preemptive_adapter_reset`, `adapter_privacy`, `display_unit` and the transport options are ignored when `custom_config` is enabled, since that mode skips config generation entirely; set them in the corresponding `ble:` or `scale:` section of your own file instead. The add-on logs a warning if you leave one of the `ble:` options or a transport option set. `proxy_liveness_timeout_min` is the exception: the add-on applies it on top of your file (the file itself is not changed) unless the file sets `ble.proxy_liveness_timeout_min` itself.
+Calculations use kg and cm whatever the units are, and MQTT sends masses in kg; to see pounds in Home Assistant, change the unit in the sensor's settings.
 
-### Unit preferences
+### MQTT and Garmin {#mqtt-auto-detection}
 
-| Option         | Default       | Allowed                          |
-| -------------- | ------------- | -------------------------------- |
-| `weight_unit`  | `kg`          | `kg`, `lbs`                      |
-| `height_unit`  | `cm`          | `cm`, `in`                       |
-| `display_unit` | `weight_unit` | `weight_unit`, `kg`, `lbs`, `st` |
+| Option                            | Default                  | `config.yaml` key and details                                                    |
+| --------------------------------- | ------------------------ | -------------------------------------------------------------------------------- |
+| `mqtt_enabled`                    | `true`                   | Adds the `mqtt` exporter, [MQTT](/exporters#mqtt)                                |
+| `mqtt_auto`                       | `true`                   | Takes the broker and login from the Mosquitto add-on, see below                  |
+| `mqtt_broker_url`, `mqtt_username`, `mqtt_password` | empty  | `broker_url`, `username`, `password`; used when auto-detection is off or fails   |
+| `mqtt_topic`                      | `scale/body-composition` | `topic`                                                                          |
+| `mqtt_ha_discovery`               | `true`                   | `ha_discovery`                                                                   |
+| `mqtt_ha_device_name`             | `BLE Scale`              | `ha_device_name`                                                                 |
+| `garmin_enabled`                  | `false`                  | Adds the `garmin` exporter, [Garmin Connect](#garmin-connect)                    |
+| `garmin_email`, `garmin_password` | empty                    | `email`, `password`                                                              |
+| `garmin_weight_only`              | `false`                  | `weight_only`, [Garmin](/exporters#garmin)                                       |
+| `garmin_upload_timeout_sec`       | `180`                    | `upload_timeout_sec`, [Garmin](/exporters#garmin)                                |
 
-The CLI and exporters display weights and heights in your chosen unit; all internal math stays in kg / cm. `display_unit` controls the physical scale separately; today only QN-family and `AC 27` (Active Era) scales support it. For example, `weight_unit: kg` with `display_unit: st` keeps Home Assistant values in kg while asking a compatible QN scale to display stones and pounds.
-
-### User profile
-
-| Option                                | Default      | Notes                                                                                                                                                                                                     |
-| ------------------------------------- | ------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `user_name`                           | `Default`    | Display name used in logs and HA entity names.                                                                                                                                                            |
-| `user_height`                         | `170`        | In the unit chosen above.                                                                                                                                                                                 |
-| `user_birth_date`                     | `1990-01-01` | `YYYY-MM-DD`. Used for age-based BMR and physique rating.                                                                                                                                                 |
-| `user_gender`                         | `male`       | `male` or `female`.                                                                                                                                                                                       |
-| `user_is_athlete`                     | `false`      | Shifts body fat formulas for athletic body types.                                                                                                                                                         |
-| `user_weight_min` / `user_weight_max` | `40` / `150` | The plausible weight range for this person, in kg. On its own it only warns; set `out_of_range` below to `skip` to have readings outside it discarded.                                                    |
-| `out_of_range`                        | `warn`       | What to do with a reading outside that range. `warn` logs it and exports anyway (the behaviour before this option existed). `skip` logs it and stops: no export, and the remembered weight is left alone. |
-
-### MQTT
-
-| Option                            | Default                  | Notes                                                                                                                                                     |
-| --------------------------------- | ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `mqtt_enabled`                    | `true`                   | Enable the MQTT exporter.                                                                                                                                 |
-| `mqtt_auto`                       | `true`                   | Auto-detect the Mosquitto add-on broker via the Supervisor API. Overrides manual URL / credentials when the Mosquitto add-on is installed.                |
-| `mqtt_broker_url`                 | empty                    | Manual broker URL, e.g. `mqtt://192.168.1.50:1883` or `mqtts://...`. Only used when `mqtt_auto` is off or auto-detection fails.                           |
-| `mqtt_username` / `mqtt_password` | empty                    | Credentials for the manual broker.                                                                                                                        |
-| `mqtt_topic`                      | `scale/body-composition` | Base topic. Payload is published to this topic; HA discovery configs go to `homeassistant/sensor/<device id>/<metric>/config`, independent of this topic. |
-| `mqtt_ha_discovery`               | `true`                   | Publish auto-discovery entities under `homeassistant/`. Disable if you want raw MQTT only.                                                                |
-| `mqtt_ha_device_name`             | `BLE Scale`              | Device name grouping the entities in HA.                                                                                                                  |
-
-### Garmin Connect
-
-| Option                             | Default | Notes                                                                                                                                                                     |
-| ---------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `garmin_enabled`                   | `false` | Enable the Garmin Connect exporter.                                                                                                                                       |
-| `garmin_email` / `garmin_password` | empty   | Garmin credentials. On first start the add-on runs `setup_garmin.py` to authenticate and saves OAuth tokens to `/data/garmin-tokens/`.                                    |
-| `garmin_weight_only`               | `false` | Upload the weight alone; BMI, body fat, water, bone, muscle, visceral fat, physique rating, metabolic age and BMR are left unset in Garmin.                               |
-| `garmin_upload_timeout_sec`        | `180`   | Seconds one Garmin upload attempt may take before it is killed (10-900). Three attempts are made. Raise it if uploads time out for a measurement that uploads fine later. |
-
-If your account uses MFA, see [MFA workaround](#mfa-workaround) below.
+With `mqtt_auto` on, the add-on reads the broker address and login from the Supervisor and logs `MQTT auto-detected: mqtt://core-mosquitto:1883`. If the Mosquitto add-on is missing or the Supervisor refuses, the log gives the HTTP status and the add-on uses the manual MQTT options.
 
 ### Runtime
 
-| Option                 | Default | Notes                                                                                                                                                                                                                                      |
-| ---------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `scan_cooldown`        | `30`    | Seconds to wait after a successful reading before scanning again. Range: 5-3600.                                                                                                                                                           |
-| `idle_rescan_delay`    | `5`     | Seconds to wait before scanning again after a cycle that found no scale while the adapter was healthy. Range: 0-3600. Real failures keep their own backoff.                                                                                |
-| `retry_failed_exports` | `true`  | Keep a reading whose upload failed and retry it later, up to 72 hours. Only targets that can record a past measurement are retried; MQTT and notifications cannot. The queue lives in `/data`, which survives add-on restarts and updates. |
-| `debug`                | `false` | Enable verbose BLE logs. Useful when opening an issue.                                                                                                                                                                                     |
-| `update_check`         | `true`  | Check once a day whether a newer version exists (anonymous, see the [FAQ](/faq#what-does-the-update-check-send)). Set `false` to turn it off.                                                                                              |
-| `custom_config`        | `false` | Ignore UI options entirely and use `/share/ble-scale-sync/config.yaml` instead. See [Custom config mode](#custom-config-mode).                                                                                                             |
-
-## Bluetooth transports
-
-`ble_transport` picks how the add-on reaches the scale. `local`, the default, is the host's own Bluetooth adapter, as before the option existed.
-
-| Your setup                                                                                                          | `ble_transport` |
-| ------------------------------------------------------------------------------------------------------------------- | --------------- |
-| The host's Bluetooth adapter is in range of the scale                                                               | `local`         |
-| The scale sends its weight in its advertisement, and Home Assistant already hears it (any adapter or proxy it uses) | `ha-bluetooth`  |
-| The scale needs a connection, and an ESPHome Bluetooth proxy that Home Assistant has not adopted is near it         | `esphome-proxy` |
-| The scale needs a connection, and an ESP32 with the BLE Scale Sync proxy firmware is near it                        | `mqtt-proxy`    |
-
-- **`ha-bluetooth`** needs nothing else, and no access token: the add-on reads Home Assistant's Bluetooth advertisements through the Supervisor. Broadcast scales only; see [which scales work](/guide/ha-bluetooth#which-scales-work) and [the add-on notes](/guide/ha-bluetooth#home-assistant-add-on).
-- **`esphome-proxy`** takes `esphome_proxy_host`, `esphome_proxy_port` and `esphome_proxy_encryption_key`. The node must not be adopted by Home Assistant; for one it already uses, pick `ha-bluetooth`. See the [ESPHome proxy guide](/guide/esphome-proxy).
-- **`mqtt-proxy`** takes the `mqtt_proxy_*` options, with the broker shared with the MQTT exporter or embedded in the add-on. See the [ESP32 proxy guide](/guide/esp32-proxy#home-assistant-add-on).
-
-A transport that cannot run with the options given (an empty host, a key the ESPHome library would refuse, no broker) stops the add-on with an `ERROR` line naming the option, instead of falling back to the host adapter you chose not to use. The adapter reset at startup is skipped for every transport but `local`.
-
-## MQTT auto-detection
-
-When `mqtt_auto: true` and the Mosquitto add-on is running on the same host, BLE Scale Sync pulls the broker URL, username, and password from the Supervisor API (`GET /services/mqtt`) and wires the MQTT exporter automatically. You will see a line like this in the logs:
-
-```
-[ble-scale-sync] MQTT auto-detected: mqtt://core-mosquitto:1883
-```
-
-If the Mosquitto add-on is not installed or the API call fails, the add-on falls back to whatever you set in `mqtt_broker_url` / `mqtt_username` / `mqtt_password`, and the log says why, with the HTTP status from the Supervisor. Before this was fixed the add-on did not declare the MQTT service, so the Supervisor refused every request and auto-detection never worked; if you set the broker by hand for that reason, you can switch back to auto-detection after updating.
+| Option                    | Default | `config.yaml` key and details                                                         |
+| ------------------------- | ------- | ------------------------------------------------------------------------------------- |
+| `scan_cooldown`           | `30`    | `runtime.scan_cooldown`, `local` only, [Runtime](/guide/configuration#runtime)        |
+| `idle_rescan_delay`       | `5`     | `runtime.idle_rescan_delay`, `local` only                                             |
+| `no_reading_rescan_delay` | `0`     | `runtime.no_reading_rescan_delay`, `local` only                                       |
+| `retry_failed_exports`    | `true`  | `runtime.retry_failed_exports`; the queue is kept in `/data`                          |
+| `debug`                   | `false` | `runtime.debug`, verbose log for issue reports                                        |
+| `update_check`            | `true`  | `update_check`, [Update check](/guide/configuration#update-check)                     |
+| `custom_config`           | `false` | Uses your own file instead of these options, [Custom config mode](#custom-config-mode) |
 
 ## Garmin Connect
 
-To upload measurements to Garmin Connect:
-
-1. Enable **Garmin Connect** and enter your email and password in the Configuration tab.
+1. Turn on **Enable Garmin Connect** and enter your Garmin email and password.
 2. Start the add-on.
-3. On first start the add-on runs `python3 garmin-scripts/setup_garmin.py --from-config --config-path /data/config.yaml`. If authentication succeeds, OAuth tokens are saved under `/data/garmin-tokens/` and subsequent runs reuse them without re-entering the password.
 
-### MFA workaround
+On the first start the add-on signs in with these credentials and saves the token in `/data/garmin-tokens/`; later starts reuse it. The log says `Garmin authentication successful`. When you turn Garmin off, the token stays, so turning it on again needs no new sign-in.
 
-Home Assistant add-ons run without an interactive terminal, so the add-on cannot prompt for a 2FA code. If your account has MFA enabled:
+### Sign In to Garmin with MFA {#mfa-workaround}
 
-1. On a laptop or desktop, clone the repo and run `python3 garmin-scripts/setup_garmin.py`. Enter email, password, and MFA code when prompted. This writes `garmin_tokens.json` to `~/.garmin_tokens/`.
-2. Copy that file to `/share/ble-scale-sync/garmin-tokens/` on the Home Assistant host. The Samba and File editor add-ons both expose `/share/` for easy uploads.
-3. Restart BLE Scale Sync. On startup the add-on detects the pre-generated token and imports it into `/data/garmin-tokens/`.
+The add-on has no terminal to type an MFA code into. If your Garmin account uses MFA, or Garmin blocks your Home Assistant host's IP address, create the token on another computer:
 
-The import only happens while the add-on has no Garmin token yet. A token placed in `/share/` later is not used (the log says so), because other add-ons and Samba users can write there. To switch to another Garmin account, reinstall the add-on, which clears `/data`, and import again.
+1. On a computer with Docker, or with BLE Scale Sync and Python 3.12 installed, run `setup-garmin` as in [Garmin authentication](/exporters#garmin-authentication) and enter the MFA code when asked.
+2. Copy `garmin_tokens.json` from the token directory it wrote to into `/share/ble-scale-sync/garmin-tokens/` on the Home Assistant host, for example with the Samba share or File editor add-on.
+3. Restart the add-on. The log shows `IMPORTING a Garmin token from /share/ble-scale-sync/garmin-tokens/garmin_tokens.json`.
 
-The same workflow applies if Garmin is blocking your HA host's IP as a data-centre / VPN address: authenticate from a trusted network and import the tokens.
+The import runs only while `/data/garmin-tokens/` holds no token, because anything that can write to `/share` could otherwise redirect your measurements to another Garmin account. A different token waiting in `/share` is not imported, and the log says so. To switch accounts, reinstall the add-on, which also clears the remembered weights and the retry queue in `/data`, and import again.
 
-## Custom config mode
+## Custom Config Mode
 
-For multi-user setups, exporters the UI does not cover (InfluxDB, Webhook, Ntfy, Strava, File) or transport settings it does not have (several ESPHome proxies, the legacy ESPHome API password), flip `custom_config: true` and drop a full `config.yaml` at:
+The options cover one user, MQTT and Garmin Connect. For several users, any other exporter, or transport settings the options lack (several ESPHome proxies, the `source` filter of `ha-bluetooth`, the legacy ESPHome API password), turn on `custom_config` and put a full `config.yaml` at `/share/ble-scale-sync/config.yaml`. [config.yaml.example](https://github.com/KristianP26/ble-scale-sync/blob/main/config.yaml.example) and the [config.yaml reference](/guide/configuration#config-yaml-reference) show every key.
 
+- The add-on copies the file at startup. The live reload watches that copy, so after editing the file under `/share`, restart the add-on.
+- The other options are ignored, the transport options included: the file's `ble.handler` decides. The log warns about a `ble` or transport option you left set. Two exceptions: `proxy_liveness_timeout_min` is applied on top of the file unless the file sets `ble.proxy_liveness_timeout_min`, and `ble_adapter` with `reset_bluetooth` controls the adapter reset at startup.
+- The add-on does not sign in to Garmin. Import a token as in [Sign in to Garmin with MFA](#mfa-workaround); it lands in `/data/garmin-tokens`, where every `garmin` exporter without its own `token_dir` looks. Only that default directory is imported, so give further Garmin accounts a `token_dir` you can write to, such as `/share/ble-scale-sync/garmin-tokens/<name>`.
+- A `strava` exporter without its own `token_dir` keeps its tokens in `/data/strava-tokens`, which survives restarts and updates.
+- In this mode the adapter reset at startup runs only when `ble_adapter` is set. Turn off `reset_bluetooth` if your file uses a proxy.
+- For Home Assistant Bluetooth, the add-on's own Supervisor access works without a long-lived token. Write the URL in full; `http://supervisor/core` alone does not reach the websocket:
+
+```yaml
+ble:
+  handler: ha-bluetooth
+  ha_bluetooth:
+    url: ws://supervisor/core/websocket
+    token: '${SUPERVISOR_TOKEN}'
 ```
-/share/ble-scale-sync/config.yaml
-```
 
-The add-on copies that file verbatim into the runtime location on each start. See [config.yaml.example](https://github.com/KristianP26/ble-scale-sync/blob/main/config.yaml.example) for the full schema.
-
-::: warning Editing it needs a restart
-The copy happens once, at startup. The config watcher that picks up live edits watches the runtime copy, not the file under `/share/`, so editing `/share/ble-scale-sync/config.yaml` while the add-on is running changes nothing until you restart it.
+::: warning Files in /share are readable by other add-ons
+Every add-on with share access and every Samba user can read and change files under `/share/`, including a custom `config.yaml` with passwords in it.
 :::
 
-Custom config mode still benefits from `last_known_weight` persistence (see below) but the add-on does not auto-run Garmin authentication; you handle that yourself by pre-seeding `/share/ble-scale-sync/garmin-tokens/`. On start the add-on imports that token into `/data/garmin-tokens`, where every `garmin` exporter without its own `token_dir` looks. With several Garmin accounts each needs its own `token_dir`. Anything under `/share/` can be read and changed by other add-ons with share access and by Samba users, including your custom `config.yaml`.
+## Test a Development Build {#testing-a-development-build}
 
-## Testing a development build
+Fixes reach the `dev` branch before a release. Adding the repository as `https://github.com/KristianP26/ble-scale-sync#dev` gives you the dev branch's add-on options and `run.sh`, but `build.yaml` pins the application image to the last release on both branches, so the application code is still the released one. An option that appears only in the dev UI therefore does nothing.
 
-Fixes land on the `dev` branch before they are released, and maintainers often ask reporters to retest there. What that means for the add-on is not obvious, so it is spelled out here.
+To run unreleased application code, run the Docker image `ghcr.io/kristianp26/ble-scale-sync:dev` outside the Supervisor, with the flags from [Docker](/guide/getting-started#docker). Every push to `dev` updates it and also publishes an immutable `dev-<sha>` tag. You lose MQTT auto-detection and the Supervisor integration.
 
-The Supervisor accepts a branch in the repository URL:
+When you report back, paste the `Version` line from the top of the log; on a dev image it ends with `(image dev @ <commit>)`.
 
-```
-https://github.com/KristianP26/ble-scale-sync#dev
-```
+## Restarts and Stored Data {#persistence}
 
-::: warning That gives you the dev add-on wrapper, not dev application code
-The add-on is a thin layer over a published application image, and `build.yaml` pins that image to the last **release** on both branches. So a `#dev` install gives you the dev branch's options UI and `run.sh`, running the released application underneath.
+If the app exits on its own, for example after repeated Bluetooth failures, the add-on starts it again after a short, growing delay; the Supervisor's Watchdog switch is not needed.
 
-This is exactly the trap in [#318](https://github.com/KristianP26/ble-scale-sync/issues/318): a new option appeared in the UI, was set, and did nothing, because the application inside the container predated it.
-:::
+| Path                                   | Content                                                                                                  |
+| -------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `/data/config.yaml`                    | The generated config, rewritten on every start with each user's `last_known_weight` kept                 |
+| `/data/garmin-tokens/`                 | Garmin token                                                                                             |
+| `/data/strava-tokens/`                 | Strava tokens of a `strava` exporter without its own `token_dir`                                         |
+| `/data/.*`                             | Retry queue, de-duplication marks, last live weigh-ins for the [replay check](/exporters#replay-check), update check date |
+| `/share/ble-scale-sync/config.yaml`    | Your file for [custom config mode](#custom-config-mode)                                                  |
+| `/share/ble-scale-sync/garmin-tokens/` | A Garmin token to import ([Sign in to Garmin with MFA](#mfa-workaround))                                             |
 
-To actually run unreleased application code today, run the plain Docker image outside the Supervisor:
+`/data` survives restarts and updates and is cleared when you uninstall the add-on. The remembered weight is stored per user slug, so renaming the user starts over.
 
-```
-ghcr.io/kristianp26/ble-scale-sync:dev
-```
+## Limitations {#limitations-and-roadmap}
 
-Every push to `dev` publishes that tag, plus an immutable `dev-<sha>` tag if you need two machines on provably the same build. See [Docker deployment](/guide/getting-started#docker) for the flags. You lose Supervisor integration and MQTT auto-detection; you gain the code under test.
-
-When reporting back, paste the `Version` line from the top of the log. On an image build it names the channel and the commit:
-
-```
-[Sync] Version 1.22.1 (image dev @ 9c67525)
-```
-
-## Persistence
-
-If the app stops on its own (for example after repeated Bluetooth failures, to start the adapter fresh), the add-on starts it again after a short, growing delay and says so in the log. You do not need to turn on the Supervisor's Watchdog switch for that.
-
-Everything that should survive add-on restarts lives under `/data/` inside the container, which the Supervisor maps to persistent storage:
-
-| Path                   | Purpose                                                                                                             |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| `/data/config.yaml`    | The merged runtime config. Regenerated from UI options on every start, with `last_known_weight` preserved per user. |
-| `/data/garmin-tokens/` | Garmin OAuth tokens produced by first authentication.                                                               |
-
-User-supplied files live under `/share/ble-scale-sync/`:
-
-| Path                                   | Purpose                                                                    |
-| -------------------------------------- | -------------------------------------------------------------------------- |
-| `/share/ble-scale-sync/config.yaml`    | Custom config (used when `custom_config: true`).                           |
-| `/share/ble-scale-sync/garmin-tokens/` | Optional pre-generated Garmin tokens imported on startup (MFA workaround). |
+- The options cover a single user. For several users or per-user exporters use [custom config mode](#custom-config-mode).
+- HACS cannot install the add-on, since HACS does not distribute Supervisor add-ons. Add the repository as under [Install](#install).
 
 ## Troubleshooting
 
-### No scale found
-
-1. Step on the scale to wake it up. Most scales go to sleep after a few seconds.
-2. Run the **scan** command from a terminal on the HA host:
-
-   ```bash
-   docker run --rm -it --network host --cap-add NET_ADMIN --cap-add NET_RAW \
-     --group-add "$(getent group bluetooth | cut -d: -f3)" -v /var/run/dbus:/var/run/dbus:ro \
-     --security-opt apparmor=unconfined \
-     ghcr.io/kristianp26/ble-scale-sync:latest scan
-   ```
-
-   On hosts whose Docker applies a restrictive default AppArmor policy, dropping `--security-opt apparmor=unconfined` makes this command exit with `DBusError` and `AccessDenied`. See [Troubleshooting](/troubleshooting#docker-issues).
-
-3. If the scale is visible, paste its MAC into the **Scale MAC address** field.
-4. If multiple Bluetooth adapters are attached, set **BLE adapter** to the one facing the scale (`hci1`, etc.).
-
-### MQTT entities do not appear
-
-1. Open the Mosquitto add-on logs and confirm it is running and accepting connections.
-2. Enable `debug: true` in the BLE Scale Sync add-on and restart. Look for `[ble-scale-sync] MQTT auto-detected: ...` at startup.
-3. Check that the scale actually produced a measurement; HA auto-discovery entities are published on the first successful reading.
-
-### Garmin "No such file or directory: oauth1_token.json"
-
-Fixed in v1.7.5. Make sure the add-on is on that version or newer. If it still fails, your account likely uses MFA. See [MFA workaround](#mfa-workaround).
-
-### Garmin "'Garmin' object has no attribute 'garth'"
-
-Fixed in v1.8.1. The `garminconnect` library released 0.3.0 on 2026-04-02 which removed the `garth` attribute. The add-on now uses the new native auth API and automatically strips incompatible legacy token files on startup, then re-authenticates from the credentials you entered. If you still see this error, upgrade to v1.8.1 or newer and restart the add-on. MFA users also need to regenerate the MFA token (single `garmin_tokens.json` file now, no more `oauth1/oauth2_token.json`).
-
-### BlueZ discovery gets stuck after hours
-
-Known upstream BlueZ bug on Broadcom adapters (`bluez/bluez#807`). See the general [troubleshooting page](/troubleshooting#ble-discovery-stops-working-after-hours-bluez-stuck-state) for the full recovery behaviour the app implements. The add-on already has `/dev/rfkill` and `CAP_NET_ADMIN` available for the recovery tiers.
-
-## Limitations and roadmap
-
-- The UI is scoped to a single user. For multi-user / per-user-exporter setups, use [custom config mode](#custom-config-mode).
-- The add-on has not yet been submitted to the [HACS](https://hacs.xyz/) default repository. For now, add the GitHub URL as a custom repository.
-- A dedicated Home Assistant notification exporter (persistent notifications or Companion app push) is planned.
-
-Source, issue tracker, and changelog live at [github.com/KristianP26/ble-scale-sync](https://github.com/KristianP26/ble-scale-sync).
+- No scale found: turn on `debug`, step on the scale and look for it in the log; see [Troubleshooting](/troubleshooting) and [Supported Scales](/guide/supported-scales).
+- MQTT entities do not appear: check that the Mosquitto add-on runs, that the log shows `MQTT auto-detected`, and that a reading was exported; discovery happens with the first reading.
+- The add-on exits with `DBusError` and `AccessDenied`: reinstall the add-on so the Supervisor applies its manifest; see [Docker issues](/troubleshooting#docker-issues).
+- A Beurer scale asks to pair again or shows a code over and over: [Beurer scales](/guide/scales/beurer).
+- Discovery stops after hours: [BlueZ stuck state](/troubleshooting#ble-discovery-stops-working-after-hours-bluez-stuck-state).
+- The add-on stops with `ERROR:` about a transport: fix the option the line names; the add-on's Documentation tab lists each message.

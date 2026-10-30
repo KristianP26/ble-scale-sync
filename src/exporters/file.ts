@@ -6,6 +6,7 @@ import type { Exporter, ExportContext, ExportResult } from '../interfaces/export
 import type { ExporterSchema } from '../interfaces/exporter-schema.js';
 import type { FileConfig } from './config.js';
 import { errMsg } from '../utils/error.js';
+import { CSV_METRIC_KEYS, METRICS, METRIC_KEYS } from './metrics.js';
 
 const log = createLogger('File');
 
@@ -16,21 +17,8 @@ function csvEscape(value: string): string {
   return value;
 }
 
-const CSV_COLUMNS = [
-  'timestamp',
-  'weight',
-  'impedance',
-  'bmi',
-  'body_fat_percent',
-  'water_percent',
-  'bone_mass',
-  'muscle_mass',
-  'visceral_fat',
-  'physique_rating',
-  'bmr',
-  'metabolic_age',
-  'user',
-] as const;
+// Fixed columns: a metric only some weigh-ins carry goes to JSONL only (#497).
+const CSV_COLUMNS = ['timestamp', ...CSV_METRIC_KEYS.map((k) => METRICS[k].column), 'user'];
 
 export const fileSchema: ExporterSchema = {
   name: 'file',
@@ -119,21 +107,14 @@ export class FileExporter implements Exporter {
       fs.appendFileSync(filePath, CSV_COLUMNS.join(',') + '\n', OWNER_ONLY);
     }
 
-    const row = [
-      timestamp,
-      data.weight.toFixed(2),
-      data.impedance,
-      data.bmi.toFixed(1),
-      data.bodyFatPercent.toFixed(1),
-      data.waterPercent.toFixed(1),
-      data.boneMass.toFixed(1),
-      data.muscleMass.toFixed(1),
-      data.visceralFat,
-      data.physiqueRating,
-      data.bmr,
-      data.metabolicAge,
-      csvEscape(user),
-    ].join(',');
+    // A withheld value (null, #497) is an empty cell, never the word null.
+    const metrics = CSV_METRIC_KEYS.map((k) => {
+      const v = data[k];
+      if (v === null) return '';
+      const { decimals } = METRICS[k];
+      return decimals === undefined ? v : v.toFixed(decimals);
+    });
+    const row = [timestamp, ...metrics, csvEscape(user)].join(',');
 
     fs.appendFileSync(filePath, row + '\n', OWNER_ONLY);
   }
@@ -146,17 +127,9 @@ export class FileExporter implements Exporter {
   ): void {
     const entry: Record<string, unknown> = {
       timestamp,
-      weight: data.weight,
-      impedance: data.impedance,
-      bmi: data.bmi,
-      bodyFatPercent: data.bodyFatPercent,
-      waterPercent: data.waterPercent,
-      boneMass: data.boneMass,
-      muscleMass: data.muscleMass,
-      visceralFat: data.visceralFat,
-      physiqueRating: data.physiqueRating,
-      bmr: data.bmr,
-      metabolicAge: data.metabolicAge,
+      ...Object.fromEntries(
+        METRIC_KEYS.filter((k) => data[k] !== undefined).map((k) => [k, data[k]]),
+      ),
     };
 
     if (user) {

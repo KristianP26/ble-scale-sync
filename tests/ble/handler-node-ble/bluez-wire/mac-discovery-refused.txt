@@ -1,0 +1,273 @@
++0ms [debug] D-Bus connection established
++0ms :1.1 Hello
++0ms :1.1 Introspect /org/bluez
++0ms :1.1 Introspect /org/bluez
++0ms :1.1 Introspect /org/bluez
++0ms :1.1 AgentManager1.RegisterAgent /org/bluez /org/blescalesync/agent KeyboardDisplay
++0ms [debug] BlueZ pairing agent registered (KeyboardDisplay)
++0ms [debug] Not claiming the BlueZ default-agent role (no users[].beurer_pin configured)
++0ms :1.1 Introspect hci0
++0ms :1.1 Get hci0 Adapter1.Powered
++0ms [debug] Removing AA:BB:CC:DD:EE:01 from BlueZ before the scan: no reading from this scale in this run yet
++0ms :1.1 Introspect hci0
++0ms [debug] Device not in BlueZ cache; RemoveDevice is a no-op
++0ms :1.1 Adapter1.RemoveDevice hci0 hci0/dev_AA_BB_CC_DD_EE_01 -> DoesNotExist
++0ms :1.1 Get hci0 Adapter1.Discovering
++0ms [debug] Discovery state at start: Discovering=false, our filtered session=no
++0ms :1.1 Adapter1.SetDiscoveryFilter hci0 {Transport=le,DuplicateData=true}
++0ms [debug] Discovery filter: Transport=le, DuplicateData=true
++0ms :1.1 Adapter1.StartDiscovery hci0 -> Failed
++0ms [debug] startDiscovery failed: Operation failed
++0ms :1.1 Get hci0 Adapter1.Discovering
++0ms [debug] Attempting D-Bus StopDiscovery to reset stale state...
++0ms :1.1 Adapter1.StopDiscovery hci0 -> Failed
++0ms [debug] D-Bus StopDiscovery failed: No discovery started
++1000ms :1.1 Adapter1.SetDiscoveryFilter hci0 {Transport=le,DuplicateData=true}
++1000ms [debug] Discovery filter: Transport=le, DuplicateData=true
++1000ms :1.1 Adapter1.StartDiscovery hci0 -> Failed
++1000ms [debug] startDiscovery after D-Bus reset failed: Operation failed
++1000ms [debug] Attempting adapter power cycle...
++1000ms :1.1 Set hci0 Adapter1.Powered=false
++1000ms [debug] Adapter powered off
++2000ms :1.1 Set hci0 Adapter1.Powered=true
++2000ms [debug] Adapter powered on
++3000ms :1.1 Adapter1.SetDiscoveryFilter hci0 {Transport=le,DuplicateData=true}
++3000ms [debug] Discovery filter: Transport=le, DuplicateData=true
++3000ms :1.1 Adapter1.StartDiscovery hci0 -> Failed
++3000ms [debug] startDiscovery after power cycle failed: Operation failed
++3000ms [debug] Attempting kernel-level adapter reset via btmgmt...
++3000ms exec btmgmt --index 0 power off
++3000ms exec btmgmt --index 0 info
++3000ms [debug] btmgmt: adapter powered off
++3500ms exec btmgmt --index 0 power on
++5500ms exec btmgmt --index 0 info
++5500ms [debug] btmgmt: adapter powered on
++5500ms [debug] D-Bus connection reset
++5500ms [debug] D-Bus connection established
++5500ms :1.2 Hello
++5500ms :1.2 Introspect /org/bluez
++5500ms :1.2 Introspect /org/bluez
++5500ms :1.2 Introspect /org/bluez
++5500ms :1.2 AgentManager1.RegisterAgent /org/bluez /org/blescalesync/agent KeyboardDisplay
++5500ms [debug] BlueZ pairing agent registered (KeyboardDisplay)
++5500ms [debug] Not claiming the BlueZ default-agent role (no users[].beurer_pin configured)
++5500ms :1.2 Introspect hci0
++5500ms :1.2 Adapter1.SetDiscoveryFilter hci0 {Transport=le,DuplicateData=true}
++5500ms [debug] Discovery filter: Transport=le, DuplicateData=true
++5500ms :1.2 Adapter1.StartDiscovery hci0 -> Failed
++5500ms [debug] startDiscovery after btmgmt reset failed: Operation failed
++5500ms [debug] Attempting rfkill block/unblock...
++5500ms exec rfkill block bluetooth
++5500ms [debug] rfkill: bluetooth blocked
++6500ms exec rfkill unblock bluetooth
++6500ms [debug] rfkill: bluetooth unblocked
++9500ms [debug] D-Bus connection reset
++9500ms [debug] D-Bus connection established
++9500ms :1.3 Hello
++9500ms :1.3 Introspect /org/bluez
++9500ms :1.3 Introspect /org/bluez
++9500ms :1.3 Introspect /org/bluez
++9500ms :1.3 AgentManager1.RegisterAgent /org/bluez /org/blescalesync/agent KeyboardDisplay
++9500ms [debug] BlueZ pairing agent registered (KeyboardDisplay)
++9500ms [debug] Not claiming the BlueZ default-agent role (no users[].beurer_pin configured)
++9500ms :1.3 Introspect hci0
++9500ms :1.3 Adapter1.SetDiscoveryFilter hci0 {Transport=le,DuplicateData=true}
++9500ms [debug] Discovery filter: Transport=le, DuplicateData=true
++9500ms :1.3 Adapter1.StartDiscovery hci0 -> Failed
++9500ms [debug] startDiscovery after rfkill reset failed: Operation failed
++9500ms [debug] Attempting bluetoothd service restart...
++9500ms exec systemctl restart bluetooth
++9500ms [debug] bluetoothd service restarted
++12500ms [debug] D-Bus connection reset
++12500ms [debug] D-Bus connection established
++12500ms :1.4 Hello
++12500ms :1.4 Introspect /org/bluez
++12500ms :1.4 Introspect /org/bluez
++12500ms :1.4 Introspect /org/bluez
++12500ms :1.4 AgentManager1.RegisterAgent /org/bluez /org/blescalesync/agent KeyboardDisplay
++12500ms [debug] BlueZ pairing agent registered (KeyboardDisplay)
++12500ms [debug] Not claiming the BlueZ default-agent role (no users[].beurer_pin configured)
++12500ms :1.4 Introspect hci0
++12500ms :1.4 Adapter1.SetDiscoveryFilter hci0 {Transport=le,DuplicateData=true}
++12500ms [debug] Discovery filter: Transport=le, DuplicateData=true
++12500ms :1.4 Adapter1.StartDiscovery hci0 -> Failed
++12500ms [debug] startDiscovery after bluetoothd restart failed: Operation failed
++12500ms [warn] Could not start active discovery. Proceeding with passive scanning (device may take longer to appear).
++12500ms [info] Scanning for device...
++13500ms :1.4 Introspect hci0
++14500ms :1.4 Introspect hci0
++15500ms :1.4 GetManagedObjects
++15500ms :1.4 Introspect hci0
++16500ms :1.4 Introspect hci0
++17500ms :1.4 Introspect hci0
++18500ms :1.4 GetManagedObjects
++18500ms :1.4 Introspect hci0
++19500ms :1.4 Introspect hci0
++20500ms :1.4 Introspect hci0
++21500ms :1.4 GetManagedObjects
++21500ms :1.4 Introspect hci0
++22500ms :1.4 Introspect hci0
++23500ms :1.4 Introspect hci0
++24500ms :1.4 GetManagedObjects
++24500ms :1.4 Introspect hci0
++25500ms :1.4 Introspect hci0
++26500ms :1.4 Introspect hci0
++27500ms :1.4 GetManagedObjects
++27500ms :1.4 Get hci0 Adapter1.Discovering
++27500ms [debug] Scan activity: no advertisements for 15s, Discovering=false
++27500ms :1.4 Introspect hci0
++28500ms :1.4 Introspect hci0
++29500ms :1.4 Introspect hci0
++30500ms :1.4 GetManagedObjects
++30500ms :1.4 Introspect hci0
++31500ms :1.4 Introspect hci0
++32500ms :1.4 Introspect hci0
++33500ms :1.4 GetManagedObjects
++33500ms :1.4 Introspect hci0
++34500ms :1.4 Introspect hci0
++35500ms :1.4 Introspect hci0
++36500ms :1.4 GetManagedObjects
++36500ms :1.4 Introspect hci0
++37500ms :1.4 Introspect hci0
++38500ms :1.4 Introspect hci0
++39500ms :1.4 GetManagedObjects
++39500ms :1.4 Introspect hci0
++40500ms :1.4 Introspect hci0
++41500ms :1.4 Introspect hci0
++42500ms :1.4 Introspect hci0
++42500ms :1.4 GetManagedObjects
++42500ms :1.4 Get hci0 Adapter1.Discovering
++42500ms [debug] Scan activity: no advertisements for 15s, Discovering=false
++43500ms :1.4 Introspect hci0
++44500ms :1.4 Introspect hci0
++45500ms :1.4 GetManagedObjects
++45500ms :1.4 Introspect hci0
++46500ms :1.4 Introspect hci0
++47500ms :1.4 Introspect hci0
++48500ms :1.4 GetManagedObjects
++48500ms :1.4 Introspect hci0
++49500ms :1.4 Introspect hci0
++50500ms :1.4 Introspect hci0
++51500ms :1.4 GetManagedObjects
++51500ms :1.4 Introspect hci0
++52500ms :1.4 Introspect hci0
++53500ms :1.4 Introspect hci0
++54500ms :1.4 GetManagedObjects
++54500ms :1.4 Introspect hci0
++55500ms :1.4 Introspect hci0
++56500ms :1.4 Introspect hci0
++57500ms :1.4 GetManagedObjects
++57500ms :1.4 Get hci0 Adapter1.Discovering
++57500ms [debug] Scan activity: no advertisements for 15s, Discovering=false
++57500ms :1.4 Introspect hci0
++58500ms :1.4 Introspect hci0
++59500ms :1.4 Introspect hci0
++60500ms :1.4 GetManagedObjects
++60500ms :1.4 Introspect hci0
++61500ms :1.4 Introspect hci0
++62500ms :1.4 Introspect hci0
++63500ms :1.4 GetManagedObjects
++63500ms :1.4 Introspect hci0
++64500ms :1.4 Introspect hci0
++65500ms :1.4 Introspect hci0
++66500ms :1.4 GetManagedObjects
++66500ms :1.4 Introspect hci0
++67500ms :1.4 Introspect hci0
++68500ms :1.4 Introspect hci0
++69500ms :1.4 GetManagedObjects
++69500ms :1.4 Introspect hci0
++70500ms :1.4 Introspect hci0
++71500ms :1.4 Introspect hci0
++72500ms :1.4 Introspect hci0
++72500ms :1.4 GetManagedObjects
++72500ms :1.4 Get hci0 Adapter1.Discovering
++72500ms [debug] Scan activity: no advertisements for 15s, Discovering=false
++73500ms :1.4 Introspect hci0
++74500ms :1.4 Introspect hci0
++75500ms :1.4 GetManagedObjects
++75500ms :1.4 Introspect hci0
++76500ms :1.4 Introspect hci0
++77500ms :1.4 Introspect hci0
++78500ms :1.4 GetManagedObjects
++78500ms :1.4 Introspect hci0
++79500ms :1.4 Introspect hci0
++80500ms :1.4 Introspect hci0
++81500ms :1.4 GetManagedObjects
++81500ms :1.4 Introspect hci0
++82500ms :1.4 Introspect hci0
++83500ms :1.4 Introspect hci0
++84500ms :1.4 GetManagedObjects
++84500ms :1.4 Introspect hci0
++85500ms :1.4 Introspect hci0
++86500ms :1.4 Introspect hci0
++87500ms :1.4 GetManagedObjects
++87500ms :1.4 Get hci0 Adapter1.Discovering
++87500ms [debug] Scan activity: no advertisements for 15s, Discovering=false
++87500ms :1.4 Introspect hci0
++88500ms :1.4 Introspect hci0
++89500ms :1.4 Introspect hci0
++90500ms :1.4 GetManagedObjects
++90500ms :1.4 Introspect hci0
++91500ms :1.4 Introspect hci0
++92500ms :1.4 Introspect hci0
++93500ms :1.4 GetManagedObjects
++93500ms :1.4 Introspect hci0
++94500ms :1.4 Introspect hci0
++95500ms :1.4 Introspect hci0
++96500ms :1.4 GetManagedObjects
++96500ms :1.4 Introspect hci0
++97500ms :1.4 Introspect hci0
++98500ms :1.4 Introspect hci0
++99500ms :1.4 GetManagedObjects
++99500ms :1.4 Introspect hci0
++100500ms :1.4 Introspect hci0
++101500ms :1.4 Introspect hci0
++102500ms :1.4 Introspect hci0
++102500ms :1.4 GetManagedObjects
++102500ms :1.4 Get hci0 Adapter1.Discovering
++102500ms [debug] Scan activity: no advertisements for 15s, Discovering=false
++103500ms :1.4 Introspect hci0
++104500ms :1.4 Introspect hci0
++105500ms :1.4 GetManagedObjects
++105500ms :1.4 Introspect hci0
++106500ms :1.4 Introspect hci0
++107500ms :1.4 Introspect hci0
++108500ms :1.4 GetManagedObjects
++108500ms :1.4 Introspect hci0
++109500ms :1.4 Introspect hci0
++110500ms :1.4 Introspect hci0
++111500ms :1.4 GetManagedObjects
++111500ms :1.4 Introspect hci0
++112500ms :1.4 Introspect hci0
++113500ms :1.4 Introspect hci0
++114500ms :1.4 GetManagedObjects
++114500ms :1.4 Introspect hci0
++115500ms :1.4 Introspect hci0
++116500ms :1.4 Introspect hci0
++117500ms :1.4 GetManagedObjects
++117500ms :1.4 Get hci0 Adapter1.Discovering
++117500ms [debug] Scan activity: no advertisements for 15s, Discovering=false
++117500ms :1.4 Introspect hci0
++118500ms :1.4 Introspect hci0
++119500ms :1.4 Introspect hci0
++120500ms :1.4 GetManagedObjects
++120500ms :1.4 Introspect hci0
++121500ms :1.4 Introspect hci0
++122500ms :1.4 Introspect hci0
++123500ms :1.4 GetManagedObjects
++123500ms :1.4 Introspect hci0
++124500ms :1.4 Introspect hci0
++125500ms :1.4 Introspect hci0
++126500ms :1.4 GetManagedObjects
++126500ms :1.4 Introspect hci0
++127500ms :1.4 Introspect hci0
++128500ms :1.4 Introspect hci0
++129500ms :1.4 GetManagedObjects
++129500ms :1.4 Introspect hci0
++130500ms :1.4 Introspect hci0
++131500ms :1.4 Introspect hci0
++132500ms :1.4 Introspect hci0
++135500ms :1.4 Introspect hci0
++135500ms [debug] Liveness probe: radio heard nothing (scan last heard the room never)
++135500ms => {"error":"Device AA:BB:CC:DD:EE:01 not found within 120s"}
+--- match rules held

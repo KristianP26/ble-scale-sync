@@ -249,6 +249,7 @@ describe.skipIf(!HARNESS)(
           continuous_mode: true
           scan_cooldown: 30
           idle_rescan_delay: 5
+          no_reading_rescan_delay: 0
           retry_failed_exports: true
           dry_run: false
           debug: false
@@ -303,6 +304,7 @@ describe.skipIf(!HARNESS)(
           continuous_mode: true
           scan_cooldown: 30
           idle_rescan_delay: 5
+          no_reading_rescan_delay: 0
           retry_failed_exports: true
           dry_run: false
           debug: false
@@ -368,6 +370,7 @@ describe.skipIf(!HARNESS)(
           continuous_mode: true
           scan_cooldown: 30
           idle_rescan_delay: 5
+          no_reading_rescan_delay: 0
           retry_failed_exports: true
           dry_run: false
           debug: false
@@ -388,12 +391,16 @@ describe.skipIf(!HARNESS)(
             qn_report_byte: '010',
             qn_weight_ack: 'yes',
             qn_user_key: ' 01000 ',
+            qn_user_slot: ' 02 ',
             qn_a4_prelude: 'true',
             qn_time_sync_long: 'off',
             qn_config_long: '1',
+            qn_result_ack: 'on',
+            rmsc04_profile_byte: ' 0x9E ',
             auto_clear_stale_bond: true,
             preemptive_adapter_reset: false,
             adapter_privacy: true,
+            pairing_retry_max_min: 15,
             mqtt_enabled: false,
             garmin_enabled: true,
             garmin_email: 'someone@example.com',
@@ -412,12 +419,16 @@ describe.skipIf(!HARNESS)(
           qn_report_byte: 10
           qn_weight_ack: true
           qn_user_key: 1000
+          qn_user_slot: 2
           qn_a4_prelude: true
           qn_time_sync_long: false
           qn_config_long: true
+          qn_result_ack: true
+          rmsc04_profile_byte: "9e"
           auto_clear_stale_bond: true
           preemptive_adapter_reset: false
           adapter_privacy: true
+          pairing_retry_max_min: 15
 
         scale:
           weight_unit: kg
@@ -449,6 +460,7 @@ describe.skipIf(!HARNESS)(
           continuous_mode: true
           scan_cooldown: 30
           idle_rescan_delay: 5
+          no_reading_rescan_delay: 0
           retry_failed_exports: true
           dry_run: false
           debug: false
@@ -493,6 +505,33 @@ describe.skipIf(!HARNESS)(
         const config = expectLoads(r);
         expect(config.global_exporters?.[0]).toMatchObject({ password: 'g\\w${y}' });
       });
+
+      // #497: written on the user only when off, so the default config above
+      // stays byte for byte what it was.
+      it('user_estimate_body_composition off, on the user', () => {
+        const r = generate({ options: { ...DEFAULTS, user_estimate_body_composition: false } });
+        const config = expectLoads(r);
+        expect(config.users[0].estimate_body_composition).toBe(false);
+        expect(r.text).toContain(
+          '    last_known_weight: null\n    estimate_body_composition: false\n\n',
+        );
+      });
+
+      it('user_estimate_body_composition on or missing writes nothing', () => {
+        const { user_estimate_body_composition: _on, ...missing } = DEFAULTS;
+        for (const options of [DEFAULTS, missing]) {
+          const r = generate({ options });
+          const config = expectLoads(r);
+          expect(config.users[0]).not.toHaveProperty('estimate_body_composition');
+          expect(r.text).not.toContain('estimate_body_composition');
+        }
+      });
+
+      it('no_reading_rescan_delay as entered (#475)', () => {
+        const r = generate({ options: { ...DEFAULTS, no_reading_rescan_delay: 900 } });
+        const config = expectLoads(r);
+        expect(config.runtime?.no_reading_rescan_delay).toBe(900);
+      });
     });
 
     // A text option like the QN bytes, so that unset stays unset (#463). Only a
@@ -532,6 +571,108 @@ describe.skipIf(!HARNESS)(
         expectLoads(r);
         expect(r.text).not.toContain('qn_user_key');
         expect(r.stdout).not.toContain('qn_user_key');
+      });
+    });
+
+    // Like qn_user_key, for 1 to 8 (#501).
+    describe('qn_user_slot', () => {
+      it.each([
+        ['2', 2],
+        ['02', 2],
+        [' 8 ', 8],
+        ['1', 1],
+      ])('writes %j as %d, and opens the ble block on its own', (value, written) => {
+        const r = generate({ options: { ...DEFAULTS, qn_user_slot: value } });
+        const config = expectLoads(r);
+        expect(config.ble?.qn_user_slot).toBe(written);
+        expect(r.text).toContain(`ble:
+  qn_user_slot: ${written}
+`);
+        expect(r.stdout).not.toContain('qn_user_slot');
+      });
+
+      it.each(['0', '00', '9', '10', '99999999999', 'abc', '-1', '1.5'])(
+        'drops %j with a warning',
+        (value) => {
+          const r = generate({ options: { ...DEFAULTS, qn_user_slot: value } });
+          const config = expectLoads(r);
+          expect(config.ble?.qn_user_slot).toBeUndefined();
+          expect(r.text).not.toContain('qn_user_slot');
+          expect(r.stdout).toContain(
+            `WARNING: Invalid qn_user_slot '${value}' (expected 1 to 8). Ignoring.`,
+          );
+        },
+      );
+
+      it('writes nothing when it is empty', () => {
+        const r = generate({ options: { ...DEFAULTS, qn_user_slot: '' } });
+        expectLoads(r);
+        expect(r.text).not.toContain('qn_user_slot');
+        expect(r.stdout).not.toContain('qn_user_slot');
+      });
+    });
+
+    // Normalised like the other QN switches (#331).
+    describe('qn_result_ack', () => {
+      it('writes true on its own, opening the ble block', () => {
+        const r = generate({ options: { ...DEFAULTS, qn_result_ack: 'true' } });
+        const config = expectLoads(r);
+        expect(config.ble?.qn_result_ack).toBe(true);
+        expect(r.text).toContain(`ble:
+  qn_result_ack: true
+`);
+      });
+
+      it('drops a value that is not true or false with a warning', () => {
+        const r = generate({ options: { ...DEFAULTS, qn_result_ack: 'maybe' } });
+        const config = expectLoads(r);
+        expect(config.ble?.qn_result_ack).toBeUndefined();
+        expect(r.text).not.toContain('qn_result_ack');
+        expect(r.stdout).toContain(
+          "WARNING: ignoring qn_result_ack='maybe' (expected true or false).",
+        );
+      });
+    });
+
+    // One byte of the user's own Renpho app profile (#434, D079), written quoted
+    // so that 99 stays a string. A bad value is dropped with a warning that
+    // does not repeat it: the byte is personal.
+    describe('rmsc04_profile_byte', () => {
+      const WARNING =
+        'WARNING: Invalid rmsc04_profile_byte (expected one byte as two hex digits, 0-9 ' +
+        'and a-f; in the YAML editor put it in quotes). Ignoring.';
+
+      it.each([
+        ['99', '99'],
+        [' 0x9E ', '9e'],
+        ['A9', 'a9'],
+        ['00', '00'],
+      ])('writes %j as the string %j, and opens the ble block on its own', (value, written) => {
+        const r = generate({ options: { ...DEFAULTS, rmsc04_profile_byte: value } });
+        const config = expectLoads(r);
+        expect(config.ble?.rmsc04_profile_byte).toBe(written);
+        expect(r.text).toContain(`ble:
+  rmsc04_profile_byte: "${written}"
+`);
+        expect(r.stdout).not.toContain('rmsc04_profile_byte');
+      });
+
+      it.each(['q7', '9', '0x9e1', '9e 5'])('drops %j with a warning that omits it', (value) => {
+        const r = generate({ options: { ...DEFAULTS, rmsc04_profile_byte: value } });
+        const config = expectLoads(r);
+        expect(config.ble?.rmsc04_profile_byte).toBeUndefined();
+        expect(r.text).not.toContain('rmsc04_profile_byte');
+        // The one line about the option is the fixed warning, nothing more.
+        const lines = r.stdout.split('\n').filter((l) => l.includes('rmsc04_profile_byte'));
+        expect(lines).toEqual([`[ble-scale-sync] ${WARNING}`]);
+        if (value.length > 1) expect(r.stdout).not.toContain(value);
+      });
+
+      it('writes nothing and warns about nothing when it is empty', () => {
+        const r = generate({ options: { ...DEFAULTS, rmsc04_profile_byte: '' } });
+        expectLoads(r);
+        expect(r.text).not.toContain('rmsc04_profile_byte');
+        expect(r.stdout).not.toContain('rmsc04_profile_byte');
       });
     });
 
@@ -608,15 +749,18 @@ describe.skipIf(!HARNESS)(
             adapter_privacy: true,
             auto_clear_stale_bond: true,
             preemptive_adapter_reset: false,
+            pairing_retry_max_min: 15,
           },
         });
         const config = expectLoads(r);
         expect(config.ble?.scale_mac).toBe('F8:83:06:4E:B6:7E');
-        expect(r.text).not.toMatch(/adapter:|adapter_privacy|auto_clear_stale_bond|preemptive/);
+        expect(r.text).not.toMatch(
+          /adapter:|adapter_privacy|auto_clear_stale_bond|preemptive|pairing_retry/,
+        );
         expect(r.stdout).toContain(
           'NOTE: ble_transport esphome-proxy does not use the built-in Bluetooth adapter, so these ' +
             'options are ignored: ble_adapter, auto_clear_stale_bond, preemptive_adapter_reset, ' +
-            'adapter_privacy.',
+            'adapter_privacy, pairing_retry_max_min.',
         );
       });
 
@@ -935,10 +1079,63 @@ describe.skipIf(!HARNESS)('run.sh custom_config and the transport options', () =
     expect(r.stdout).toContain("Set 'ble.qn_user_key' in");
   });
 
+  it('names qn_user_slot as ignored when it is set', () => {
+    const r = run({ ...CUSTOM, qn_user_slot: '2' });
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain(
+      "WARNING: custom_config is enabled, so the 'qn_user_slot' option is ignored.",
+    );
+    expect(r.stdout).toContain("Set 'ble.qn_user_slot' in");
+  });
+
+  it('names qn_result_ack as ignored when it is set', () => {
+    const r = run({ ...CUSTOM, qn_result_ack: 'true' });
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain(
+      "WARNING: custom_config is enabled, so the 'qn_result_ack' option is ignored.",
+    );
+    expect(r.stdout).toContain("Set 'ble.qn_result_ack' in");
+  });
+
+  it('names rmsc04_profile_byte as ignored when it is set', () => {
+    const r = run({ ...CUSTOM, rmsc04_profile_byte: '9e' });
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain(
+      "WARNING: custom_config is enabled, so the 'rmsc04_profile_byte' option is ignored.",
+    );
+    expect(r.stdout).toContain("Set 'ble.rmsc04_profile_byte' in");
+  });
+
   it('says nothing while every transport option has its default', () => {
     const r = run(CUSTOM);
     expect(r.status).toBe(0);
     expect(r.stdout).not.toContain('transport options');
+  });
+
+  // #497: on by default, so only an explicit false is worth a word.
+  it('names user_estimate_body_composition as ignored only when it is off', () => {
+    const quiet = run(CUSTOM);
+    expect(quiet.status).toBe(0);
+    expect(quiet.stdout).not.toContain('user_estimate_body_composition');
+    const r = run({ ...CUSTOM, user_estimate_body_composition: false });
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain(
+      "WARNING: custom_config is enabled, so the 'user_estimate_body_composition' option is ignored.",
+    );
+    expect(r.stdout).toContain("Set 'estimate_body_composition: false' on the user in");
+  });
+
+  // #471: the option has a default, so only a changed value is worth a word.
+  it('names pairing_retry_max_min as ignored only when it is not 60', () => {
+    const quiet = run(CUSTOM);
+    expect(quiet.status).toBe(0);
+    expect(quiet.stdout).not.toContain('pairing_retry_max_min');
+    const r = run({ ...CUSTOM, pairing_retry_max_min: 15 });
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain(
+      "WARNING: custom_config is enabled, so the 'pairing_retry_max_min' option is ignored.",
+    );
+    expect(r.stdout).toContain("Set 'ble.pairing_retry_max_min' in");
   });
 });
 

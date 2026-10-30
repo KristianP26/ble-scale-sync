@@ -249,8 +249,9 @@ if [ "$CUSTOM_CONFIG" = "true" ]; then
   # would toggle the UI option, see no change and report a false negative. A
   # wrong value for either is silent by nature, so a setting that is silently
   # ignored is worse here than almost anywhere else.
-  for _qn in qn_protocol_byte qn_report_byte qn_weight_ack qn_user_key qn_a4_prelude \
-    qn_time_sync_long qn_config_long auto_clear_stale_bond adapter_privacy; do
+  for _qn in qn_protocol_byte qn_report_byte qn_weight_ack qn_user_key qn_user_slot \
+    qn_a4_prelude qn_time_sync_long qn_config_long qn_result_ack rmsc04_profile_byte auto_clear_stale_bond \
+    adapter_privacy; do
     if [ -n "$(opt "$_qn")" ]; then
       log "WARNING: custom_config is enabled, so the '$_qn' option is ignored."
       log "Set 'ble.$_qn' in $CUSTOM_PATH instead."
@@ -263,10 +264,22 @@ if [ "$CUSTOM_CONFIG" = "true" ]; then
     log "WARNING: custom_config is enabled, so the 'preemptive_adapter_reset' option is ignored."
     log "Set 'ble.preemptive_adapter_reset' in $CUSTOM_PATH instead."
   fi
+  # pairing_retry_max_min has a default in the manifest too, so opt() always
+  # answers for it and the loop would warn on every start. Only a value other
+  # than the default is worth a warning (#471).
+  if [ "$(opt_int pairing_retry_max_min 60)" != "60" ]; then
+    log "WARNING: custom_config is enabled, so the 'pairing_retry_max_min' option is ignored."
+    log "Set 'ble.pairing_retry_max_min' in $CUSTOM_PATH instead."
+  fi
   # Same for update_check, a top-level key in the file.
   if [ "$(opt_bool_default_true update_check)" = "false" ]; then
     log "WARNING: custom_config is enabled, so the 'update_check' option is ignored."
     log "Set 'update_check: false' in $CUSTOM_PATH instead."
+  fi
+  # And user_estimate_body_composition, a key of each user in the file (#497).
+  if [ "$(opt_bool_default_true user_estimate_body_composition)" = "false" ]; then
+    log "WARNING: custom_config is enabled, so the 'user_estimate_body_composition' option is ignored."
+    log "Set 'estimate_body_composition: false' on the user in $CUSTOM_PATH instead."
   fi
   # The transport options are named together: each of them maps to a key of a
   # ble section in the file, not to a ble.<option> as the loop above says.
@@ -331,6 +344,7 @@ else
   esac
   # Normalised further down, next to the two QN bytes.
   QN_USER_KEY=$(opt qn_user_key)
+  QN_USER_SLOT=$(opt qn_user_slot)
   # Same free-text normalisation as qn_weight_ack above, for the same reason.
   QN_A4_PRELUDE=$(opt qn_a4_prelude)
   case "$(echo "$QN_A4_PRELUDE" | tr '[:upper:]' '[:lower:]')" in
@@ -364,10 +378,24 @@ else
       QN_CONFIG_LONG=""
       ;;
   esac
+  # Same free-text normalisation again, same reason.
+  QN_RESULT_ACK=$(opt qn_result_ack)
+  case "$(echo "$QN_RESULT_ACK" | tr '[:upper:]' '[:lower:]')" in
+    "") QN_RESULT_ACK="" ;;
+    true | yes | on | 1) QN_RESULT_ACK="true" ;;
+    false | no | off | 0) QN_RESULT_ACK="false" ;;
+    *)
+      log "WARNING: ignoring qn_result_ack='$QN_RESULT_ACK' (expected true or false)."
+      QN_RESULT_ACK=""
+      ;;
+  esac
+  RMSC04_PROFILE_BYTE=$(opt rmsc04_profile_byte)
   AUTO_CLEAR_STALE_BOND=$(opt_bool auto_clear_stale_bond)
   # Defaults to true: only an explicit false switches it off (#417).
   PREEMPTIVE_ADAPTER_RESET=$(opt_bool_default_true preemptive_adapter_reset)
   ADAPTER_PRIVACY=$(opt_bool adapter_privacy)
+  # The app's own default (#471); only another value is written.
+  PAIRING_RETRY_MAX_MIN=$(opt_int pairing_retry_max_min 60)
   PROXY_LIVENESS_MIN=$(opt_int proxy_liveness_timeout_min 30)
   # Still written below, but the built-in Bluetooth transport has no liveness
   # check. Say so instead of letting the option look like it did something.
@@ -397,6 +425,7 @@ else
     [ "$AUTO_CLEAR_STALE_BOND" != "true" ] || _host_only="${_host_only:+$_host_only, }auto_clear_stale_bond"
     [ "$PREEMPTIVE_ADAPTER_RESET" != "false" ] || _host_only="${_host_only:+$_host_only, }preemptive_adapter_reset"
     [ "$ADAPTER_PRIVACY" != "true" ] || _host_only="${_host_only:+$_host_only, }adapter_privacy"
+    [ "$PAIRING_RETRY_MAX_MIN" = "60" ] || _host_only="${_host_only:+$_host_only, }pairing_retry_max_min"
     if [ -n "$_host_only" ]; then
       log "NOTE: ble_transport $BLE_TRANSPORT does not use the built-in Bluetooth adapter, so these options are ignored: $_host_only."
     fi
@@ -404,6 +433,7 @@ else
     AUTO_CLEAR_STALE_BOND=false
     PREEMPTIVE_ADAPTER_RESET=true
     ADAPTER_PRIVACY=false
+    PAIRING_RETRY_MAX_MIN=60
   fi
   DISPLAY_UNIT=$(opt display_unit)
 
@@ -431,6 +461,7 @@ else
   USER_IS_ATHLETE=$(opt_bool user_is_athlete)
   USER_WEIGHT_MIN=$(opt_int user_weight_min 40)
   USER_WEIGHT_MAX=$(opt_int user_weight_max 150)
+  USER_ESTIMATE_BODY_COMPOSITION=$(opt_bool_default_true user_estimate_body_composition)
 
   MQTT_ENABLED=$(opt_bool_default_true mqtt_enabled)
   MQTT_AUTO=$(opt_bool_default_true mqtt_auto)
@@ -455,6 +486,8 @@ else
   SCAN_COOLDOWN=$(opt_int scan_cooldown 30)
   # jq's // falls back only on null/false, so an explicit 0 survives.
   IDLE_RESCAN_DELAY=$(opt_int idle_rescan_delay 5)
+  # 0 keeps the retry backoff after a session without a reading (#475).
+  NO_READING_RESCAN_DELAY=$(opt_int no_reading_rescan_delay 0)
   # Always exactly true or false, so it is safe to interpolate unquoted.
   RETRY_FAILED_EXPORTS=$(opt_bool_default_true retry_failed_exports)
   DEBUG=$(opt_bool debug)
@@ -709,15 +742,52 @@ YAML
     fi
   fi
 
+  # qn_user_slot likewise, for a range of 1 to 8 (#501): the scale's user slot
+  # the vendor app registered the user in. Leading zeros are dropped.
+  QN_USER_SLOT=$(printf '%s' "$QN_USER_SLOT" | tr -d '[:space:]')
+  if [ -n "$QN_USER_SLOT" ]; then
+    _raw="$QN_USER_SLOT"
+    case "$QN_USER_SLOT" in
+      *[!0-9]*) QN_USER_SLOT="" ;;
+      *) QN_USER_SLOT=$(printf '%s' "$QN_USER_SLOT" | sed 's/^0*//') ;;
+    esac
+    case "$QN_USER_SLOT" in
+      [12345678]) ;;
+      *)
+        log "WARNING: Invalid qn_user_slot '$_raw' (expected 1 to 8). Ignoring."
+        QN_USER_SLOT=""
+        ;;
+    esac
+  fi
+
+  # rmsc04_profile_byte is one byte of the user's own Renpho app profile (#434,
+  # D079): spaces and a 0x prefix go, the case is lowered, and only two hex
+  # digits pass. Unlike qn_user_key the warning never repeats the value, since
+  # the byte is personal (it may carry sex and age). The HA YAML editor turns an
+  # unquoted 07 into the number 7, hence the hint about quotes. The characters
+  # are listed rather than a range so the class does not depend on the locale.
+  RMSC04_PROFILE_BYTE=$(printf '%s' "$RMSC04_PROFILE_BYTE" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]' | sed 's/^0x//')
+  if [ -n "$RMSC04_PROFILE_BYTE" ]; then
+    case "$RMSC04_PROFILE_BYTE" in
+      [0123456789abcdef][0123456789abcdef]) ;;
+      *)
+        log "WARNING: Invalid rmsc04_profile_byte (expected one byte as two hex digits, 0-9 and a-f; in the YAML editor put it in quotes). Ignoring."
+        RMSC04_PROFILE_BYTE=""
+        ;;
+    esac
+  fi
+
   # BLE section, emitted only when at least one of its options is set.
   # Every option written inside this block must also appear in the condition.
   # qn_a4_prelude did not, so an install whose only BLE option was that one
   # got no ble: block at all and the setting vanished without a word.
   if [ -n "$SCALE_MAC" ] || [ -n "$BLE_ADAPTER" ] || [ -n "$FORCE_SCALE_ADAPTER" ] ||
     [ -n "$QN_PROTOCOL_BYTE" ] || [ -n "$QN_REPORT_BYTE" ] || [ -n "$QN_WEIGHT_ACK" ] ||
-    [ -n "$QN_USER_KEY" ] || [ -n "$QN_A4_PRELUDE" ] || [ -n "$QN_TIME_SYNC_LONG" ] || [ -n "$QN_CONFIG_LONG" ] ||
+    [ -n "$QN_USER_KEY" ] || [ -n "$QN_USER_SLOT" ] || [ -n "$QN_A4_PRELUDE" ] || [ -n "$QN_TIME_SYNC_LONG" ] || [ -n "$QN_CONFIG_LONG" ] ||
+    [ -n "$QN_RESULT_ACK" ] || [ -n "$RMSC04_PROFILE_BYTE" ] ||
     [ "$AUTO_CLEAR_STALE_BOND" = "true" ] || [ "$PREEMPTIVE_ADAPTER_RESET" = "false" ] ||
-    [ "$ADAPTER_PRIVACY" = "true" ] || [ "$PROXY_LIVENESS_MIN" != "30" ] ||
+    [ "$ADAPTER_PRIVACY" = "true" ] || [ "$PAIRING_RETRY_MAX_MIN" != "60" ] ||
+    [ "$PROXY_LIVENESS_MIN" != "30" ] ||
     [ "$BLE_TRANSPORT" != "local" ]; then
     echo "ble:" >> "$FRESH"
     [ -n "$SCALE_MAC" ] && printf '%s\n' "  scale_mac: \"$(yaml_escape "$SCALE_MAC")\"" >> "$FRESH"
@@ -727,12 +797,17 @@ YAML
     [ -n "$QN_REPORT_BYTE" ] && echo "  qn_report_byte: $QN_REPORT_BYTE" >> "$FRESH"
     [ -n "$QN_WEIGHT_ACK" ] && echo "  qn_weight_ack: $QN_WEIGHT_ACK" >> "$FRESH"
     [ -n "$QN_USER_KEY" ] && echo "  qn_user_key: $QN_USER_KEY" >> "$FRESH"
+    [ -n "$QN_USER_SLOT" ] && echo "  qn_user_slot: $QN_USER_SLOT" >> "$FRESH"
     [ -n "$QN_A4_PRELUDE" ] && echo "  qn_a4_prelude: $QN_A4_PRELUDE" >> "$FRESH"
     [ -n "$QN_TIME_SYNC_LONG" ] && echo "  qn_time_sync_long: $QN_TIME_SYNC_LONG" >> "$FRESH"
     [ -n "$QN_CONFIG_LONG" ] && echo "  qn_config_long: $QN_CONFIG_LONG" >> "$FRESH"
+    [ -n "$QN_RESULT_ACK" ] && echo "  qn_result_ack: $QN_RESULT_ACK" >> "$FRESH"
+    # Quoted, so a byte like 99 stays a string; after the check it needs no escaping.
+    [ -n "$RMSC04_PROFILE_BYTE" ] && echo "  rmsc04_profile_byte: \"$RMSC04_PROFILE_BYTE\"" >> "$FRESH"
     [ "$AUTO_CLEAR_STALE_BOND" = "true" ] && echo "  auto_clear_stale_bond: true" >> "$FRESH"
     [ "$PREEMPTIVE_ADAPTER_RESET" = "false" ] && echo "  preemptive_adapter_reset: false" >> "$FRESH"
     [ "$ADAPTER_PRIVACY" = "true" ] && echo "  adapter_privacy: true" >> "$FRESH"
+    [ "$PAIRING_RETRY_MAX_MIN" != "60" ] && echo "  pairing_retry_max_min: $PAIRING_RETRY_MAX_MIN" >> "$FRESH"
     [ "$PROXY_LIVENESS_MIN" != "30" ] && echo "  proxy_liveness_timeout_min: $PROXY_LIVENESS_MIN" >> "$FRESH"
     [ "$BLE_TRANSPORT" != "local" ] && emit_ble_transport >> "$FRESH"
     echo "" >> "$FRESH"
@@ -756,8 +831,10 @@ users:
     is_athlete: $USER_IS_ATHLETE
     weight_range: { min: $USER_WEIGHT_MIN, max: $USER_WEIGHT_MAX }
     last_known_weight: null
-
 YAML
+  # Only when off, so the default config stays byte for byte what it was (#497).
+  [ "$USER_ESTIMATE_BODY_COMPOSITION" = "false" ] && echo "    estimate_body_composition: false" >> "$FRESH"
+  echo "" >> "$FRESH"
 
   # ── Exporters ─────────────────────────────────────────────────────────
 
@@ -818,6 +895,7 @@ runtime:
   continuous_mode: true
   scan_cooldown: $SCAN_COOLDOWN
   idle_rescan_delay: $IDLE_RESCAN_DELAY
+  no_reading_rescan_delay: $NO_READING_RESCAN_DELAY
   retry_failed_exports: $RETRY_FAILED_EXPORTS
   dry_run: false
   debug: $DEBUG

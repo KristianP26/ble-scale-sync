@@ -1,8 +1,10 @@
 import type {
   AckProtocol,
+  AdapterRuntimeConfig,
   BleDeviceInfo,
   CharacteristicBinding,
   ConnectionContext,
+  Gender,
   ScaleAdapterCore,
   GattWiring,
   HoldForComposition,
@@ -11,14 +13,12 @@ import type {
   UserProfile,
   BodyComposition,
 } from '../interfaces/scale-adapter.js';
-import {
-  uuid16,
-  buildPayload,
-  ReadingComposition,
-  type ScaleBodyComp,
-} from './body-comp-helpers.js';
+import { uuid16, buildPayload, noEstimateNote, type ScaleBodyComp } from './body-comp-helpers.js';
 import { matchesDescriptor, type MatchDescriptor } from './match-descriptor.js';
 import { bleLog, errMsg } from '../ble/types.js';
+import { build55aaFrame, frameFault, sum8 } from './renpho-55aa.js';
+import type { AdapterOptions } from '../config/resolve.js';
+import type { RMSC04_BLE_OPTIONS } from './renpho-msc04-options.js';
 
 // ─── Renpho R-MSC04 (55AA framed, vendor service 0x1A10) ────────────────────
 
@@ -54,8 +54,9 @@ const RECORD_WEIGHT_TOLERANCE_KG = 0.5;
  * The scale's body fat and BMI are presumably computed from the profile last
  * written to the scale: in the #117 capture the Renpho app writes a b2 profile
  * (height 187.0 cm) on every connection. In a session where we wrote our own
- * guest b2 the record is not exported at all (D038); otherwise the profile may
- * be another household member's. The BMI the scale reports gives the height it
+ * guest b2 the record is not exported unless ble.rmsc04_profile_byte is set,
+ * and then only through its own gates (D079); otherwise the profile may be
+ * another household member's. The BMI the scale reports gives the height it
  * used away; a larger gap than this to the user's configured height means the
  * scale's figures are not about this user.
  */
@@ -66,6 +67,14 @@ const MAX_REASSEMBLED_BYTES = 64;
 
 /** Application-level fragment header: marker (0xAD, 0xAE, 0xAF), seq, fragments remaining. */
 const FRAGMENT_HEADER_LEN = 3;
+
+/**
+ * The 0x20 state right before the 0x25 record of this weigh-in: 135 ms before
+ * it in the #117 capture, and the status just before it in a #434 session that
+ * connected after the weight locked. Without a 0x24 it is what ties the record
+ * to this weigh-in (D057).
+ */
+const STATE_COMPLETE = 0x11;
 
 /**
  * 0x20 status [6]. 0x04 and 0x05 are named after what followed them, not from
@@ -88,6 +97,14 @@ const STATUS_NAMES: Record<number, string> = {
  * b3, 0x27/0x28 for the app's b7/b8, which we never send).
  */
 const REPLY_TO: Record<number, number> = { 0x22: 0xb2, 0x23: 0xb3, 0x27: 0xb7, 0x28: 0xb8 };
+
+/**
+ * The scale's reply to a b2, `55 AA 22 00 02 <seq> <slot>`: the seq and the
+ * slot of the b2 it answers (the #117 capture, an owner's DEBUG log on #434
+ * and a private capture). It arrives on 0x2A12 like the 0x20 status, so the
+ * transport keeps the two in order.
+ */
+const CMD_PROFILE_REPLY = 0x22;
 
 /** What one session's summary line reports (#434). Times are Date.now() values. */
 interface SessionDiagnostics {
@@ -123,8 +140,14 @@ function secs(ms: number): string {
   return (ms / 1000).toFixed(1);
 }
 
-/** How close the record's BMI height must be to the height we sent to count as ours. */
-const SENT_HEIGHT_MATCH_CM = 1;
+/**
+ * How close the record's BMI must be to its weight over the height we sent
+ * squared to count as computed for that height. The scale rounds BMI to 0.1,
+ * and 1 cm moves it by more (about 0.29 at 95.55 kg and 187 cm): the #117
+ * capture's record is 0.024 from the 187.0 cm the app sent. The same as the
+ * QN BMI_MATCH_TOLERANCE (D048).
+ */
+const SENT_BMI_TOLERANCE = 0.1 + 1e-9;
 
 /** What a validated 0x25 record carries. Impedances in ohm, segment order below. */
 interface CompositionRecord {
@@ -138,10 +161,40 @@ interface CompositionRecord {
   impedance100kHz: number[];
 }
 
-/** A record pinned to its reading, and whether our guest b2 went out in that session. */
+/** Our b2 with ble.rmsc04_profile_byte in this session (D079). Compared, never logged. */
+interface OwnProfile {
+  seq: number;
+  /** Null when the profile had no usable height and 170.0 cm went out. */
+  heightTenths: number | null;
+  gender: Gender;
+  birthDate: string | undefined;
+  age: number;
+  /** The transport confirmed the write while this session still owned the link. */
+  written: boolean;
+}
+
+/** Everything the D079 gate reads, copied onto the reading with the record (D077). */
+interface OwnProfilePin {
+  heightTenths: number | null;
+  gender: Gender;
+  birthDate: string | undefined;
+  age: number;
+  written: boolean;
+  answeredBeforeComplete: boolean;
+}
+
+/** A record on the reading it completed, and whether our guest b2 went out in that session. */
 interface PinnedRecord {
   rec: CompositionRecord;
   guestProfile: boolean;
+  /** Set only when ble.rmsc04_profile_byte went out in this session's b2. */
+  own?: OwnProfilePin;
+}
+
+/** Whether the record's BMI fits a height in 0.1 cm (see SENT_BMI_TOLERANCE). */
+function fitsSentHeight(rec: CompositionRecord, tenths: number): boolean {
+  const m = tenths / 1000;
+  return Math.abs(rec.bmi - rec.weight / (m * m)) <= SENT_BMI_TOLERANCE;
 }
 
 function isBareFrame(data: Buffer): boolean {
@@ -158,9 +211,7 @@ function validateFrame(data: Buffer): { cmd: number; len: number; frameLen: numb
   const len = data.readUInt16BE(3);
   const frameLen = len + FRAME_OVERHEAD;
   if (data.length < frameLen) return null; // truncated / declared-length mismatch
-  let sum = 0;
-  for (let i = 0; i < frameLen - 1; i++) sum += data[i];
-  if ((sum & 0xff) !== data[frameLen - 1]) return null; // bad checksum
+  if (sum8(data.subarray(0, frameLen - 1)) !== data[frameLen - 1]) return null; // bad checksum
   return { cmd: data[2], len, frameLen };
 }
 
@@ -170,6 +221,11 @@ function hex(data: Buffer): string {
 
 function byteHex(b: number): string {
   return b.toString(16).padStart(2, '0');
+}
+
+/** The weight range a 0x21, 0x24 or 0x25 weight must fall in, in kg. */
+function isPlausibleKg(kg: number): boolean {
+  return Number.isFinite(kg) && kg >= 0.5 && kg <= 300;
 }
 
 // ─── Connect writes: b2 guest profile and b3 clock (#434, D038) ─────────────
@@ -190,11 +246,15 @@ const PROFILE_LEN = 9;
  */
 const GUEST_SLOT = 0x09;
 /**
- * b2 [11..13] verbatim from the ESPHome client. [11] is not decoded (most
- * likely sex and age; "0x80 | age" is refuted by two profiles of known age),
- * which is why the scale's figures from such a session are not exported.
+ * b2 [11] verbatim from the ESPHome client. It is not decoded (most likely sex
+ * and age). "0x80 | age" fits one private capture but not two profiles of
+ * known age, so it stays a hypothesis; this is why the scale's figures from a
+ * session with this byte are not exported. ble.rmsc04_profile_byte replaces it
+ * with the user's own byte (D079).
  */
-const GUEST_TAIL = [0xa9, 0xff, 0x02];
+const GUEST_PROFILE_BYTE = 0xa9;
+/** b2 [12..13] verbatim from the ESPHome client. */
+const GUEST_TAIL = [0xff, 0x02];
 
 /** b3 payload length: seq, constant (3), Unix seconds (4), zone minutes (2), 00. */
 const CLOCK_LEN = 11;
@@ -240,17 +300,6 @@ const FALLBACK_WEIGHT_CG = 7000;
 const MIN_WEIGHT_CG = 50;
 const MAX_WEIGHT_CG = 30000;
 
-function checksum(bytes: Uint8Array | number[]): number {
-  let sum = 0;
-  for (const b of bytes) sum += b;
-  return sum & 0xff;
-}
-
-function buildFrame(cmd: number, payload: number[]): Buffer {
-  const body = [HDR0, HDR1, cmd, (payload.length >> 8) & 0xff, payload.length & 0xff, ...payload];
-  return Buffer.from([...body, checksum(body)]);
-}
-
 /** The profile height in 0.1 cm, or null when it is missing or out of range. */
 function heightTenths(profile: UserProfile): number | null {
   const tenths = Math.round(profile.height * 10);
@@ -275,18 +324,24 @@ function zoneMinutes(now: Date): number | null {
 
 /**
  * `b2` in the guest form: seq, slot 09, height in 0.1 cm and last weight in
- * 0.01 kg (both u16 BE), then a9 ff 02. The seq is echoed in the 0x22 reply.
+ * 0.01 kg (both u16 BE), then `profileByte` (a9 by default) and ff 02. The seq
+ * is echoed in the 0x22 reply.
  */
-export function buildGuestProfileFrame(seq: number, profile: UserProfile): Buffer {
+export function buildGuestProfileFrame(
+  seq: number,
+  profile: UserProfile,
+  profileByte: number = GUEST_PROFILE_BYTE,
+): Buffer {
   const height = heightTenths(profile) ?? FALLBACK_HEIGHT_TENTHS;
   const weight = weightCg(profile) ?? FALLBACK_WEIGHT_CG;
-  return buildFrame(CMD_PROFILE, [
+  return build55aaFrame(CMD_PROFILE, [
     seq & 0xff,
     GUEST_SLOT,
     (height >> 8) & 0xff,
     height & 0xff,
     (weight >> 8) & 0xff,
     weight & 0xff,
+    profileByte & 0xff,
     ...GUEST_TAIL,
   ]);
 }
@@ -299,7 +354,7 @@ export function buildGuestProfileFrame(seq: number, profile: UserProfile): Buffe
 export function buildClockFrame(seq: number, now: Date): Buffer {
   const seconds = Math.floor(now.getTime() / 1000) >>> 0;
   const zone = zoneMinutes(now) ?? 0;
-  return buildFrame(CMD_CLOCK, [
+  return build55aaFrame(CMD_CLOCK, [
     seq & 0xff,
     ...CLOCK_CONSTANT,
     (seconds >>> 24) & 0xff,
@@ -321,20 +376,16 @@ export function buildClockFrame(seq: number, now: Date): Buffer {
  * owns, and b7 (name), b8 (settings) and b6 (deletes a stored record) are never
  * sent. The status acks go through buildAck, not through here. The length
  * field and checksum are checked too, so a second frame cannot ride along
- * behind an allowed one.
+ * behind an allowed one. A b2's [11] must be exactly `profileByte`, the byte
+ * this session sends.
  */
-export function assertAllowedWrite(frame: Buffer): void {
+export function assertAllowedWrite(frame: Buffer, profileByte: number = GUEST_PROFILE_BYTE): void {
   const refuse = (why: string): never => {
     throw new Error(`Renpho R-MSC04: refusing to write ${why}`);
   };
-  if (frame.length < FRAME_OVERHEAD || frame[0] !== HDR0 || frame[1] !== HDR1) {
-    refuse('a frame without the 55AA header');
-  }
+  const fault = frameFault(frame);
+  if (fault) refuse(fault);
   const len = frame.readUInt16BE(3);
-  if (frame.length !== len + FRAME_OVERHEAD) refuse('a frame whose length field does not match');
-  if (checksum(frame.subarray(0, frame.length - 1)) !== frame[frame.length - 1]) {
-    refuse('a frame with a bad checksum');
-  }
   const cmd = frame[2];
   const p = frame.subarray(5, frame.length - 1);
   switch (cmd) {
@@ -348,7 +399,8 @@ export function assertAllowedWrite(frame: Buffer): void {
         height > MAX_HEIGHT_TENTHS ||
         weight < MIN_WEIGHT_CG ||
         weight > MAX_WEIGHT_CG ||
-        GUEST_TAIL.some((b, i) => p[6 + i] !== b)
+        p[6] !== profileByte ||
+        GUEST_TAIL.some((b, i) => p[7 + i] !== b)
       ) {
         refuse('a b2 other than the guest form');
       }
@@ -438,6 +490,99 @@ class FragmentReassembler {
   }
 }
 
+/**
+ * The record's ten segment impedances (#497), or nothing when the record has no
+ * body fat. Diagnostic values, exported whatever happens to the scale's body
+ * fat: the D079 gates and the D022 height gate decide whose composition the
+ * record is, not whether the scale measured. Body fat in the record is taken
+ * as the sign that the scale measured at all; it does not say the record is
+ * this weigh-in's, which the 0x24 and D057 session gates decide, as for the
+ * body fat.
+ */
+function recordSegments(rec: CompositionRecord): ScaleBodyComp {
+  if (!(rec.fatPercent > 0)) return {};
+  const pair = (i: number) => ({
+    at20kHz: rec.impedance20kHz[i],
+    at100kHz: rec.impedance100kHz[i],
+  });
+  return {
+    segmentImpedance: {
+      trunk: pair(0),
+      leftArm: pair(1),
+      rightArm: pair(2),
+      leftLeg: pair(3),
+      rightLeg: pair(4),
+    },
+  };
+}
+
+/**
+ * The record's body fat, its skeletal muscle percentage (#497) and its visceral
+ * fat when it is 1 to 59. buildPayload exports the skeletal muscle only next to
+ * the accepted body fat and inside its band. It matched the Renpho app's figure on
+ * two weigh-ins of one scale; what base the percentage has is not known.
+ */
+function recordComposition(rec: CompositionRecord): ScaleBodyComp {
+  const comp: ScaleBodyComp = { fat: rec.fatPercent, skeletalMuscle: rec.skeletalMusclePercent };
+  if (rec.visceralFat >= 1 && rec.visceralFat <= 59) comp.visceralFat = rec.visceralFat;
+  return comp;
+}
+
+/** The weigh-in's user has the profile our b2 carried: height, sex, birth date and age. */
+function sameProfile(own: OwnProfilePin, profile: UserProfile): boolean {
+  return (
+    own.heightTenths !== null &&
+    own.heightTenths === heightTenths(profile) &&
+    own.gender === profile.gender &&
+    own.birthDate === profile.birthDate &&
+    own.age === profile.age
+  );
+}
+
+/**
+ * The record's body fat, skeletal muscle and visceral fat from a session whose b2 carried
+ * ble.rmsc04_profile_byte, or {} (the estimate) with one info line saying why
+ * (D079). Reads only the record, the pin and the profile, never the session or
+ * the option: by now both may belong to another session or a reload. No line
+ * carries the byte, a height, a weight, an age or a difference.
+ */
+function ownProfileComposition(
+  rec: CompositionRecord,
+  own: OwnProfilePin,
+  profile: UserProfile,
+): ScaleBodyComp {
+  let why: string | null = null;
+  if (!(rec.fatPercent > 0)) why = 'the scale reported no body fat';
+  else if (!(rec.bmi > 0)) why = 'the scale reported no BMI';
+  else if (!own.written) {
+    why = 'the profile frame with ble.rmsc04_profile_byte was not confirmed as written';
+  } else if (!own.answeredBeforeComplete) {
+    why =
+      'the scale did not answer the profile frame before it first reported the measurement ' +
+      'complete, or its last status before the record was not measurement complete';
+  } else if (own.heightTenths === null) {
+    why = "the first user's height is out of range, so the profile frame carried 170.0 cm";
+  } else if (!sameProfile(own, profile)) {
+    why =
+      'the weigh-in was matched to a user whose height, sex, birth date or age is not the ' +
+      'profile sent to the scale';
+  } else if (!fitsSentHeight(rec, own.heightTenths)) {
+    why = "the scale's BMI does not fit the height sent to it";
+  }
+  if (why !== null) {
+    bleLog.info(
+      "Renpho R-MSC04: the scale's body fat, skeletal muscle and visceral fat are not used for " +
+        `this weigh-in: ${why}; ${noEstimateNote(profile) ?? 'using the estimate'} (#434)`,
+    );
+    return {};
+  }
+  bleLog.info(
+    "Renpho R-MSC04: using the scale's body fat, skeletal muscle and visceral fat, computed for " +
+      'the profile sent with ble.rmsc04_profile_byte (#434)',
+  );
+  return recordComposition(rec);
+}
+
 /** Decode a validated 0x25 frame (42 bytes, all fields big-endian). */
 function decodeRecord(f: Buffer): CompositionRecord {
   const tenths = (start: number, count: number): number[] =>
@@ -451,6 +596,32 @@ function decodeRecord(f: Buffer): CompositionRecord {
     skeletalMusclePercent: f.readUInt16BE(37) / 10,
     visceralFat: f.readUInt16BE(39),
   };
+}
+
+/** One weigh-in's state, replaced whole in onSessionStart (#394, SCALES.md). */
+class Msc04Session {
+  finalReceived = false;
+  finalWeight = 0;
+  /** State of the latest 0x20 status in this session, or null before the first. */
+  lastState: number | null = null;
+  /** Stored records ([8]) the first full 0x20 status of this session reported, or null. */
+  storedAtStart: number | null = null;
+  reassembler = new FragmentReassembler();
+  /** This session's context, so a write left over from a dead session never runs. */
+  ctx: ConnectionContext | null = null;
+  /** A b2 write was attempted in this session: the scale's figures are not exported. */
+  guestProfileSent = false;
+  /** The height in this session's b2, in 0.1 cm. Compared, never logged. */
+  sentHeightTenths: number | null = null;
+  /** Our b2 with ble.rmsc04_profile_byte, or null when it did not go out (D079). */
+  own: OwnProfile | null = null;
+  /** The scale answered our b2 with 0x22 (its seq, slot 09). */
+  profileAnswered = false;
+  /** A 0x11 status came before the scale answered our b2 (the D079 latch). */
+  completeBeforeAnswer = false;
+  /** The latest status is 0x11, and the answer to our b2 came before every 0x11 so far. */
+  answeredBeforeComplete = false;
+  diag = freshDiagnostics();
 }
 
 /**
@@ -475,16 +646,26 @@ function decodeRecord(f: Buffer): CompositionRecord {
  * over three indications on 0x2A12 (#117 capture: 15.9 s after the 0x24
  * frame). So the 0x24 weight no longer ends the session: it is held for up
  * to COMPOSITION_HOLD_MS and resolves at once when a matching 0x25 record
- * lands, or weight-only when none does. 0x26 records are stored history of
- * earlier weigh-ins and are never used.
+ * lands, or weight-only when none does. A session that connects after the
+ * weight locked never gets a 0x24 (#434); its 0x25 record is then the reading,
+ * with the record's own weight, when the status right before it was 0x11 and
+ * the session started with no stored records (D057). 0x26 records are stored
+ * history of earlier weigh-ins and are never used.
  *
- * Of the record, only the scale's body fat and visceral fat are ever exported,
- * and only from a session in which we did NOT write our guest b2 (its [11] is
- * not decoded, so the scale may have computed them for the wrong sex or age;
- * D038), and only when the profile the scale computed them for matches the
- * user (see PROFILE_HEIGHT_TOLERANCE_CM). The segment impedances are logged at debug
- * level; no whole-body impedance is derived from them, so the reading keeps
- * impedance 0.
+ * Of the record's composition, only the scale's body fat, skeletal muscle
+ * percentage (#497) and visceral fat are ever exported.
+ * From a session in which we did NOT write our guest b2, only when the profile
+ * the scale computed them for matches the user (see
+ * PROFILE_HEIGHT_TOLERANCE_CM). From a session with our guest b2 (its [11] a9
+ * is not decoded, so the scale may have computed them for the wrong sex or
+ * age; D038), only when ble.rmsc04_profile_byte put the user's own byte there,
+ * and then only through the gates of ownProfileComposition (D079): the record
+ * has body fat and BMI, our b2 was written, the scale answered it before it
+ * first reported the measurement complete, the weigh-in's user has the
+ * profile we sent, and the BMI fits the height we sent. The ten segment
+ * impedances go out as diagnostic values from every record with body fat,
+ * whichever way those gates decide (#497); no whole-body impedance is derived
+ * from them, so the reading keeps impedance 0.
  *
  * Routing is by advertised name only (names.exact ['r-msc04']). The device also
  * exposes service 0x1A10, which ES-CS20M claims, so this adapter intentionally
@@ -503,7 +684,6 @@ export class RenphoMsc04Adapter
   // Legacy single-char fallback (unused in multi-char mode).
   readonly charNotifyUuid = CHR_NOTIFY;
   readonly charWriteUuid = CHR_WRITE;
-  readonly normalizesWeight = true;
   readonly completionHoldMs = COMPOSITION_HOLD_MS;
   /**
    * The Renpho app writes its status acks as Write Requests, and the scale
@@ -522,29 +702,17 @@ export class RenphoMsc04Adapter
     { uuid: CHR_INDICATE, type: 'notify' },
   ];
 
-  private finalReceived = false;
-  private finalWeight = 0;
-  private readonly reassembler = new FragmentReassembler();
-  /**
-   * The record pinned to the reading it completed (#394): this adapter is a
-   * shared singleton, and on the watcher transports the next session can start
-   * before computeMetrics() runs for this one.
-   */
-  private readonly records = new ReadingComposition<PinnedRecord | null>();
+  private s = new Msc04Session();
 
-  /** This session's context, so a write left over from a dead session never runs. */
-  private ctx: ConnectionContext | null = null;
-  /** A b2 write was attempted in this session: the scale's figures are not exported. */
-  private guestProfileSent = false;
-  /** The height in this session's b2, in 0.1 cm. Compared, never logged. */
-  private sentHeightTenths: number | null = null;
   /** Log the unsendable time zone once per adapter instance (one per process in production). */
   private zoneLogged = false;
   /** BLE_RMSC04_HANDSHAKE values already warned about, once per value and instance. */
   private readonly unknownHandshakeValues = new Set<string>();
-  private diag = freshDiagnostics();
 
   private readonly now: () => Date;
+
+  /** ble.rmsc04_profile_byte, or null (process lifetime, D075). Never logged. */
+  private profileByte: number | null = null;
 
   /** `now` is the clock the b3 frame carries; durations use Date.now(). */
   constructor(now: () => Date = () => new Date()) {
@@ -555,23 +723,15 @@ export class RenphoMsc04Adapter
     return matchesDescriptor(device, this.match);
   }
 
-  /**
-   * Clear the previous weigh-in before anything is subscribed (#394).
-   *
-   * This used to live in `onConnected`, which is too late for a multi-char
-   * adapter: `subscribeAndInit` enables EVERY notify binding and only then
-   * awaits `startInit()`, so frames can already be arriving - through several
-   * D-Bus round trips for the second and third binding - while the reset has
-   * not run. `onSessionStart` runs before the first subscribe.
-   */
+  configure(opts: AdapterRuntimeConfig & AdapterOptions<typeof RMSC04_BLE_OPTIONS>): void {
+    const v = opts.rmsc04ProfileByte;
+    // The schema already checked it; this guards a direct caller. Never logged.
+    this.profileByte =
+      typeof v === 'string' && /^[0-9a-f]{2}$/i.test(v) ? Number.parseInt(v, 16) : null;
+  }
+
   onSessionStart(): void {
-    this.finalReceived = false;
-    this.finalWeight = 0;
-    this.reassembler.reset();
-    this.ctx = null;
-    this.guestProfileSent = false;
-    this.sentHeightTenths = null;
-    this.diag = freshDiagnostics();
+    this.s = new Msc04Session();
   }
 
   async onConnected(ctx: ConnectionContext): Promise<void> {
@@ -581,10 +741,10 @@ export class RenphoMsc04Adapter
           'Likely a transient GATT discovery race. Try again.',
       );
     }
-    this.ctx = ctx;
+    this.s.ctx = ctx;
     const mode = this.connectWrites();
-    this.diag.handshakeAt = Date.now();
-    this.diag.mode = mode;
+    this.s.diag.handshakeAt = Date.now();
+    this.s.diag.mode = mode;
     bleLog.debug(`Renpho R-MSC04: connect writes ${mode}`);
     if (mode === 'full') {
       await this.writeGuestProfile(ctx, 0);
@@ -610,8 +770,8 @@ export class RenphoMsc04Adapter
   }
 
   onSessionEnd(): void {
-    if (this.diag.handshakeAt !== null) this.logSummary(this.diag.handshakeAt);
-    this.ctx = null;
+    if (this.s.diag.handshakeAt !== null) this.logSummary(this.s.diag.handshakeAt);
+    this.s.ctx = null;
   }
 
   /**
@@ -621,7 +781,7 @@ export class RenphoMsc04Adapter
    * onSessionEnd does not run on every transport path.
    */
   private logSummary(start: number): void {
-    const d = this.diag;
+    const d = this.s.diag;
     const end = Date.now();
     const writes = [...d.writes]
       .map(([cmd, outcome]) => {
@@ -646,14 +806,14 @@ export class RenphoMsc04Adapter
     bleLog.debug(
       `Renpho R-MSC04: session ended ${secs(end - start)} s after the handshake started ` +
         `(writes ${d.mode}${writes ? `: ${writes}` : ''}; ${first}; ${last}; ` +
-        `0x24 ${this.finalReceived ? 'yes' : 'no'}; stored records replayed ${d.replayed}; ` +
+        `0x24 ${this.s.finalReceived ? 'yes' : 'no'}; stored records replayed ${d.replayed}; ` +
         `composition record ${d.record}; ${lastFrame})`,
     );
   }
 
   /**
-   * The guest b2. Neither the frame nor the height or weight in it ever reaches
-   * the log: they are the first user's.
+   * The guest b2. Neither the frame nor the height, weight or profile byte in it
+   * ever reaches the log: they are the first user's.
    */
   private async writeGuestProfile(owner: ConnectionContext, seq: number): Promise<void> {
     const profile = owner.profile;
@@ -663,14 +823,32 @@ export class RenphoMsc04Adapter
     if (weightCg(profile) === null) {
       bleLog.debug('Renpho R-MSC04: no usable last weight for the guest profile, sending 70.00 kg');
     }
-    this.sentHeightTenths = heightTenths(profile) ?? FALLBACK_HEIGHT_TENTHS;
-    await this.send(
+    this.s.sentHeightTenths = heightTenths(profile) ?? FALLBACK_HEIGHT_TENTHS;
+    const byte = this.profileByte;
+    const own: OwnProfile | null =
+      byte === null
+        ? null
+        : {
+            seq,
+            heightTenths: heightTenths(profile),
+            gender: profile.gender,
+            birthDate: profile.birthDate,
+            age: profile.age,
+            written: false,
+          };
+    // Set before the write: the 0x22 answer can arrive before the transport
+    // confirms it. Held here, so a write that settles after this session ended
+    // marks only its own session's object.
+    this.s.own = own;
+    const ok = await this.send(
       owner,
       CMD_PROFILE,
-      () => buildGuestProfileFrame(seq, profile),
-      'guest profile (b2)',
+      () => buildGuestProfileFrame(seq, profile, byte ?? GUEST_PROFILE_BYTE),
+      byte === null ? 'guest profile (b2)' : 'guest profile (b2) with ble.rmsc04_profile_byte',
       false,
+      byte ?? GUEST_PROFILE_BYTE,
     );
+    if (ok && own) own.written = true;
   }
 
   private async writeClock(owner: ConnectionContext, seq: number): Promise<void> {
@@ -688,6 +866,7 @@ export class RenphoMsc04Adapter
   /**
    * One checked Write Request. Never throws: a refused or failed write is
    * logged without its bytes, and the caller carries on with the next one.
+   * True only when the write completed while `owner` still owned the session.
    */
   private async send(
     owner: ConnectionContext,
@@ -695,15 +874,16 @@ export class RenphoMsc04Adapter
     frame: () => Buffer,
     label: string,
     logBytes: boolean,
-  ): Promise<void> {
-    if (this.ctx !== owner) return;
+    profileByte: number = GUEST_PROFILE_BYTE,
+  ): Promise<boolean> {
+    if (this.s.ctx !== owner) return false;
     const started = Date.now();
-    const diag = this.diag;
+    const diag = this.s.diag;
     diag.writes.set(cmd, 'refused');
     try {
       const buf = frame();
-      assertAllowedWrite(buf);
-      if (buf[2] === CMD_PROFILE) this.guestProfileSent = true;
+      assertAllowedWrite(buf, profileByte);
+      if (buf[2] === CMD_PROFILE) this.s.guestProfileSent = true;
       // Pending until the transport settles the write: when the link drops
       // first, the summary has to say the Write Response never came, not that
       // the write failed (#434).
@@ -714,17 +894,19 @@ export class RenphoMsc04Adapter
         `Renpho R-MSC04: sent ${label}${logBytes ? ` [${hex(buf)}]` : ''} ` +
           `in ${Date.now() - started} ms`,
       );
+      return this.s.ctx === owner;
     } catch (e: unknown) {
       if (diag.writes.get(cmd) === 'pending') diag.writes.set(cmd, 'failed');
-      if (this.ctx === owner) bleLog.warn(`Renpho R-MSC04: ${label} not sent: ${errMsg(e)}`);
+      if (this.s.ctx === owner) bleLog.warn(`Renpho R-MSC04: ${label} not sent: ${errMsg(e)}`);
+      return false;
     }
   }
 
   parseCharNotification(_charUuid: string, data: Buffer): ScaleReading | null {
-    this.diag.lastFrameAt = Date.now();
+    this.s.diag.lastFrameAt = Date.now();
     // Routed by content, not by characteristic: fragments carry no 55AA header.
     if (!isBareFrame(data)) {
-      const record = this.reassembler.push(data);
+      const record = this.s.reassembler.push(data);
       return record ? this.onRecord(record) : null;
     }
 
@@ -732,10 +914,11 @@ export class RenphoMsc04Adapter
     if (!frame) return null;
 
     if (frame.cmd === CMD_STATUS) {
-      this.logStatus(data, frame.len);
+      this.onStatus(data, frame.len);
       return null;
     }
     if (REPLY_TO[frame.cmd] !== undefined) {
+      if (frame.cmd === CMD_PROFILE_REPLY) this.noteProfileReply(data, frame.len);
       this.logReply(data, frame.cmd, frame.frameLen);
       return null;
     }
@@ -745,13 +928,13 @@ export class RenphoMsc04Adapter
     // settled reading is being held for the composition record, and a held
     // reading is replaced by every later complete one, so these must not
     // reach it.
-    if (frame.cmd === CMD_LIVE && this.finalReceived) return null;
+    if (frame.cmd === CMD_LIVE && this.s.finalReceived) return null;
 
     const weight = this.decodeWeight(data, frame.len, frame.frameLen);
     if (weight === null) return null;
     if (frame.cmd === CMD_FINAL) {
-      this.finalReceived = true;
-      this.finalWeight = weight;
+      this.s.finalReceived = true;
+      this.s.finalWeight = weight;
     }
     return { weight, impedance: 0 };
   }
@@ -766,7 +949,7 @@ export class RenphoMsc04Adapter
     if (len < 2) return null; // need at least the 2 weight bytes
     // Weight bytes are the two just before the checksum: frameLen - 3.
     const weight = data.readUInt16BE(frameLen - 3) / 100;
-    if (weight < 0.5 || weight > 300 || !Number.isFinite(weight)) return null;
+    if (!isPlausibleKg(weight)) return null;
     return weight;
   }
 
@@ -774,11 +957,18 @@ export class RenphoMsc04Adapter
    * A 0x20 status: seq, state, then [7] (01 in every capture and log), [8]
    * the number of stored records the scale still holds (#117 capture: 03,
    * then exactly three 0x26 records, then 00) and [9] (0x50 in July, 0x46 in
-   * September and October; the battery is a guess).
+   * September and October; the battery is a guess). The state and [8] are
+   * also what the gate on a record without a 0x24 reads (D057).
    */
-  private logStatus(data: Buffer, len: number): void {
+  private onStatus(data: Buffer, len: number): void {
     if (len < 2) return;
     const state = data[6];
+    this.s.lastState = state;
+    // A 0x11 before the scale answered our b2: that measurement finished before
+    // our profile reached it, and a later 0x11 does not show it computed again.
+    if (state === STATE_COMPLETE && !this.s.profileAnswered) this.s.completeBeforeAnswer = true;
+    this.s.answeredBeforeComplete =
+      state === STATE_COMPLETE && this.s.profileAnswered && !this.s.completeBeforeAnswer;
     const name = STATUS_NAMES[state] ?? 'unknown';
     let extra = '';
     if (len >= 5) {
@@ -786,18 +976,27 @@ export class RenphoMsc04Adapter
       extra =
         `, ${stored} stored ${stored === 1 ? 'record' : 'records'}, ` +
         `[7] ${byteHex(data[7])}, [9] ${byteHex(data[9])}`;
-      this.diag.firstStatus ??= { state, stored };
+      this.s.diag.firstStatus ??= { state, stored };
+      this.s.storedAtStart ??= stored;
     }
-    this.diag.lastStatus = { state, at: Date.now() };
+    this.s.diag.lastStatus = { state, at: Date.now() };
     bleLog.debug(
       `Renpho R-MSC04: status seq ${data[5]}, state 0x${byteHex(state)} (${name})${extra}`,
     );
   }
 
+  /** A 0x22 that answers our b2 with the byte: length 2, its seq, slot 09 (D079). */
+  private noteProfileReply(data: Buffer, len: number): void {
+    const own = this.s.own;
+    if (own && len === 2 && data[5] === own.seq && data[6] === GUEST_SLOT) {
+      this.s.profileAnswered = true;
+    }
+  }
+
   /** 0x22/0x23 (and 0x27/0x28): the scale answering a write, with its seq and result. */
   private logReply(data: Buffer, cmd: number, frameLen: number): void {
     const to = REPLY_TO[cmd];
-    this.diag.answered.add(to);
+    this.s.diag.answered.add(to);
     const result = hex(data.subarray(6, frameLen - 1));
     bleLog.debug(
       `Renpho R-MSC04: scale answered b${(to & 0x0f).toString(16)} (seq ${data[5]})` +
@@ -813,7 +1012,7 @@ export class RenphoMsc04Adapter
       return null;
     }
     if (frame.cmd === CMD_HISTORY) {
-      this.diag.replayed++;
+      this.s.diag.replayed++;
       const age = frame.len >= 6 ? `${f.readUInt32BE(7)} s old` : 'age unknown';
       bleLog.debug(`Renpho R-MSC04: stored history record seq ${f[5]} ignored (${age})`);
       return null;
@@ -831,40 +1030,92 @@ export class RenphoMsc04Adapter
         `visceral ${rec.visceralFat}; impedance (trunk / L arm / R arm / L leg / R leg) ` +
         `20 kHz ${ohm(rec.impedance20kHz)} ohm, 100 kHz ${ohm(rec.impedance100kHz)} ohm`,
     );
-    this.diag.record = 'ignored';
-    if (this.guestProfileSent && this.sentHeightTenths !== null && rec.bmi > 0) {
-      // Whether the scale computed this record for the b2 we sent. Only yes or
-      // no: a signed gap next to the record's own weight and BMI would give
-      // the user's height away. It tells nothing for a user whose Renpho app
-      // profile has the same height as the first configured user.
-      const gap = Math.abs(100 * Math.sqrt(rec.weight / rec.bmi) - this.sentHeightTenths / 10);
-      const verdict = gap <= SENT_HEIGHT_MATCH_CM ? 'matches' : 'does not match';
+    this.s.diag.record = 'ignored';
+    if (this.s.guestProfileSent && this.s.sentHeightTenths !== null && rec.bmi > 0) {
+      // Whether the scale computed this record for the b2 we sent, by the
+      // criterion of the D079 gate. Only yes or no: a signed gap next to the
+      // record's own weight and BMI would give the user's height away. It tells
+      // nothing for a user whose Renpho app profile has the same height as the
+      // first configured user.
+      const verdict = fitsSentHeight(rec, this.s.sentHeightTenths) ? 'matches' : 'does not match';
       bleLog.debug(
-        `Renpho R-MSC04: the record's BMI height ${verdict} the height we sent ` +
-          `(within ${SENT_HEIGHT_MATCH_CM} cm)`,
+        `Renpho R-MSC04: the record's BMI ${verdict} the height we sent (BMI within 0.1)`,
       );
     }
 
-    if (!this.finalReceived) {
-      bleLog.debug('Renpho R-MSC04: record arrived before the settled weight, ignored');
-      return null;
-    }
-    if (Math.abs(rec.weight - this.finalWeight) > RECORD_WEIGHT_TOLERANCE_KG) {
-      bleLog.debug(
-        `Renpho R-MSC04: record weight ${rec.weight.toFixed(2)} kg does not match the ` +
-          `settled ${this.finalWeight.toFixed(2)} kg, ignored`,
-      );
-      return null;
-    }
+    const weight = this.s.finalReceived ? this.weightFromFinal(rec) : this.weightFromRecord(rec);
+    if (weight === null) return null;
 
-    const reading: ScaleReading = { weight: this.finalWeight, impedance: 0 };
-    this.records.pin(reading, { rec, guestProfile: this.guestProfileSent });
-    this.diag.record = 'used';
+    // A copy, not the session's object: another session can start before
+    // computeMetrics runs (#394), and this one still sends statuses (0x05, 0x04).
+    const own = this.s.own;
+    const record: PinnedRecord = own
+      ? {
+          rec,
+          guestProfile: this.s.guestProfileSent,
+          own: {
+            heightTenths: own.heightTenths,
+            gender: own.gender,
+            birthDate: own.birthDate,
+            age: own.age,
+            written: own.written,
+            answeredBeforeComplete: this.s.answeredBeforeComplete,
+          },
+        }
+      : { rec, guestProfile: this.s.guestProfileSent };
+    const reading: ScaleReading = { weight, impedance: 0, scaleComposition: record };
+    this.s.diag.record = 'used';
     bleLog.info(
       `Renpho R-MSC04: body composition received (fat ${rec.fatPercent} %, ` +
         `visceral ${rec.visceralFat})`,
     );
     return reading;
+  }
+
+  /** The 0x24 weight when the record is within RECORD_WEIGHT_TOLERANCE_KG of it, else null. */
+  private weightFromFinal(rec: CompositionRecord): number | null {
+    if (Math.abs(rec.weight - this.s.finalWeight) > RECORD_WEIGHT_TOLERANCE_KG) {
+      bleLog.debug(
+        `Renpho R-MSC04: record weight ${rec.weight.toFixed(2)} kg does not match the ` +
+          `settled ${this.s.finalWeight.toFixed(2)} kg, ignored`,
+      );
+      return null;
+    }
+    return this.s.finalWeight;
+  }
+
+  /**
+   * The record's own weight in a session without a 0x24, or null (#434, D057).
+   *
+   * The scale sends 0x24 once, when the weight settles, so a session that
+   * connects after that never gets one. The record carries no age, so it is
+   * taken as this weigh-in only when the status right before it was 0x11 (a
+   * live record follows 0x11 in every capture and log) and the session started
+   * with no stored records ([8] 00), so no stored weigh-in can be what the
+   * scale delivers (a third-party log on #117 says an unacknowledged stored
+   * record can come back as 0x25). In the #117 capture the record's weight is
+   * the 0x24 weight of the same weigh-in.
+   */
+  private weightFromRecord(rec: CompositionRecord): number | null {
+    let why: string | null = null;
+    if (this.s.lastState !== STATE_COMPLETE) {
+      const last =
+        this.s.lastState === null ? 'no status' : `status 0x${byteHex(this.s.lastState)}`;
+      why = `${last} right before it, not 0x11`;
+    } else if (this.s.storedAtStart !== 0) {
+      const n = this.s.storedAtStart;
+      why =
+        n === null
+          ? 'no stored-record count at the start of the session'
+          : `the session started with ${n} stored ${n === 1 ? 'record' : 'records'}`;
+    } else if (!isPlausibleKg(rec.weight)) {
+      why = `its weight ${rec.weight.toFixed(2)} kg is out of range`;
+    }
+    if (why !== null) {
+      bleLog.debug(`Renpho R-MSC04: record ignored, no 0x24 in this session: ${why}`);
+      return null;
+    }
+    return rec.weight;
   }
 
   /**
@@ -885,50 +1136,63 @@ export class RenphoMsc04Adapter
     return ack;
   }
 
+  /** A 0x24 weight, or a reading a 0x25 record completed, also without a 0x24 (D057). */
   isComplete(reading: ScaleReading): boolean {
-    return reading.weight > 0 && this.finalReceived;
+    return reading.weight > 0 && (this.s.finalReceived || this.isFinal(reading));
   }
 
-  /** Final only once a matching 0x25 record completed the reading. */
+  /** Final only once a 0x25 record completed the reading, with or without a 0x24. */
   isFinal(reading: ScaleReading): boolean {
-    return this.records.of(reading, null) !== null;
+    return reading.scaleComposition != null;
   }
 
   computeMetrics(reading: ScaleReading, profile: UserProfile): BodyComposition {
-    const pinned = this.records.of(reading, null);
+    const pinned = reading.scaleComposition as PinnedRecord | undefined;
     if (!pinned) return buildPayload(reading.weight, 0, {}, profile);
+    const segments = recordSegments(pinned.rec);
+    if (pinned.own) {
+      const comp = ownProfileComposition(pinned.rec, pinned.own, profile);
+      return buildPayload(reading.weight, 0, { ...comp, ...segments }, profile);
+    }
     if (pinned.guestProfile) {
       bleLog.info(
-        "Renpho R-MSC04: the scale's body fat and visceral fat were computed for the guest " +
-          'profile we sent, not exported (#434); using the estimate',
+        "Renpho R-MSC04: the scale's body fat, skeletal muscle and visceral fat were computed " +
+          'for the guest profile we sent, not exported (#434); ' +
+          (noEstimateNote(profile) ?? 'using the estimate'),
       );
-      return buildPayload(reading.weight, 0, {}, profile);
+      return buildPayload(reading.weight, 0, segments, profile);
     }
-    return buildPayload(reading.weight, 0, this.scaleComposition(pinned.rec, profile), profile);
+    const comp = this.scaleComposition(pinned.rec, profile);
+    return buildPayload(reading.weight, 0, { ...comp, ...segments }, profile);
   }
 
   /** The scale's own figures, or {} (the profile estimate) when they are not this user's. */
   private scaleComposition(rec: CompositionRecord, profile: UserProfile): ScaleBodyComp {
     if (!(rec.fatPercent > 0)) {
-      bleLog.info('Renpho R-MSC04: the scale reported no body fat, using the estimate');
+      bleLog.info(
+        'Renpho R-MSC04: the scale reported no body fat, ' +
+          (noEstimateNote(profile) ?? 'using the estimate'),
+      );
       return {};
     }
     if (!(rec.bmi > 0)) {
-      bleLog.info('Renpho R-MSC04: the scale reported no BMI, using the estimate');
+      bleLog.info(
+        'Renpho R-MSC04: the scale reported no BMI, ' +
+          (noEstimateNote(profile) ?? 'using the estimate'),
+      );
       return {};
     }
     const scaleHeight = 100 * Math.sqrt(rec.weight / rec.bmi);
     if (Math.abs(scaleHeight - profile.height) > PROFILE_HEIGHT_TOLERANCE_CM) {
       bleLog.info(
         `Renpho R-MSC04: the scale's BMI implies a ${scaleHeight.toFixed(0)} cm profile, ` +
-          `not the configured ${profile.height} cm, so its figures are not used. ` +
+          `not the configured ${profile.height} cm, so its figures are not used` +
+          `${noEstimateNote(profile) ? `; ${noEstimateNote(profile)}` : ''}. ` +
           `It is likely the profile last written to the scale by the Renpho app, ` +
           `which may be another user's.`,
       );
       return {};
     }
-    const comp: ScaleBodyComp = { fat: rec.fatPercent };
-    if (rec.visceralFat >= 1 && rec.visceralFat <= 59) comp.visceralFat = rec.visceralFat;
-    return comp;
+    return recordComposition(rec);
   }
 }

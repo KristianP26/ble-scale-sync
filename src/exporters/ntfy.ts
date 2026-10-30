@@ -4,7 +4,7 @@ import type { Exporter, ExportContext, ExportResult } from '../interfaces/export
 import type { ExporterSchema } from '../interfaces/exporter-schema.js';
 import type { NtfyConfig } from './config.js';
 import { formatNotification } from './notification-message.js';
-import { withRetry, httpError, httpHealthcheck } from '../utils/retry.js';
+import { sendWithRetry, probe } from './http.js';
 
 const log = createLogger('Ntfy');
 
@@ -88,7 +88,7 @@ export class NtfyExporter implements Exporter {
 
   async healthcheck(): Promise<ExportResult> {
     const healthUrl = `${this.config.url.replace(/\/+$/, '')}/v1/health`;
-    return httpHealthcheck(() => fetch(healthUrl, { signal: AbortSignal.timeout(5000) }));
+    return probe(healthUrl);
   }
 
   async export(data: BodyComposition, context?: ExportContext): Promise<ExportResult> {
@@ -109,23 +109,14 @@ export class NtfyExporter implements Exporter {
 
     const body = formatNotification(data, context);
 
-    return withRetry(
-      async () => {
-        const response = await fetch(targetUrl, {
-          method: 'POST',
-          headers,
-          body,
-          signal: AbortSignal.timeout(10_000),
-        });
-
-        if (!response.ok) {
-          throw httpError(response.status);
-        }
-
-        log.info('Ntfy notification sent.');
-        return { success: true };
+    return sendWithRetry(
+      targetUrl,
+      { method: 'POST', headers, body },
+      {
+        log,
+        label: 'ntfy notification',
+        onOk: () => log.info('Ntfy notification sent.'),
       },
-      { log, label: 'ntfy notification' },
     );
   }
 }

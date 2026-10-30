@@ -144,6 +144,11 @@ const COMPLETION_HOLD_MS = 5000;
  * from the scale (87.6, 85.7, 88.0, 88.8, 89.7, 7.4 kg).
  *
  * Only the weight is read; see the class comment for why the other six are not.
+ *
+ * The weight is taken as kg whatever the display shows. INFERRED: no capture
+ * from a scale set to lb exists, but bone mass (kg) and BMR (kcal) stay metric,
+ * and a record that switched only its weight to pounds would be strange. A lb
+ * user seeing weights off by 2.2x points here.
  */
 const RECORD_LEN = 20;
 const POSITION_OFFSET = 1;
@@ -168,6 +173,26 @@ function statusOfNextSlot(slot: number): number[] | null {
 function setClockCommand(): number[] {
   const now = Math.floor(Date.now() / 1000);
   return [CMD_SET_CLOCK, now & 0xff, (now >>> 8) & 0xff, (now >>> 16) & 0xff, (now >>> 24) & 0xff];
+}
+
+/**
+ * One session's walk state, replaced whole in onSessionStart (#394, SCALES.md):
+ * a stale clock would judge the next session's records (the backwards-clock
+ * check included), and a clock write that failed would never be retried.
+ * lastReportedTs is NOT here: it is de-duplication state that outlives sessions.
+ */
+class SalterSession {
+  /** Scale clock from the last `02` reply, and the local time it arrived. */
+  clockSec = 0;
+  clockAt = 0;
+  /** Whether this session has already written the clock; see {@link SalterAdapter.buildAck}. */
+  clockSyncSent = false;
+  /**
+   * Whether the slot being walked still owes a fetch of position 0. Set when a
+   * count above one comes back, consumed by the record reply that follows, and
+   * dropped whenever a walk restarts; see {@link SalterAdapter.buildAck}.
+   */
+  oldestOwed = false;
 }
 
 /**
@@ -336,23 +361,6 @@ export class SalterAdapter
   readonly charWriteUuid = CHR_FFC1;
 
   /**
-   * The record's weight is treated as canonical kg, so the handler must not run
-   * it through the lbs conversion on top.
-   *
-   * INFERRED, NOT DIRECTLY VERIFIED. Every capture so far was taken with the
-   * scale displaying kg, so a record from a scale set to lb has never been seen.
-   * The inference rests on the record's companion fields, which are unambiguously
-   * metric whatever the display is doing: bone mass arrives in kilograms and BMR
-   * in kilocalories. A record that switched its weight field to pounds while
-   * leaving bone mass in kilograms would be a very strange protocol, and the
-   * vendor app converts for display anyway.
-   *
-   * If a unit with a lb display ever reports weights wrong by a factor of 2.2,
-   * this flag is the first thing to check.
-   */
-  readonly normalizesWeight = true;
-
-  /**
    * What each tick kicks off: a keepalive, then the clock read whose reply starts
    * the slot walk (see {@link buildAck}). The slots themselves are NOT listed
    * here — writing them as one burst is what this firmware drops.
@@ -395,18 +403,18 @@ export class SalterAdapter
    */
   buildAck(data: Buffer): number[] | null {
     if (data.length === CLOCK_REPLY_LEN && data[0] === CMD_CLOCK) {
-      if (data.readUInt32LE(1) < MIN_PLAUSIBLE_CLOCK_SEC && !this.clockSyncSent) {
+      if (data.readUInt32LE(1) < MIN_PLAUSIBLE_CLOCK_SEC && !this.s.clockSyncSent) {
         // Once per session. A write that does not take leaves the slots empty
         // and the session yields nothing, which the next connection retries;
         // retrying inside this one would only spin.
-        this.clockSyncSent = true;
+        this.s.clockSyncSent = true;
         bleLog.info(
           "Salter: the scale's clock is unset (new batteries?); setting it, " +
             'or it will not store the weigh-in',
         );
         return setClockCommand();
       }
-      this.oldestOwed = false; // a fresh walk owes nothing from the last one
+      this.s.oldestOwed = false; // a fresh walk owes nothing from the last one
       return [CMD_STATUS, 0]; // start the walk by asking slot 0 how many records it holds
     }
     if (data.length === SET_CLOCK_ACK_LEN && data[0] === CMD_SET_CLOCK) {
@@ -419,12 +427,12 @@ export class SalterAdapter
       // Newest position first, so the reading that matters lands before the
       // scale can power off. A backlogged slot then owes a fetch of position 0
       // as well; parseNotification keeps the newer of the two.
-      this.oldestOwed = count > 1;
+      this.s.oldestOwed = count > 1;
       return [CMD_FETCH, slot, count - 1];
     }
     if (isRecord(data)) {
-      if (this.oldestOwed) {
-        this.oldestOwed = false;
+      if (this.s.oldestOwed) {
+        this.s.oldestOwed = false;
         return [CMD_FETCH, data[0], 0];
       }
       return statusOfNextSlot(data[0]);
@@ -458,19 +466,7 @@ export class SalterAdapter
    */
   private lastReportedTs = 0;
 
-  /** Scale clock from the last `02` reply, and the local time it arrived. */
-  private clockSec = 0;
-  private clockAt = 0;
-
-  /** Whether this session has already written the clock; see {@link buildAck}. */
-  private clockSyncSent = false;
-
-  /**
-   * Whether the slot being walked still owes a fetch of position 0. Set when a
-   * count above one comes back, consumed by the record reply that follows, and
-   * dropped whenever a walk restarts; see {@link buildAck}.
-   */
-  private oldestOwed = false;
+  private s = new SalterSession();
 
   matches(device: BleDeviceInfo): boolean {
     return matchesDescriptor(device, this.match);
@@ -505,7 +501,7 @@ export class SalterAdapter
     // unknown age must not be published as today's weight. The sweep always
     // reads the clock before any record, so this is defensive rather than a
     // state the protocol produces.
-    if (!this.clockSec) {
+    if (!this.s.clockSec) {
       bleLog.debug(`Salter: record from ${where} ignored, no clock read yet`);
       return null;
     }
@@ -579,7 +575,7 @@ export class SalterAdapter
 
   /** The scale's clock, advanced by the time since it was read. */
   private scaleNow(): number {
-    return this.clockSec + (Date.now() - this.clockAt) / 1000;
+    return this.s.clockSec + (Date.now() - this.s.clockAt) / 1000;
   }
 
   /**
@@ -592,8 +588,8 @@ export class SalterAdapter
    * belongs to a numbering that no longer exists.
    */
   private noteClock(seconds: number): void {
-    this.clockSec = seconds;
-    this.clockAt = Date.now();
+    this.s.clockSec = seconds;
+    this.s.clockAt = Date.now();
     if (this.lastReportedTs && seconds + FUTURE_TOLERANCE_SEC < this.lastReportedTs) {
       bleLog.info(
         "Salter: the scale's clock went backwards (new batteries?); resetting de-duplication",
@@ -615,27 +611,12 @@ export class SalterAdapter
    * mid-session, after this session's clock was read.
    */
   private isFromAnotherEpoch(timestamp: number): boolean {
-    if (!this.clockSec) return false; // no clock yet: nothing to compare against
+    if (!this.s.clockSec) return false; // no clock yet: nothing to compare against
     return timestamp > this.scaleNow() + FUTURE_TOLERANCE_SEC;
   }
 
-  /**
-   * Forget this session's clock reading, and re-arm the clock write. Adapters are
-   * shared singletons, so a stale clock would otherwise be used to judge the next
-   * session's records - including the backwards-clock check, which must see a
-   * fresh value - and a clock write that failed would never be retried.
-   *
-   * onSessionStart rather than onSessionEnd (#394): the end hook is best effort.
-   * A timeout abandons the read promise rather than cancelling it, so it fires
-   * only if a disconnect event happens to follow, and the ESPHome proxy scan
-   * path can drop a session without reaching cleanup at all. A session that
-   * ended either of those ways would carry its clock into the next one.
-   */
   onSessionStart(): void {
-    this.clockSec = 0;
-    this.clockAt = 0;
-    this.clockSyncSent = false;
-    this.oldestOwed = false;
+    this.s = new SalterSession();
   }
 
   isComplete(reading: ScaleReading): boolean {

@@ -1,16 +1,12 @@
 import NodeBle from 'node-ble';
-import type {
-  ScaleAdapter,
-  BleDeviceInfo,
-  BodyComposition,
-} from '../../interfaces/scale-adapter.js';
+import type { ScaleAdapter } from '../../interfaces/scale-adapter.js';
 import type { ScanOptions, ScanResult } from '../types.js';
 import type { RawReading } from '../shared.js';
 import {
   findMissingCharacteristics,
   hasDeferredNotifyBinding,
   stopDeferredNotifications,
-} from '../shared.js';
+} from '../session/wiring.js';
 import { resolveAdapter } from '../../scales/resolve.js';
 import {
   bleLog,
@@ -24,6 +20,8 @@ import {
   DISCOVERY_POLL_MS,
   POST_DISCOVERY_QUIESCE_MS,
   GATT_DISCOVERY_TIMEOUT_MS,
+  DISCOVERY_TIMEOUT_MS,
+  StaleLinkError,
 } from '../types.js';
 import {
   helperOf,
@@ -42,21 +40,43 @@ import {
   dbusError,
   resetConnection,
 } from './connection.js';
-import { ensurePairingAgent, setPairingTarget } from './agent.js';
+import { ensurePairingAgent, setPairingTarget, userPromptCount } from './agent.js';
 import { ensureAdapterPrivacy, requireAdapterPrivacy } from './privacy.js';
 import {
   startDiscoverySafe,
   removeDevice,
   autoDiscover,
   stopDiscoveryAndQuiesce,
+  runningScanIsFiltered,
 } from './discovery.js';
+import {
+  announceKept,
+  armFreshAdvertLatch,
+  cachePolicyFor,
+  deviceInfoFrom,
+  forgetReadingAdapter,
+  noScaleRecognizedMessage,
+  rememberReadingAdapter,
+  targetNotFoundMessage,
+  type FreshAdvertLatch,
+} from './device-cache.js';
+import {
+  advertisedReadingHint,
+  hintAdapterFor,
+  holdUntilPairingAllowed,
+  noteAllScalesMissed,
+  noteScaleMissed,
+  settlePairingRecord,
+} from './pairing-backoff.js';
 import { connectWithRecovery } from './connect.js';
+import { disconnectBounded, noteReadingForStaleLink } from './stale-link.js';
 import {
   withScanActivityWatchdog,
   resetScanActivityBackoff,
   type ScanWatch,
 } from './scan-watchdog.js';
-import { logAdvertisementSnapshot } from './device-object.js';
+import { logAdvertisementSnapshot, type AdvertisementSnapshot } from './device-object.js';
+import { sessionManufacturerData } from './session-advert.js';
 import { wrapDevice } from './gatt.js';
 import { broadcastScanNodeBle } from './broadcast.js';
 import {
@@ -69,7 +89,7 @@ import {
   teardownSession,
   waitForTargetDevice,
 } from './scan-stages.js';
-import { safeName } from '../advertisement.js';
+import { readsFromAdvertisement, safeName } from '../advertisement.js';
 
 /** Max time to wait for a BLE pairing/bonding handshake before giving up. */
 const BONDING_TIMEOUT_MS = 15_000;
@@ -343,8 +363,6 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
     adapters,
     profile,
     scaleAuth,
-    selectProfile,
-    weightUnit,
     onLiveData,
     onLiveWeight,
     abortSignal,
@@ -353,6 +371,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
     autoClearStaleBond,
     preemptiveAdapterReset,
     adapterPrivacy,
+    pairingRetryMaxMin,
   } = opts;
 
   let device: Device | null = null;
@@ -365,6 +384,66 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
   let probeAdapter: Adapter | undefined;
   /** What the scan activity watchdog did in this cycle's wait, for the same classification. */
   const scanWatch: ScanWatch = { restarts: 0 };
+  /** Listens on the scale's kept BlueZ object until the wait has used it (D060). */
+  let latch: FreshAdvertLatch | undefined;
+  /** The scale's BlueZ object was kept from an earlier cycle rather than removed (D060). */
+  let keptObject = false;
+  /** BlueZ left a Disconnect for the scale unanswered in this cycle (#472). */
+  let staleLink = false;
+  /** Pairing prompts the agent had handled for the scale right before this cycle's connect (#471). */
+  let promptsBefore: number | undefined;
+  /** The bonding adapter this cycle matched the scale to, if any (#471). */
+  let bondingAdapter: ScaleAdapter | undefined;
+  /** What the scale's advertisement said in this cycle about a stored weigh-in (#471). */
+  let cycleHint: boolean | undefined;
+  const releaseLatch = (): void => {
+    latch?.release();
+    latch = undefined;
+  };
+  /**
+   * Hold the connect back while a pairing nobody confirmed stands for the
+   * scale (#471, D063). A held cycle never connected, so its teardown must not
+   * send a Disconnect to the object either: BlueZ may still list the scale as
+   * connected from an earlier cycle (#472).
+   */
+  const holdPairing = async (
+    found: Device,
+    mac: string,
+    adapter: ScaleAdapter | undefined,
+    waitStartedAt: number,
+  ): Promise<void> => {
+    try {
+      cycleHint = await holdUntilPairingAllowed({
+        device: found,
+        btAdapter,
+        mac,
+        adapter,
+        adapters,
+        capMin: pairingRetryMaxMin,
+        hint: cycleHint,
+        budgetMs: waitStartedAt + DISCOVERY_TIMEOUT_MS - Date.now(),
+        abortSignal,
+        scanWatch,
+      });
+    } catch (err) {
+      releaseDeviceProxy(found);
+      device = null;
+      throw err;
+    }
+  };
+
+  /**
+   * Follow the connect retry loop onto the adapter and device it uses now. A
+   * re-discovery in there can replace the D-Bus connection, and the teardown's
+   * Disconnect, StopDiscovery and RemoveDevice through the proxies of the old
+   * one would never reach BlueZ: connection.ts fails them once that bus is
+   * gone (#472). probeAdapter is left alone on purpose. The connect runs only
+   * after gattAttempted is set, and classifyBleFailure never probes then.
+   */
+  const followConnect = (live: { btAdapter: Adapter; device: Device }): void => {
+    btAdapter = live.btAdapter;
+    device = live.device;
+  };
 
   // Publish this cycle's pairing target before the first getAdapter(), which is
   // where the agent registers. Stored as a closure rather than a value so a
@@ -403,52 +482,112 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
       }
     }
 
-    // In continuous mode, BlueZ caches the device from a previous cycle.
-    // Removing it forces a fresh discovery + proxy creation.
+    // Removing the scale's BlueZ object before the scan is what made the wait
+    // below mean "it is advertising now": waitDevice() only polls for the
+    // object, and BlueZ keeps it for good once Connect() was called on it. It
+    // also drops BlueZ's GATT cache, which a GATT-only scale then pays for with
+    // a full service discovery on every connect (#425). So it stays where a
+    // kept object could do harm, and elsewhere a latch armed before discovery
+    // starts has to hear the scale in this cycle first (D060, device-cache.ts).
     if (targetMac) {
-      await removeDevice(btAdapter, targetMac);
+      const policy = cachePolicyFor(targetMac, adapters);
+      const key = formatMac(targetMac);
+      if (!policy.keep) {
+        bleLog.debug(`Removing ${key} from BlueZ before the scan: ${policy.reason}`);
+        await removeDevice(btAdapter, targetMac);
+      } else {
+        const held = await armFreshAdvertLatch(btAdapter, key);
+        switch (held.kind) {
+          case 'absent':
+            bleLog.debug(`BlueZ no longer lists ${key}; waiting for it to appear`);
+            break;
+          case 'paired':
+            keptObject = true;
+            bleLog.debug(`${key} is paired; BlueZ keeps it either way`);
+            break;
+          case 'unknown':
+            bleLog.debug(`Could not read ${key} from BlueZ (${held.error}); removing it`);
+            await removeDevice(btAdapter, targetMac);
+            break;
+          case 'armed':
+            latch = held.latch;
+            keptObject = true;
+            announceKept(key, policy.adapter!.name);
+            bleLog.debug(`Keeping ${key} in BlueZ for this cycle: ${policy.reason}`);
+            break;
+        }
+      }
     }
 
     const discoveryResult = await startDiscoverySafe(btAdapter, bleAdapter, { abortSignal });
     if (discoveryResult) btAdapter = discoveryResult;
     probeAdapter = btAdapter;
 
+    // The latch hears reports only on the bus it was put on, and every report
+    // only while our filtered scan runs. Without either, remove the object as
+    // before, just after the scan started instead of before it.
+    if (latch && targetMac) {
+      const why =
+        btAdapter !== latch.adapter
+          ? 'the D-Bus connection was replaced while discovery started'
+          : !runningScanIsFiltered(btAdapter)
+            ? 'our filtered discovery is not running'
+            : undefined;
+      if (why) {
+        releaseLatch();
+        keptObject = false;
+        bleLog.debug(`Removing ${formatMac(targetMac)} from BlueZ after all: ${why}`);
+        await removeDevice(btAdapter, targetMac);
+      }
+    }
+
     let matchedAdapter: ScaleAdapter;
     // Advertised name, for adapters whose protocol differs by model.
     let deviceName = '';
     // Advertised manufacturer data, for adapters that read per-unit flags from
-    // it (#461). Captured before StopDiscovery, which can drop it (#297).
+    // it (#461). Captured before StopDiscovery, which can drop it (#297); when
+    // this cycle's snapshot has none, the last one the address advertised in
+    // this run (session-advert.ts, #463).
     let manufacturerData: { id: number; data: Buffer } | undefined;
 
-    if (targetMac) {
-      const mac = formatMac(targetMac);
-      bleLog.info('Scanning for device...');
-
-      device = await waitForTargetDevice(btAdapter, mac, abortSignal, scanWatch);
-
-      const { name, advert, preMatchedAdapter } = await resolvePreConnectAdapter(
-        device,
-        mac,
-        deviceMac,
-        adapters,
-      );
-      deviceName = name;
-      manufacturerData = advert.manufacturerData;
-
-      if (
-        preMatchedAdapter?.preferPassive &&
-        (preMatchedAdapter.parseServiceData || preMatchedAdapter.parseBroadcast)
-      ) {
-        matchedAdapter = preMatchedAdapter;
-        bleLog.info(`Matched adapter: ${matchedAdapter.name}`);
-        const reading = await broadcastScanNodeBle(matchedAdapter, btAdapter, device, mac, {
+    /**
+     * Both branches, once the scale is found: an adapter that reads
+     * advertisements gets them without a connect. Anything else waits out a
+     * pairing nobody confirmed (#471), stops discovery and connects; then this
+     * returns undefined and `device` is the connected one.
+     */
+    const readOrConnect = async (found: {
+      device: Device;
+      /** Formatted; connectWithRecovery and the prompt count format it the same way. */
+      mac: string;
+      adapter: ScaleAdapter | undefined;
+      /** Service data for the pairing hint; manufacturer data for the session only (D071). */
+      advert: AdvertisementSnapshot;
+      waitStartedAt: number;
+    }): Promise<RawReading | undefined> => {
+      const { adapter, mac } = found;
+      if (adapter && readsFromAdvertisement(adapter)) {
+        bleLog.info(`Matched adapter: ${adapter.name}`);
+        const reading = await broadcastScanNodeBle(adapter, btAdapter, found.device, mac, {
           abortSignal,
           onLiveData,
           onLiveWeight,
         });
+        // A broadcast adapter in the memory means the next cycle removes the
+        // object again (D060). The memory is the MAC branch's only.
+        if (targetMac) rememberReadingAdapter(targetMac, adapter);
         resetScanActivityBackoff();
         return reading;
       }
+
+      if (adapter?.requiresBonding) bondingAdapter = adapter;
+      cycleHint = advertisedReadingHint(
+        hintAdapterFor(mac, adapter, adapters),
+        mac,
+        found.advert.serviceData,
+      );
+      await holdPairing(found.device, mac, adapter, found.waitStartedAt);
+      manufacturerData = sessionManufacturerData(mac, found.advert);
 
       // Stop discovery before connecting. BlueZ on low-power devices (e.g. Pi Zero)
       // often fails with le-connection-abort-by-local while discovery is still active.
@@ -456,17 +595,79 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
       if (adapterPrivacy) await requireAdapterPrivacy(btAdapter);
 
       gattAttempted = true;
+      promptsBefore = userPromptCount(mac);
       device = await connectWithRecovery({
         btAdapter,
-        mac: targetMac,
-        initialDevice: device,
+        mac,
+        initialDevice: found.device,
         maxRetries: MAX_CONNECT_RETRIES,
         bleAdapter,
         autoClearStaleBond,
         adapterPrivacy,
         abortSignal,
+        onLive: followConnect,
       });
       bleLog.info('Connected. Discovering services...');
+      return undefined;
+    };
+
+    if (targetMac) {
+      const mac = formatMac(targetMac);
+      bleLog.info('Scanning for device...');
+
+      // A no-show is what lets a held pairing go at once when the scale comes
+      // back (#471); an abort or any other failure says nothing about it.
+      const waitStartedAt = Date.now();
+      const noteNoShow = (err: unknown): never => {
+        if (!abortSignal?.aborted && errMsg(err) === targetNotFoundMessage(mac)) {
+          noteScaleMissed(mac);
+        }
+        throw err;
+      };
+      device = await waitForTargetDevice(btAdapter, mac, abortSignal, scanWatch, latch).catch(
+        noteNoShow,
+      );
+      releaseLatch();
+
+      let { name, advert, preMatchedAdapter } = await resolvePreConnectAdapter(
+        device,
+        mac,
+        deviceMac,
+        adapters,
+      );
+      // A broadcast poll must never read a kept object: its cached
+      // ManufacturerData can still be the last weigh-in's final frame, which a
+      // report without one does not clear (#372). Only GATT-only adapters keep
+      // the object, so this takes a different match on the same unit, and it
+      // costs one more wait if it ever does.
+      if (keptObject && preMatchedAdapter && readsFromAdvertisement(preMatchedAdapter)) {
+        bleLog.debug(
+          `${preMatchedAdapter.name} reads advertisements; removing the kept ${mac} and waiting for a fresh one`,
+        );
+        keptObject = false;
+        forgetReadingAdapter(targetMac);
+        releaseDeviceProxy(device);
+        device = null;
+        await removeDevice(btAdapter, targetMac);
+        device = await waitForTargetDevice(btAdapter, mac, abortSignal, scanWatch).catch(
+          noteNoShow,
+        );
+        ({ name, advert, preMatchedAdapter } = await resolvePreConnectAdapter(
+          device,
+          mac,
+          deviceMac,
+          adapters,
+        ));
+      }
+      deviceName = name;
+      const reading = await readOrConnect({
+        device,
+        mac,
+        adapter: preMatchedAdapter,
+        advert,
+        waitStartedAt,
+      });
+      if (reading) return reading;
 
       // Resolve the adapter post-discovery using characteristics as well as
       // service UUIDs, so devices that share a generic vendor service (e.g.
@@ -490,57 +691,44 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
         resolveAfterConnect(gatt, adapters, name, deviceMac, advert),
         abortSignal,
       );
+      if (matchedAdapter.requiresBonding) bondingAdapter = matchedAdapter;
       bleLog.info(`Matched adapter: ${matchedAdapter.name}`);
     } else {
       // Auto-discovery: poll discovered devices, match by name, connect, verify
       const scanAdapter = btAdapter;
+      const waitStartedAt = Date.now();
       const result = await withScanActivityWatchdog(
         scanAdapter,
         abortSignal,
         () => autoDiscover(scanAdapter, adapters, abortSignal),
         scanWatch,
-      );
+      ).catch((err: unknown) => {
+        // No scale at all in this cycle: a held one goes at once when it is
+        // found again (#471).
+        if (!abortSignal?.aborted && errMsg(err) === noScaleRecognizedMessage()) {
+          noteAllScalesMissed();
+        }
+        throw err;
+      });
       device = result.device;
       matchedAdapter = result.adapter;
       deviceMac = result.mac;
       deviceName = result.name;
       // The fresher snapshot first; a name-only match may have had none yet
-      // (ADV_IND and SCAN_RSP arrive apart), then the one it matched on.
+      // (ADV_IND and SCAN_RSP arrive apart), then the one it matched on. Only
+      // one with bytes counts, as in session-advert.ts.
       const snapshot = await logAdvertisementSnapshot(device);
-      manufacturerData = snapshot.manufacturerData ?? result.manufacturerData;
-
-      // Passive-mode adapters: read from advertisements without connecting.
-      if (
-        matchedAdapter.preferPassive &&
-        (matchedAdapter.parseServiceData || matchedAdapter.parseBroadcast)
-      ) {
-        bleLog.info(`Matched adapter: ${matchedAdapter.name}`);
-        const reading = await broadcastScanNodeBle(matchedAdapter, btAdapter, device, result.mac, {
-          abortSignal,
-          onLiveData,
-          onLiveWeight,
-        });
-        resetScanActivityBackoff();
-        return reading;
-      }
-
-      // Stop discovery before connecting. BlueZ on low-power devices (e.g. Pi Zero)
-      // often fails with le-connection-abort-by-local while discovery is still active.
-      await stopDiscoveryAndQuiesce(btAdapter);
-      if (adapterPrivacy) await requireAdapterPrivacy(btAdapter);
-
-      gattAttempted = true;
-      device = await connectWithRecovery({
-        btAdapter,
+      const sessionAdvert = [snapshot.manufacturerData, result.manufacturerData].find(
+        (md) => md !== undefined && md.data.length > 0,
+      );
+      const reading = await readOrConnect({
+        device,
         mac: result.mac,
-        initialDevice: device,
-        maxRetries: MAX_CONNECT_RETRIES,
-        bleAdapter,
-        autoClearStaleBond,
-        adapterPrivacy,
-        abortSignal,
+        adapter: matchedAdapter,
+        advert: { serviceData: snapshot.serviceData, manufacturerData: sessionAdvert },
+        waitStartedAt,
       });
-      bleLog.info('Connected. Discovering services...');
+      if (reading) return reading;
     }
 
     // Setup GATT characteristics and wait for a complete reading.
@@ -570,7 +758,6 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
 
     const raw = await readWithTimeouts(charMap, wrapDevice(device), matchedAdapter, deviceMac, {
       profile,
-      weightUnit,
       onLiveData,
       scaleAuth,
       selectProfile,
@@ -580,7 +767,11 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
       manufacturerData,
     });
     gattSucceeded = true;
+    // Even for a cycle the poll loop has given up on: which adapter read the
+    // scale is a fact about the scale, not about the cycle (D060).
+    if (targetMac) rememberReadingAdapter(targetMac, matchedAdapter);
     resetScanActivityBackoff();
+    noteReadingForStaleLink(deviceMac);
 
     // Same device path as the newer cycle's, so a late Disconnect here would
     // drop that cycle's link to the scale.
@@ -599,16 +790,21 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
       }
       // The stop and the wait above take up to 2.5 s, long enough for the poll
       // loop to give up on this cycle and start a newer one on the same device.
+      // Bounded, so a Disconnect BlueZ never answers no longer takes the
+      // reading down with it; the teardown recovers the link instead (#472).
       if (!isSuperseded()) {
-        try {
-          await device.disconnect();
-        } catch {
-          /* ignore */
-        }
+        const outcome = await disconnectBounded(device, {
+          mac: formatMac(deviceMac),
+          label: 'after reading',
+          abortSignal,
+        });
+        if (outcome === 'timeout') staleLink = true;
       }
     }
     return raw;
   } catch (err) {
+    // connectWithRecovery already waited out one unanswered Disconnect.
+    if (err instanceof StaleLinkError) staleLink = true;
     await classifyBleFailure(err, {
       gattAttempted,
       probeAdapter,
@@ -618,6 +814,19 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
     });
     throw err;
   } finally {
+    releaseLatch();
+    // Before the teardown, which disconnects and releases the device this
+    // reads Paired from (#471).
+    await settlePairingRecord({
+      device,
+      mac: deviceMac,
+      adapter: bondingAdapter,
+      promptsBefore,
+      reading: gattSucceeded,
+      hint: cycleHint,
+      capMin: pairingRetryMaxMin,
+      abortSignal,
+    });
     await teardownSession({
       device,
       btAdapter: btAdapter!,
@@ -628,14 +837,9 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
       abortSignal,
       preemptiveAdapterReset,
       isSuperseded,
+      staleLink,
     });
   }
-}
-
-/** Scan, read, and compute body composition. Wrapper around scanAndReadRaw(). */
-export async function scanAndRead(opts: ScanOptions): Promise<BodyComposition> {
-  const { reading, adapter } = await scanAndReadRaw(opts);
-  return adapter.computeMetrics(reading, opts.profile);
 }
 
 /**
@@ -731,16 +935,7 @@ export async function scanDevices(
           // as named.
           const name = await dev.getName().catch(() => '');
           const advert = await logAdvertisementSnapshot(dev).catch(() => undefined);
-          const info: BleDeviceInfo = {
-            localName: name,
-            address: formatMac(addr),
-            serviceUuids: [],
-            ...(advert?.manufacturerData ? { manufacturerData: advert.manufacturerData } : {}),
-            ...(advert?.serviceData && advert.serviceData.length > 0
-              ? { serviceData: advert.serviceData }
-              : {}),
-          };
-          const matched = resolveAdapter(info, adapters);
+          const matched = resolveAdapter(deviceInfoFrom(name, addr, advert), adapters);
 
           results.push({
             address: addr,

@@ -1,4 +1,4 @@
-import type { ScaleAdapter, BleDeviceInfo } from '../../interfaces/scale-adapter.js';
+import type { ScaleAdapter } from '../../interfaces/scale-adapter.js';
 import { resolveAdapter } from '../../scales/resolve.js';
 import {
   bleLog,
@@ -16,7 +16,9 @@ import {
 } from '../types.js';
 import { helperOf, getDbusNext, releaseDeviceProxy, type Adapter, type Device } from './dbus.js';
 import { logAdvertisementSnapshot } from './device-object.js';
+import { deviceInfoFrom, noScaleRecognizedMessage } from './device-cache.js';
 import { reensureAdapterPrivacy } from './privacy.js';
+import { onceLog } from './once-log.js';
 import {
   getAdapter,
   resetConnection,
@@ -39,7 +41,7 @@ import { safeName } from '../advertisement.js';
 const filteredScans = new WeakMap<Adapter, number>();
 
 /** True when this adapter's running scan is ours and already carries the filter. */
-function runningScanIsFiltered(btAdapter: Adapter): boolean {
+export function runningScanIsFiltered(btAdapter: Adapter): boolean {
   const generation = filteredScans.get(btAdapter);
   return generation !== undefined && generation === currentConnectionGeneration();
 }
@@ -61,10 +63,10 @@ export function notifyDiscoveryStopped(btAdapter: Adapter): void {
 export async function stopDiscoveryAndQuiesce(btAdapter: Adapter): Promise<void> {
   try {
     bleLog.debug('Stopping discovery before connect...');
-    await btAdapter.stopDiscovery();
+    await withBluezDeadline(btAdapter.stopDiscovery(), 'StopDiscovery');
     bleLog.debug('Discovery stopped');
-  } catch {
-    bleLog.debug('stopDiscovery failed (may already be stopped)');
+  } catch (err) {
+    bleLog.debug(`stopDiscovery failed (may already be stopped): ${errMsg(err)}`);
   }
   notifyDiscoveryStopped(btAdapter);
   await sleep(POST_DISCOVERY_QUIESCE_MS);
@@ -79,10 +81,25 @@ export async function stopDiscoveryAndQuiesce(btAdapter: Adapter): Promise<void>
  * is never answered (bluez src/adapter.c). Without a deadline that parked the
  * whole cycle until the poll loop gave up on it.
  */
-const BLUEZ_CALL_TIMEOUT_MS = 10_000;
+export const BLUEZ_CALL_TIMEOUT_MS = 10_000;
+
+/**
+ * A BlueZ call raced against BLUEZ_CALL_TIMEOUT_MS, for the calls on the
+ * connect and teardown path that are not part of the discovery recovery (no
+ * BluezCallTimeout, so nothing here feeds isStuckEvidence). A StopDiscovery is
+ * answered only after the kernel's Stop Discovery completes, and a parked one
+ * left a cycle silent until the poll deadline (#472).
+ */
+export function withBluezDeadline<T>(call: Promise<T>, what: string): Promise<T> {
+  return withTimeout(
+    call,
+    BLUEZ_CALL_TIMEOUT_MS,
+    `${what} got no answer from BlueZ within ${BLUEZ_CALL_TIMEOUT_MS / 1000}s`,
+  );
+}
 
 /** A BlueZ call that got no answer in time, which is evidence of a stuck state. */
-class BluezCallTimeout extends Error {}
+export class BluezCallTimeout extends Error {}
 
 /**
  * InProgress answers to a StartDiscovery, which are no evidence of a stuck
@@ -102,7 +119,11 @@ class BluezCallTimeout extends Error {}
  */
 const refusedStarts = new WeakSet<object>();
 
-async function bluezCall(btAdapter: Adapter, method: string, ...args: unknown[]): Promise<void> {
+export async function bluezCall(
+  btAdapter: Adapter,
+  method: string,
+  ...args: unknown[]
+): Promise<void> {
   const message = `${method} got no answer from BlueZ within ${BLUEZ_CALL_TIMEOUT_MS / 1000}s`;
   try {
     await withTimeout(
@@ -162,21 +183,11 @@ export interface StartDiscoveryOptions {
   abortSignal?: AbortSignal;
 }
 
-const announced = new Set<string>();
-
-/** First time at `level`, after that at debug: these repeat every cycle while the state lasts. */
-function announceOnce(key: string, level: 'info' | 'warn', message: string): void {
-  if (announced.has(key)) {
-    bleLog.debug(message);
-    return;
-  }
-  announced.add(key);
-  bleLog[level](message);
-}
+const announceOnce = onceLog();
 
 /** Test seam: the announcements are per process on purpose. */
 export function _resetDiscoveryRecoveryStateForTests(): void {
-  announced.clear();
+  announceOnce.reset();
 }
 
 /**
@@ -205,7 +216,10 @@ function announceStuckDiscovery(err: unknown): void {
  * adapter left off takes the scale and every other BLE device on it down.
  * True only when both writes were accepted.
  */
-async function powerCycleViaDbus(btAdapter: Adapter, abortSignal?: AbortSignal): Promise<boolean> {
+export async function powerCycleViaDbus(
+  btAdapter: Adapter,
+  abortSignal?: AbortSignal,
+): Promise<boolean> {
   const helper = helperOf(btAdapter);
   const { Variant } = await getDbusNext();
   const setPowered = (on: boolean): Promise<void> =>
@@ -661,63 +675,58 @@ export async function startDiscoverySafe(
     }
   }
 
+  /**
+   * Tiers 4-6: a reset below bluetoothd's D-Bus state, then discovery on a
+   * fresh connection. Undefined when the reset did not take or the start
+   * failed. The abort is checked before tier 4 only; whether tiers 5 and 6
+   * should check it too is open (arch audit B-09).
+   */
+  const afterReset = async (
+    what: string,
+    reset: () => Promise<boolean>,
+    beforeConnect?: () => Promise<void>,
+  ): Promise<Adapter | undefined> => {
+    if (!(await reset())) return undefined;
+    resetConnection();
+    await beforeConnect?.();
+    try {
+      const freshAdapter = await getAdapter(bleAdapter);
+      live = freshAdapter;
+      // A reset replaced the connection, so read the generation again.
+      if (await applyFilterAndStart(freshAdapter)) {
+        filteredScans.set(freshAdapter, currentConnectionGeneration());
+      }
+      bleLog.debug(`Discovery started after ${what}`);
+      return freshAdapter;
+    } catch (e) {
+      bleLog.debug(`startDiscovery after ${what} failed: ${errMsg(e)}`);
+      return undefined;
+    }
+  };
+
   // 4. Kernel-level adapter reset via btmgmt + fresh D-Bus connection
   if (opts.abortSignal?.aborted) return live ?? false;
   bleLog.debug('Attempting kernel-level adapter reset via btmgmt...');
-  if (await resetAdapterBtmgmt(parseHciIndex(bleAdapter))) {
-    resetConnection();
-    try {
-      const freshAdapter = await getAdapter(bleAdapter);
-      live = freshAdapter;
-      // A reset replaced the connection, so read the generation again.
-      if (await applyFilterAndStart(freshAdapter)) {
-        filteredScans.set(freshAdapter, currentConnectionGeneration());
-      }
-      bleLog.debug('Discovery started after btmgmt reset');
-      return freshAdapter;
-    } catch (e) {
-      bleLog.debug(`startDiscovery after btmgmt reset failed: ${errMsg(e)}`);
-    }
-  }
+  const afterBtmgmt = await afterReset('btmgmt reset', () =>
+    resetAdapterBtmgmt(parseHciIndex(bleAdapter)),
+  );
+  if (afterBtmgmt) return afterBtmgmt;
 
   // 5. RF-level reset via rfkill (more thorough than btmgmt)
   bleLog.debug('Attempting rfkill block/unblock...');
-  if (await resetAdapterRfkill()) {
-    resetConnection();
-    try {
-      const freshAdapter = await getAdapter(bleAdapter);
-      live = freshAdapter;
-      // A reset replaced the connection, so read the generation again.
-      if (await applyFilterAndStart(freshAdapter)) {
-        filteredScans.set(freshAdapter, currentConnectionGeneration());
-      }
-      bleLog.debug('Discovery started after rfkill reset');
-      return freshAdapter;
-    } catch (e) {
-      bleLog.debug(`startDiscovery after rfkill reset failed: ${errMsg(e)}`);
-    }
-  }
+  const afterRfkill = await afterReset('rfkill reset', resetAdapterRfkill);
+  if (afterRfkill) return afterRfkill;
 
-  // 6. Restart bluetoothd service (clears all D-Bus session state)
+  // 6. Restart bluetoothd service (clears all D-Bus session state). It
+  // applies its own Privacy setting on start, which can clear
+  // ble.adapter_privacy's; a no-op when the option is off (#417).
   bleLog.debug('Attempting bluetoothd service restart...');
-  if (await restartBluetoothd()) {
-    resetConnection();
-    // bluetoothd applies its own Privacy setting on start, which can clear
-    // ble.adapter_privacy's. No-op when the option is off (#417).
-    await reensureAdapterPrivacy();
-    try {
-      const freshAdapter = await getAdapter(bleAdapter);
-      live = freshAdapter;
-      // A reset replaced the connection, so read the generation again.
-      if (await applyFilterAndStart(freshAdapter)) {
-        filteredScans.set(freshAdapter, currentConnectionGeneration());
-      }
-      bleLog.debug('Discovery started after bluetoothd restart');
-      return freshAdapter;
-    } catch (e) {
-      bleLog.debug(`startDiscovery after bluetoothd restart failed: ${errMsg(e)}`);
-    }
-  }
+  const afterRestart = await afterReset(
+    'bluetoothd restart',
+    restartBluetoothd,
+    reensureAdapterPrivacy,
+  );
+  if (afterRestart) return afterRestart;
 
   // All strategies failed
   bleLog.warn(
@@ -728,17 +737,30 @@ export async function startDiscoverySafe(
 }
 
 /**
+ * What removeDevice() did: BlueZ answered the RemoveDevice (an error answer such
+ * as DoesNotExist included), it was not sent, or it went unanswered for
+ * BLUEZ_CALL_TIMEOUT_MS, which is evidence of a link stuck in BlueZ (#472).
+ */
+export type RemoveDeviceOutcome = 'removed' | 'skipped' | 'timeout';
+
+/**
  * Remove a device from BlueZ D-Bus cache to force a fresh proxy on re-discovery.
  *
  * `includeBonded` also deletes the stored pairing keys, which is destructive and
  * is only ever passed by the stale-bond recovery in connect.ts, behind
  * `ble.auto_clear_stale_bond` (#335).
+ *
+ * The RemoveDevice itself has a deadline: BlueZ queues it for a device it lists
+ * as connected behind the same disconnect a stuck Disconnect waits on
+ * (remove_device() in adapter.c), so it can stay unanswered just as long
+ * (#472). The lookup before it is answered by bluetoothd's main loop and has
+ * none.
  */
 export async function removeDevice(
   btAdapter: Adapter,
   mac: string,
   opts: { includeBonded?: boolean } = {},
-): Promise<void> {
+): Promise<RemoveDeviceOutcome> {
   const formatted = formatMac(mac);
 
   // Never remove a bonded device: BlueZ RemoveDevice deletes the stored pairing
@@ -766,7 +788,7 @@ export async function removeDevice(
     // and skip removal rather than risk wiping a real bond.
     if (!errMsg(err).includes('Device not found')) {
       bleLog.debug(`Skipping RemoveDevice: bond state unknown (${errMsg(err)})`);
-      return;
+      return 'skipped';
     }
     // Worth a line: an absent node here means BlueZ already dropped the peer's
     // object, which is the signature of #297.
@@ -779,7 +801,7 @@ export async function removeDevice(
   }
   if (paired && !opts.includeBonded) {
     bleLog.debug('Skipping RemoveDevice: device is bonded (preserving pairing keys)');
-    return;
+    return 'skipped';
   }
   if (paired) {
     bleLog.warn(`Removing the bond for ${formatted} along with the BlueZ device object.`);
@@ -787,12 +809,18 @@ export async function removeDevice(
 
   try {
     const devSerialized = `dev_${formatted.replace(/:/g, '_')}`;
-    const adapterHelper = helperOf(btAdapter);
-    await adapterHelper.callMethod('RemoveDevice', `${adapterHelper.object}/${devSerialized}`);
+    await bluezCall(btAdapter, 'RemoveDevice', `${helperOf(btAdapter).object}/${devSerialized}`);
     bleLog.debug('Removed device from BlueZ cache');
-  } catch {
+  } catch (err) {
+    if (err instanceof BluezCallTimeout) {
+      bleLog.debug(
+        `RemoveDevice for ${formatted} got no answer from BlueZ within ${BLUEZ_CALL_TIMEOUT_MS / 1000}s`,
+      );
+      return 'timeout';
+    }
     // Device wasn't in cache
   }
+  return 'removed';
 }
 
 /**
@@ -888,15 +916,7 @@ export async function autoDiscover(
         // The loop above skips a device with no name at all, so a genuinely
         // nameless broadcast peer is still only reachable through `ble.scale_mac`.
         const advert = await logAdvertisementSnapshot(dev).catch(() => undefined);
-        const info: BleDeviceInfo = {
-          localName: name,
-          address: formatMac(addr),
-          serviceUuids: [],
-          ...(advert?.manufacturerData ? { manufacturerData: advert.manufacturerData } : {}),
-          ...(advert?.serviceData && advert.serviceData.length > 0
-            ? { serviceData: advert.serviceData }
-            : {}),
-        };
+        const info = deviceInfoFrom(name, addr, advert);
         const matched = resolveAdapter(info, adapters);
         if (matched?.singleBond) {
           // Connecting is enough for the kernel to pair it, and it keeps one
@@ -943,5 +963,5 @@ export async function autoDiscover(
     await sleep(DISCOVERY_POLL_MS);
   }
 
-  throw new Error(`No recognized scale found within ${DISCOVERY_TIMEOUT_MS / 1000}s`);
+  throw new Error(noScaleRecognizedMessage());
 }

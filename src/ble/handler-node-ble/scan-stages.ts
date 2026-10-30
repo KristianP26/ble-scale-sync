@@ -13,13 +13,9 @@
  * reason they are separable.
  */
 
-import type {
-  BleDeviceInfo,
-  ScaleAdapter,
-  SessionProfileSelector,
-} from '../../interfaces/scale-adapter.js';
-import type { BleChar } from '../shared.js';
-import { resolveAdapter, resolveAfterDiscovery } from '../../scales/resolve.js';
+import type { BleDeviceInfo, ScaleAdapter } from '../../interfaces/scale-adapter.js';
+import type { BleChar, BleDevice } from '../session/ports.js';
+import { resolveAdapter } from '../../scales/resolve.js';
 import {
   bleLog,
   errMsg,
@@ -44,28 +40,18 @@ import {
   dbusError,
   parseHciIndex,
 } from './connection.js';
-import { removeDevice, notifyDiscoveryStopped } from './discovery.js';
+import { removeDevice, notifyDiscoveryStopped, withBluezDeadline } from './discovery.js';
+import { disconnectBounded, recoverStaleLink, staleLinkRecoveryDue } from './stale-link.js';
 import { logAdvertisementSnapshot, type AdvertisementSnapshot } from './device-object.js';
 import { buildCharMap } from './gatt.js';
-import {
-  waitForRawReading,
-  withAbandonmentCleanup,
-  type BleDevice,
-  type RawReading,
-} from '../shared.js';
-import type { WeightUnit } from '../../config/schema.js';
+import type { RawReading } from '../shared.js';
+import { nativePolicy, runGattSession, selectSessionAdapter } from '../session/runner.js';
 import type { ScaleAuth, ScaleReading, UserProfile } from '../../interfaces/scale-adapter.js';
-import {
-  RAW_READING_TIMEOUT_MS,
-  READING_SESSION_CAP_FACTOR,
-  SessionTimeoutError,
-  untilAborted,
-  withIdleTimeout,
-} from '../types.js';
 import { tagBleFailure, bleFailureKind } from '../failure-kind.js';
 import { probeLiveness, makeLivenessAdapter } from './liveness.js';
 import { withScanActivityWatchdog, SCAN_HEARD_FRESH_MS, type ScanWatch } from './scan-watchdog.js';
 import { safeName } from '../advertisement.js';
+import { deviceInfoFrom, targetNotFoundMessage, type FreshAdvertLatch } from './device-cache.js';
 
 /**
  * Acquire the BlueZ adapter, resetting a stale D-Bus connection once.
@@ -113,17 +99,25 @@ const SCAN_VISIBILITY_LOG_MS = 30_000;
  * in flight, and so the enumeration itself never runs for anyone who has debug
  * off. The timer is unref'd: a shutdown arriving mid-wait should not be held up
  * by a diagnostic.
+ *
+ * `kept`: the target's object was kept from an earlier cycle (D060), so BlueZ
+ * listing it says nothing about whether it advertises now.
  */
-function startScanVisibilityLog(btAdapter: Adapter, mac: string): () => void {
+function startScanVisibilityLog(btAdapter: Adapter, mac: string, kept: boolean): () => void {
   const timer = setInterval(() => {
     if (!isDebugEnabled()) return;
     void (async () => {
       try {
         const addrs: string[] = await btAdapter.devices();
         const seen = addrs.some((a) => formatMac(a) === mac);
+        const note = !seen
+          ? ''
+          : kept
+            ? ' (BlueZ keeps the target from an earlier session; waiting for it to advertise)'
+            : ' (including the target)';
         bleLog.debug(
           `Still waiting for ${mac}; BlueZ currently lists ${addrs.length} device(s)` +
-            `${seen ? ' (including the target)' : ''}: ${addrs.join(', ') || 'none'}`,
+            `${note}: ${addrs.join(', ') || 'none'}`,
         );
       } catch (err) {
         bleLog.debug(`Could not enumerate BlueZ devices while waiting: ${errMsg(err)}`);
@@ -145,23 +139,32 @@ function startScanVisibilityLog(btAdapter: Adapter, mac: string): () => void {
  * The scan activity watchdog runs alongside the wait and restarts a discovery
  * that went deaf mid-wait (scan-watchdog.ts); the wait itself is unchanged.
  * What it did is collected in `scanWatch`.
+ *
+ * With a `latch`, the object is one BlueZ kept from an earlier cycle (D060).
+ * `waitDevice()` only polls for the object's path, so it returns at once even
+ * while the scale sleeps; the device is handed on only once the latch heard a
+ * report from it in this cycle. Same 120 s budget, same no-show message, and
+ * still inside the watchdog, so a scan that goes deaf during it is restarted.
  */
 export async function waitForTargetDevice(
   btAdapter: Adapter,
   mac: string,
   abortSignal?: AbortSignal,
   scanWatch?: ScanWatch,
+  latch?: FreshAdvertLatch,
 ): Promise<Device> {
   if (abortSignal?.aborted) {
     throw abortSignal.reason ?? new DOMException('Aborted', 'AbortError');
   }
 
-  const stopVisibilityLog = startScanVisibilityLog(btAdapter, mac);
+  const stopVisibilityLog = startScanVisibilityLog(btAdapter, mac, latch !== undefined);
   try {
     return await withScanActivityWatchdog(
       btAdapter,
       abortSignal,
-      () => awaitTargetDevice(btAdapter, mac, abortSignal),
+      latch
+        ? () => awaitFreshTargetDevice(btAdapter, mac, latch, abortSignal)
+        : () => awaitTargetDevice(btAdapter, mac, abortSignal),
       scanWatch,
     );
   } finally {
@@ -169,15 +172,46 @@ export async function waitForTargetDevice(
   }
 }
 
+async function awaitFreshTargetDevice(
+  btAdapter: Adapter,
+  mac: string,
+  latch: FreshAdvertLatch,
+  abortSignal?: AbortSignal,
+): Promise<Device> {
+  const startedAt = Date.now();
+  const device = await awaitTargetDevice(btAdapter, mac, abortSignal);
+  try {
+    await latch.heard(startedAt + DISCOVERY_TIMEOUT_MS - Date.now(), mac, abortSignal);
+  } catch (err) {
+    // The caller never gets this proxy, so its teardown cannot release it
+    // (#396, #397, #404).
+    releaseDeviceProxy(device);
+    if (!abortSignal?.aborted) {
+      bleLog.debug(
+        `BlueZ still lists ${mac} from an earlier session but did not hear it advertise in this cycle`,
+      );
+    }
+    throw err;
+  }
+  bleLog.debug(`Heard ${mac} advertise in this cycle (BlueZ kept it from an earlier session)`);
+  return device;
+}
+
 async function awaitTargetDevice(
   btAdapter: Adapter,
   mac: string,
   abortSignal?: AbortSignal,
 ): Promise<Device> {
+  // node-ble's waitDevice has a deadline of its own, armed just before ours
+  // with the same length, so it is the one that fires; its bare `operation
+  // timed out` is the same no-show and has to read as one, or the cycle does
+  // not count as a miss (D063). Passing the length keeps the two equal.
   const waitPromise = withTimeout(
-    btAdapter.waitDevice(mac),
+    btAdapter.waitDevice(mac, DISCOVERY_TIMEOUT_MS).catch((err: unknown) => {
+      throw errMsg(err) === 'operation timed out' ? new Error(targetNotFoundMessage(mac)) : err;
+    }),
     DISCOVERY_TIMEOUT_MS,
-    `Device ${mac} not found within ${DISCOVERY_TIMEOUT_MS / 1000}s`,
+    targetNotFoundMessage(mac),
   );
 
   if (abortSignal) {
@@ -256,16 +290,7 @@ export async function resolvePreConnectAdapter(
   // the name-only pre-match always had, so the widening changes nothing for
   // it. Otherwise a device matching a connect-based adapter here falls through
   // as before and is re-resolved after discovery.
-  const preInfo: BleDeviceInfo = {
-    localName: name,
-    address: deviceMac ? formatMac(deviceMac) : undefined,
-    serviceUuids: [],
-    ...(advert.manufacturerData ? { manufacturerData: advert.manufacturerData } : {}),
-    ...(advert.serviceData && advert.serviceData.length > 0
-      ? { serviceData: advert.serviceData }
-      : {}),
-  };
-  const preMatchedAdapter = resolveAdapter(preInfo, adapters);
+  const preMatchedAdapter = resolveAdapter(deviceInfoFrom(name, deviceMac, advert), adapters);
   return { name, advert, preMatchedAdapter };
 }
 
@@ -349,7 +374,7 @@ export async function resolveAfterConnect(
   let resolved: ScaleAdapter | undefined;
   let matchCharMap = await enumerateCharMap(gatt, false);
   for (let attempt = 1; attempt <= CHAR_DISCOVERY_MAX_RETRIES; attempt++) {
-    resolved = resolveAfterDiscovery(
+    resolved = selectSessionAdapter(
       advertised,
       {
         serviceUuids: serviceUuids.map(normalizeUuid),
@@ -432,10 +457,19 @@ export async function teardownSession(opts: {
    * the discovery session, the D-Bus connection and the controller.
    */
   isSuperseded?: () => boolean;
+  /**
+   * The cycle already saw BlueZ leave a Disconnect for this device unanswered
+   * (#472). The teardown then does not send another one, which would wait just
+   * as long, and recovers the adapter instead. It also finds this out by
+   * itself, from its own Disconnect or RemoveDevice.
+   */
+  staleLink?: boolean;
 }): Promise<void> {
   const { device, btAdapter, deviceMac, bleAdapter, gattAttempted, gattSucceeded, abortSignal } =
     opts;
   const preemptiveAdapterReset = opts.preemptiveAdapterReset !== false;
+  const mac = deviceMac ? formatMac(deviceMac) : 'the scale';
+  let staleLink = opts.staleLink === true;
   const superseded = (): boolean => opts.isSuperseded?.() === true;
   const standDown = (): void => {
     bleLog.debug(
@@ -447,116 +481,162 @@ export async function teardownSession(opts: {
     standDown();
     return;
   }
-  // Best-effort disconnect if we got partway through a connection
+  // Best-effort disconnect if we got partway through a connection. Sent on an
+  // aborted cycle too, since it is what cancels a Connect still pending in
+  // BlueZ (A-07); only the wait for its answer ends with the abort.
   if (device) {
-    try {
-      await device.disconnect();
-    } catch {
-      /* already disconnected or never connected */
+    if (!staleLink) {
+      bleLog.debug(`Disconnecting ${mac} after the session...`);
+      const outcome = await disconnectBounded(device, { mac, label: 'teardown', abortSignal });
+      if (outcome === 'timeout') staleLink = true;
     }
     // Hand the Device proxy back. On a GATT cycle the resetConnection() below
     // would drop it anyway, but an idle or broadcast cycle never resets, so
     // without this the same device path collects one more listener and one more
     // D-Bus match rule per cycle for the life of the process (#396, #397). The
-    // session is over here, so nothing else can be holding it.
+    // session is over here, so nothing else can be holding it, and that holds
+    // after an unanswered Disconnect as much as after an answered one (#472).
     releaseDeviceProxy(device);
   }
 
-  // The disconnect above is a D-Bus call with no deadline. The poll loop aborts
+  // The Disconnect above can take up to its 10 s deadline. The poll loop aborts
   // a cycle it gives up on, so this teardown can start before the next cycle
-  // exists and still be parked here when it does (A-04).
+  // exists and still be running when it does (A-04).
   if (superseded()) {
     standDown();
     return;
   }
 
-  if (gattAttempted) {
-    // Cleanup after a FAILED read (scale disconnected before completion,
-    // GATT discovery timed out, etc.). BlueZ keeps the device proxy plus
-    // any orphaned notification subscriptions cached, and the controller
-    // level Discovering flag can desync from our client state
-    // (bluez/bluez#807). Before the shared btmgmt power-cycle runs, mirror
-    // what bleak-retry-connector does on Linux: force StopDiscovery via
-    // D-Bus and RemoveDevice the scale, so the next scan cycle starts from
-    // a clean BlueZ state instead of inheriting the zombie subscription.
-    if (!gattSucceeded) {
-      try {
-        await helperOf(btAdapter!).callMethod('StopDiscovery');
-        bleLog.debug('Force StopDiscovery after failed GATT');
-      } catch (e) {
-        bleLog.debug(`Force StopDiscovery failed: ${errMsg(e)}`);
-      }
-      // The resetConnection() below would invalidate the claim anyway, but the
-      // invariant should hold by construction, not by what happens to follow.
-      if (btAdapter) notifyDiscoveryStopped(btAdapter);
-      if (deviceMac) {
-        await removeDevice(btAdapter!, deviceMac);
-      }
+  // Cleanup after a FAILED read (scale disconnected before completion,
+  // GATT discovery timed out, etc.). BlueZ keeps the device proxy plus
+  // any orphaned notification subscriptions cached, and the controller
+  // level Discovering flag can desync from our client state
+  // (bluez/bluez#807). Before the shared btmgmt power-cycle runs, mirror
+  // what bleak-retry-connector does on Linux: force StopDiscovery via
+  // D-Bus and RemoveDevice the scale, so the next scan cycle starts from
+  // a clean BlueZ state instead of inheriting the zombie subscription.
+  // Both have a deadline: BlueZ answers a RemoveDevice for a device it
+  // lists as connected only once that link is gone, which is the same
+  // evidence as an unanswered Disconnect (#472).
+  if (gattAttempted && !gattSucceeded) {
+    try {
+      await withBluezDeadline(helperOf(btAdapter!).callMethod('StopDiscovery'), 'StopDiscovery');
+      bleLog.debug('Force StopDiscovery after failed GATT');
+    } catch (e) {
+      bleLog.debug(`Force StopDiscovery failed: ${errMsg(e)}`);
     }
+    // The resetConnection() below would invalidate the claim anyway, but the
+    // invariant should hold by construction, not by what happens to follow.
+    if (btAdapter) notifyDiscoveryStopped(btAdapter);
+    if (deviceMac && staleLink) {
+      // BlueZ would queue it behind the Disconnect it has not answered and
+      // let it time out the same way.
+      bleLog.debug(`Skipping RemoveDevice for ${mac}: BlueZ has not answered its Disconnect`);
+    } else if (deviceMac && (await removeDevice(btAdapter!, deviceMac)) === 'timeout') {
+      staleLink = true;
+    }
+  }
 
-    // After a GATT connection (successful or failed), reset the D-Bus
-    // connection AND power-cycle the HCI controller. BlueZ on Broadcom
-    // adapters (RPi) enters a "zombie discovery" state after a few
-    // connect/disconnect cycles: Discovering=true, fresh startDiscovery()
-    // succeeds, but the controller is no longer running LE scan. D-Bus
-    // reset alone is insufficient because bluetoothd's controller-state
-    // tracking survives across client reconnects. btmgmt power off/on
-    // clears the zombie at the kernel level. See bluez/bluez#807,
-    // bluez/bluer#47.
-    //
-    // None of that is worth doing while the app is shutting down: there is no
-    // next scan cycle to protect, and the power-cycle alone spends about
-    // 2.5 s in sleeps plus two btmgmt child processes, inside a 5 s
-    // force-exit grace window (#335). The D-Bus reset is kept either way,
-    // because it destroys the socket that pins the event loop open, which is
-    // the opposite of a delay.
-    //
-    // `ble.preemptive_adapter_reset: false` skips the power-cycle and nothing
-    // else. It is the only host-side event between a bonded session that
-    // works and a next connect whose stored key is rejected (#417), so it has
-    // to be possible to rule it in or out. The D-Bus reset stays, and the
-    // reactive recovery tiers in startDiscoverySafe still cover a wedge.
-    //
-    // An abort is either a shutdown or the poll loop giving up on this cycle
-    // (A-04), and neither should power-cycle the radio: a shutdown has no next
-    // cycle, and an abandoned cycle's power-cycle would land on the next one,
-    // which starts after a 5 s backoff. A controller that really is wedged is
-    // still recovered by the tiers in startDiscoverySafe.
+  // After a GATT connection (successful or failed), reset the D-Bus
+  // connection AND power-cycle the HCI controller. BlueZ on Broadcom
+  // adapters (RPi) enters a "zombie discovery" state after a few
+  // connect/disconnect cycles: Discovering=true, fresh startDiscovery()
+  // succeeds, but the controller is no longer running LE scan. D-Bus
+  // reset alone is insufficient because bluetoothd's controller-state
+  // tracking survives across client reconnects. btmgmt power off/on
+  // clears the zombie at the kernel level. See bluez/bluez#807,
+  // bluez/bluer#47.
+  //
+  // None of that is worth doing while the app is shutting down: there is no
+  // next scan cycle to protect, and the power-cycle alone spends about
+  // 2.5 s in sleeps plus two btmgmt child processes, inside a 5 s
+  // force-exit grace window (#335). The D-Bus reset is kept either way,
+  // because it destroys the socket that pins the event loop open, which is
+  // the opposite of a delay.
+  //
+  // `ble.preemptive_adapter_reset: false` skips the preemptive power-cycle
+  // and nothing else. It is the only host-side event between a bonded session
+  // that works and a next connect whose stored key is rejected (#417), so it
+  // has to be possible to rule it in or out. The D-Bus reset stays, the
+  // reactive recovery tiers in startDiscoverySafe still cover a wedge, and so
+  // does the stale-link recovery below (D062).
+  //
+  // An abort is either a shutdown or the poll loop giving up on this cycle
+  // (A-04), and neither should power-cycle the radio: a shutdown has no next
+  // cycle, and an abandoned cycle's power-cycle would land on the next one,
+  // which starts after a 5 s backoff. A controller that really is wedged is
+  // still recovered by the tiers in startDiscoverySafe, and a stuck link by
+  // the next cycle's teardown, which finds it the same way.
+  if (superseded()) {
+    standDown();
+    return;
+  }
+  if (abortSignal?.aborted) {
+    if (gattAttempted) {
+      resetConnection();
+      bleLog.debug('Cycle aborted: D-Bus connection reset, skipping the btmgmt power-cycle');
+    }
+    return;
+  }
+
+  // BlueZ keeps listing the scale as connected after the link is gone (#472).
+  // On any cycle that found the device, GATT or not: a broadcast or idle cycle
+  // disconnects it just the same. The power-cycle here replaces the preemptive
+  // one, so a GATT cycle never gets two, and runs whatever
+  // ble.preemptive_adapter_reset says, since it happens only on evidence. The
+  // brake holds it back after one that did not help; a GATT cycle then ends as
+  // it would have without it, an idle or broadcast one drops the connection
+  // (below).
+  if (staleLink && staleLinkRecoveryDue(mac)) {
+    await sleep(500);
     if (superseded()) {
       standDown();
       return;
     }
-    if (abortSignal?.aborted) {
-      resetConnection();
-      bleLog.debug('Cycle aborted: D-Bus connection reset, skipping the btmgmt power-cycle');
-    } else {
-      await sleep(500);
-      // The awaits above are D-Bus calls with no deadline, so the loop can
-      // give up on this cycle and start the next one while they run.
-      if (superseded()) {
-        standDown();
-        return;
-      }
-      resetConnection();
-      bleLog.debug('D-Bus connection reset after GATT operation');
-      if (!preemptiveAdapterReset) {
-        // Once at info, so a reporter testing #417 can see the option took
-        // effect without DEBUG; every cycle after that at debug.
-        if (!preemptiveSkipAnnounced) {
-          preemptiveSkipAnnounced = true;
-          bleLog.info(
-            'ble.preemptive_adapter_reset is false: the Bluetooth adapter is no longer ' +
-              'power-cycled after each GATT session.',
-          );
-        }
-        bleLog.debug(
-          'Skipping the preemptive btmgmt power-cycle after GATT (ble.preemptive_adapter_reset: false)',
+    resetConnection();
+    bleLog.debug('D-Bus connection reset for the stale-link recovery');
+    await recoverStaleLink({ mac, bleAdapter, abortSignal });
+    return;
+  }
+  // Held back by the brake on a cycle that never resets the connection: the
+  // unanswered Disconnect would stay parked on it, one more per cycle, until
+  // the next reset. Dropping the connection lets it go on our side; bluetoothd
+  // keeps its queued copy until the link is finally cleared. It also ends our
+  // discovery session, so the next cycle starts discovery again, which idle
+  // cycles otherwise avoid (below); only while the link stays stuck.
+  if (staleLink && !gattAttempted) {
+    resetConnection();
+    bleLog.debug('D-Bus connection reset: it held a Disconnect BlueZ will not answer (#472)');
+    return;
+  }
+
+  if (gattAttempted) {
+    await sleep(500);
+    // The awaits above can take up to their deadlines, so the loop can give
+    // up on this cycle and start the next one while they run.
+    if (superseded()) {
+      standDown();
+      return;
+    }
+    resetConnection();
+    bleLog.debug('D-Bus connection reset after GATT operation');
+    if (!preemptiveAdapterReset) {
+      // Once at info, so a reporter testing #417 can see the option took
+      // effect without DEBUG; every cycle after that at debug.
+      if (!preemptiveSkipAnnounced) {
+        preemptiveSkipAnnounced = true;
+        bleLog.info(
+          'ble.preemptive_adapter_reset is false: the Bluetooth adapter is no longer ' +
+            'power-cycled after each GATT session.',
         );
-      } else if (await resetAdapterBtmgmt(parseHciIndex(bleAdapter))) {
-        bleLog.debug('Preemptive btmgmt reset after GATT');
-      } else {
-        bleLog.debug('Preemptive btmgmt reset after GATT did not take; adapter not power-cycled');
       }
+      bleLog.debug(
+        'Skipping the preemptive btmgmt power-cycle after GATT (ble.preemptive_adapter_reset: false)',
+      );
+    } else if (await resetAdapterBtmgmt(parseHciIndex(bleAdapter))) {
+      bleLog.debug('Preemptive btmgmt reset after GATT');
+    } else {
+      bleLog.debug('Preemptive btmgmt reset after GATT did not take; adapter not power-cycled');
     }
   }
   // For idle cycles (no GATT connection), discovery is kept running.
@@ -565,13 +645,9 @@ export async function teardownSession(opts: {
 }
 
 /**
- * Wait for a complete reading, under both an idle timeout and an absolute cap.
- *
- * Two timeouts, not one: the inner deadline restarts on every frame the scale
- * sends, so a scale that keeps talking never trips it, and the outer one bounds
- * the whole session anyway. A composition hold still in progress moves the cap
- * out to the end of the hold, so the held weight resolves instead of being cut
- * (#434).
+ * Wait for a complete reading under the native session policy: an idle timeout
+ * that every frame but a status frame restarts (D070), and a cap that a
+ * composition hold in progress moves out to its end (#434).
  */
 export async function readWithTimeouts(
   charMap: Map<string, BleChar>,
@@ -580,7 +656,6 @@ export async function readWithTimeouts(
   deviceMac: string,
   opts: {
     profile: UserProfile;
-    weightUnit?: WeightUnit;
     onLiveData?: (reading: ScaleReading) => void;
     scaleAuth?: ScaleAuth;
     readingTimeoutMs?: number;
@@ -592,56 +667,25 @@ export async function readWithTimeouts(
     selectProfile?: SessionProfileSelector;
   },
 ): Promise<RawReading> {
-  const idleMs = opts.readingTimeoutMs ?? RAW_READING_TIMEOUT_MS;
-  // Set by the first notification frame. waitForRawReading reports activity
-  // only for an incoming frame, or for a composition hold, which arms after
-  // one; withIdleTimeout's own initial arm does not come through here.
-  let heard = false;
-  try {
-    // A shutdown ends the session the same way a timeout does, through
-    // withAbandonmentCleanup, instead of waiting out an idle window of up to
-    // 120 s that the 5 s force-exit grace never lets finish (A-07). Unlike a
-    // timeout it hands nothing over: the process is on its way out.
-    return await withAbandonmentCleanup(
-      bleDevice,
-      () =>
-        untilAborted(
-          withIdleTimeout(
-            (onActivity) =>
-              waitForRawReading(
-                charMap,
-                bleDevice,
-                matchedAdapter,
-                opts.profile,
-                deviceMac.replace(/[:-]/g, '').toUpperCase(),
-                opts.weightUnit,
-                opts.onLiveData,
-                opts.scaleAuth,
-                (minIdleMs) => {
-                  heard = true;
-                  onActivity(minIdleMs);
-                },
-                opts.deviceName,
-                opts.manufacturerData,
-                opts.selectProfile,
-              ),
-            idleMs,
-            'Timed out waiting for a complete scale reading',
-            { ms: idleMs * READING_SESSION_CAP_FACTOR, message: 'GATT session cap exceeded' },
-          ),
-          opts.abortSignal,
-        ),
-      opts.abortSignal,
-    );
-  } catch (err) {
-    // The scale answered and the session simply ran out of time: nobody
-    // stepped on it, or it stays connectable long after a weigh-in (BF915,
-    // #460). Not a wedge, so the watchdog must not count it (D041). Only our
-    // own timeout qualifies; an abort, a disconnect or a GATT error after a
-    // frame keeps the usual classification.
-    if (heard && err instanceof SessionTimeoutError) tagBleFailure(err, 'no-reading');
-    throw err;
-  }
+  // A shutdown ends the session the way a timeout does, instead of waiting out
+  // an idle window of up to 120 s that the 5 s force-exit grace never lets
+  // finish (A-07). The scale answering and the session running out of time is
+  // not a wedge: nobody stepped on it, or it stays connectable long after a
+  // weigh-in (BF915, #460, D041).
+  return runGattSession(
+    {
+      charMap,
+      device: bleDevice,
+      adapter: matchedAdapter,
+      profile: opts.profile,
+      address: deviceMac.replace(/[:-]/g, '').toUpperCase(),
+      onLiveData: opts.onLiveData,
+      scaleAuth: opts.scaleAuth,
+      deviceName: opts.deviceName,
+      manufacturerData: opts.manufacturerData,
+    },
+    { ...nativePolicy(opts.readingTimeoutMs), abortSignal: opts.abortSignal, tagNoReading: true },
+  );
 }
 
 /**

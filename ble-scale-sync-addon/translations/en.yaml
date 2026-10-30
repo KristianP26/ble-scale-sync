@@ -2,139 +2,119 @@ configuration:
   scale_mac:
     name: Scale MAC address
     description: >-
-      MAC address of your BLE scale (e.g., FF:03:00:13:A1:04).
-      Run the BLE scan from the add-on logs to find it, or with ble_transport
-      ha-bluetooth, Home Assistant's Bluetooth advertisement monitor.
-      Leave empty for auto-discovery.
+      MAC address of your scale, for example FF:03:00:13:A1:04. Leave empty
+      for the first weigh-in, then copy the address from the Auto-discovered:
+      or Matched: line of the log here.
   ble_transport:
     name: Bluetooth transport
     description: >-
-      How the add-on reaches the scale. local: this host's Bluetooth adapter,
-      as before. ha-bluetooth: every Bluetooth adapter and proxy Home
-      Assistant already uses, no token needed, but only for scales that send
-      the weight in their advertisement. esphome-proxy: an ESPHome Bluetooth
-      proxy that Home Assistant has not adopted. mqtt-proxy: the ESP32 proxy
-      firmware over MQTT. Options below that name a transport only apply to it.
+      local (this host's adapter), ha-bluetooth (what Home Assistant already
+      hears, broadcast scales only), esphome-proxy (an ESPHome proxy Home
+      Assistant has not adopted) or mqtt-proxy (the ESP32 proxy firmware).
+      Options below that name a transport apply only to it.
   ble_adapter:
     name: Bluetooth adapter
     description: >-
-      local transport only. Linux HCI adapter name (e.g., hci0, hci1).
-      Only needed if you have multiple Bluetooth adapters.
-      Leave empty for the system default.
+      Local transport only. The adapter to use on a host with several, such
+      as hci1; leave empty for the default.
   force_scale_adapter:
     name: Force scale adapter
     description: >-
-      Leave empty unless auto-detection picks the wrong protocol for your scale.
-      Use the adapter name exactly as printed in the "Adapters:" line in the log
-      (e.g. Hutbit). Requires the scale MAC to be set, because a forced adapter
-      claims every device it is shown. Please also report the misdetection so it
-      can be fixed for everyone.
+      Only if auto-detection picks the wrong protocol: the adapter name exactly
+      as printed in the "Adapters:" log line, for example Hutbit. Requires the
+      scale MAC, and report the misdetection so it can be fixed.
   qn_protocol_byte:
     name: QN protocol byte
     description: >-
-      QN-family scales only (Renpho, Arboleaf, FITINDEX, GE and rebadges).
-      Leave empty unless your QN scale connects, completes the whole handshake
-      in the log and then never reports a weight. Then try 0, or 255, or the
-      value the "QN: scale info" log line shows as proto. Accepts 0 to 255.
+      QN scales only (Renpho, Arboleaf, FITINDEX, GE). The first option to try
+      when the scale completes the handshake in the log and never reports a
+      weight: 0, then 255, then the proto value of the "QN: scale info" line.
   qn_report_byte:
     name: QN user-delete mask (deletes data)
     description: >-
-      QN-family scales only. Leave empty. When set, every connection sends the
-      command that deletes the user slots this value selects on the scale
-      (252 deletes slots 3 to 8), which can remove other people's users and
-      stored weigh-ins. Set it only if your scale stopped reporting when this
-      command was dropped. Accepts 0 to 255.
+      QN scales only. Leave empty: on every connection it deletes the user
+      slots this value selects on the scale (252 deletes slots 3 to 8),
+      including other people's stored weigh-ins.
   qn_weight_ack:
     name: QN weight acknowledgement
     description: >-
-      QN-family scales only, and the last thing to try after the QN protocol
-      byte above. Sends your weight anchor (last known weight, or the middle of
-      your weight range) twice right after the start command, as the
-      Arboleaf vendor app does, and acknowledges live weight frames with their
-      own weight. On the 19-byte Arboleaf dialect it also sends the first
-      user's age, height and sex as the app does, which lets the scale's own
-      body composition be exported when it was computed for that profile, and
-      one such scale streamed its weight with this and QN long time sync both
-      set true (not yet confirmed on hardware, #331). Leave empty unless your
-      QN scale completes the whole handshake in the log and then reports no
-      weight at all; then set true.
+      QN scales only. Try true after the QN protocol byte and the QN user key:
+      it sends your weight anchor after the start command and acknowledges
+      each weight frame, as the vendor apps do.
   qn_user_key:
     name: QN user key
     description: >-
-      QN-family scales with an 18- or 19-byte scale-info frame only. The user
-      key the vendor app registered you with on the scale, 1 to 9999; the
-      Feelfit, Arboleaf and GE apps use 1000. Set it when the debug log shows
-      the scale answering the profile frame with a1 06 02 01 00 and its display
-      shows only the weight. The first user here should be the first user in
-      the vendor app, with the same birth date, height, sex and athlete
-      setting. Not yet confirmed on an 18-byte scale (#463). Leave empty
-      otherwise.
+      QN scales with a scale-info frame of 18 bytes or longer only. Try 1000
+      after the QN protocol byte when the debug log says the scale did not
+      accept the profile; this app's user must be the vendor app's first user,
+      or set the QN user slot.
+  qn_user_slot:
+    name: QN user slot
+    description: >-
+      QN scales only, with the QN user key: the user slot (1 to 8) the vendor
+      app registered you in, when it is not 1. Experimental; the QN Scales
+      page says where the debug log names your slot.
   qn_a4_prelude:
     name: QN A4 prelude
     description: >-
-      QN-family scales only, and the last thing to try after the QN protocol
-      byte and the weight acknowledgement. An HCI capture of an Arboleaf vendor app
-      shows two 0xA4 frames sent between the start command and the first
-      weight frame, which this add-on does not send. Set true to replay them.
-      They are one reporter's own bytes and overwrite data the scale keeps for
-      its first user, and a session that sends them does not use the scale's
-      own body composition. Leave empty otherwise.
+      QN scales only, the last option to try. Sends two extra frames the
+      vendor app sends, which overwrite data the scale keeps for its first
+      user; a session that sends them does not use the scale's own body
+      composition.
   qn_time_sync_long:
     name: QN long time sync
     description: >-
-      QN-family scales only, and only worth trying after everything else. The
-      same Arboleaf capture shows the vendor app's clock-setting frame carrying
-      one extra byte that this add-on does not send: the phone's UTC offset.
-      Set true to send that longer frame with your Home Assistant time zone's
-      offset. This is a diagnostic to try, not a fix. Leave empty otherwise.
+      QN scales only. Try true after the QN weight acknowledgement, keeping it
+      on: sends the longer clock frame with your Home Assistant time zone's
+      UTC offset.
   qn_config_long:
     name: QN long config frame
     description: >-
-      QN-family scales only, and the last remaining difference anyone has found
-      between this add-on's start-up conversation and the vendor app's. Two
-      captures show the app's settings frame carrying one byte more than this
-      add-on sends. Set true to send the longer frame. What the extra bytes
-      select is not known, so this is a diagnostic to try, not a fix. Leave
-      empty otherwise.
+      QN scales only. Try true after QN long time sync, keeping both options
+      before it on: sends the longer settings frame the vendor app sends.
+  qn_result_ack:
+    name: QN result acknowledgement
+    description: >-
+      Experimental, QN scales with a 19-byte scale-info frame only. Sends the
+      end-of-measurement frame of the vendor's SDK after the last result frame.
+  rmsc04_profile_byte:
+    name: Renpho R-MSC04 profile byte
+    description: >-
+      Renpho R-MSC04 only: one byte of the profile the Renpho app writes for
+      you, as two hex digits in quotes; the scale's own body fat, skeletal
+      muscle and visceral fat are then exported. It is personal, so keep it
+      out of issues.
   auto_clear_stale_bond:
     name: Re-pair a scale that forgot its pairing
     description: >-
-      local transport only, and bonded scales only (Beurer BF7xx and BF9xx).
-      Turn this on if the scale
-      works once and then every later connect fails, until you clear it by hand
-      with bluetoothctl. The scale has dropped its half of the pairing while
-      Home Assistant still holds the key; this lets the add-on delete that key
-      and pair again on its own. Leave it off otherwise.
+      Local transport only, for Beurer BF7xx and BF9xx scales that work once
+      and then fail every connect until the pairing is removed by hand. The
+      app then deletes the stale key and pairs again, but only when the
+      scale clearly refused it.
   preemptive_adapter_reset:
     name: Power-cycle the adapter after every weigh-in
     description: >-
-      local transport only. After every connection to the scale the add-on
-      switches the Bluetooth adapter off and on again, which clears a stuck
-      scanning state some Raspberry Pi adapters fall into. Leave it on. It was
-      not the cause of the Beurer BF915 re-pairing in #417; for a scale that
-      asks to pair again before every weigh-in, the Documentation tab has a
-      section of that title. Turning it
-      off stops the brief adapter drop that other Home Assistant Bluetooth
-      integrations see after each weigh-in, at the risk of that stuck scanning
-      state.
+      Local transport only. Switches the adapter off and on after every
+      connection to clear a stuck scanning state; leave it on unless other
+      Bluetooth integrations suffer from the brief drop.
   adapter_privacy:
     name: Pair with a host identity key (LE privacy)
     description: >-
-      local transport only. For Beurer scales that ask you to press SET and
-      pair again before every weigh-in. Turns on LE privacy on the Bluetooth
-      adapter, with a key derived from its address, so the scale keeps the
-      pairing. This affects the whole adapter: every Bluetooth LE connection
-      it makes, including Home Assistant's own Bluetooth integration on the
-      same adapter, uses a random address, and other paired LE devices may
-      need pairing again. A second adapter set under ble_adapter avoids that.
-      After turning it on, remove the scale once (bluetoothctl remove) and pair
-      it through the add-on. Leave it off otherwise.
+      Local transport only, for Beurer scales that ask for SET and a new
+      pairing before every weigh-in. It changes the address of the whole
+      adapter, so other paired devices may need pairing again; remove the
+      scale's pairing once after turning it on.
+  pairing_retry_max_min:
+    name: Longest wait before asking to pair again (minutes)
+    description: >-
+      Local transport only, for scales that show a code to confirm. When
+      nobody confirms it, the wait before the next attempt grows from 2
+      minutes up to this value; 0 asks on every scan.
   esphome_proxy_host:
     name: ESPHome proxy host
     description: >-
-      esphome-proxy only. IP address or host name of the proxy, e.g.
-      192.168.1.50. Use a node Home Assistant has not adopted; for one it
-      already uses, pick ha-bluetooth.
+      esphome-proxy only. IP address or host name of a node Home Assistant
+      has not adopted, for example 192.168.1.50.
   esphome_proxy_port:
     name: ESPHome proxy port
     description: >-
@@ -142,17 +122,14 @@ configuration:
   esphome_proxy_encryption_key:
     name: ESPHome API encryption key
     description: >-
-      esphome-proxy only. The key under api: encryption: in the device's YAML
-      (44 characters, ends in =). Leave empty only if the device has no API
-      encryption. A device that still uses an API password needs custom_config.
+      esphome-proxy only. The 44-character key under api: encryption: key: in
+      the device's YAML; leave empty only for a device without API encryption.
   mqtt_proxy_broker:
     name: ESP32 proxy broker
     description: >-
-      mqtt-proxy only. shared: the broker from the MQTT options below
-      (Mosquitto when auto-detect is on); give the ESP32 its own login there.
-      embedded: a broker inside this add-on, with the port, username and
-      password below. Set mqtt_broker in the ESP32's config.json to that
-      broker's address: this host's IP address for Mosquitto or embedded.
+      mqtt-proxy only. shared uses the broker of the MQTT options below, and
+      embedded starts a broker inside this app with the port, username and
+      password below.
   mqtt_proxy_device_id:
     name: ESP32 proxy device ID
     description: mqtt-proxy only. Same as device_id in the ESP32's config.json.
@@ -162,175 +139,160 @@ configuration:
   mqtt_proxy_embedded_broker_port:
     name: Embedded broker port
     description: >-
-      mqtt-proxy with the embedded broker only. Port on this host. Mosquitto
-      usually has 1883 already; then pick another and set the same mqtt_port
-      in the ESP32's config.json.
+      Embedded broker only. If Mosquitto already uses 1883, pick another port
+      and set the same mqtt_port in the ESP32's config.json.
   mqtt_proxy_username:
     name: Embedded broker username
     description: >-
-      mqtt-proxy with the embedded broker only, and required there: the broker
-      is reachable from your network and the ESP32 logs in with these.
+      Embedded broker only, and required there. The ESP32 logs in with it.
   mqtt_proxy_password:
     name: Embedded broker password
     description: >-
-      mqtt-proxy with the embedded broker only, and required there: the broker
-      is reachable from your network and the ESP32 logs in with these.
+      Embedded broker only, and required there. The ESP32 logs in with it.
   proxy_liveness_timeout_min:
     name: Proxy silence before restart (minutes)
     description: >-
-      Proxy transports only (any ble_transport but local, or a proxy handler
-      in a custom config); it has no effect on the built-in Bluetooth adapter.
-      If the proxy stops
-      delivering Bluetooth advertisements entirely for this many minutes, the
-      link is treated as wedged and the add-on restarts to rebuild it.
-      Advertisements arrive constantly from any nearby phone or watch while the
-      link is healthy, so silence means the link, not an empty house. Raise it,
-      or set 0 to disable, if your proxy sits somewhere with no other Bluetooth
-      devices in range. A value set in your custom config file takes
-      precedence over this option.
+      Proxy transports only: after this many minutes without any Bluetooth
+      advertisement the app restarts to rebuild the link. Set 0 to turn it
+      off where no other Bluetooth devices are in range.
   weight_unit:
     name: Weight unit
     description: >-
-      Unit the scale reports and the app uses internally.
-      Choose kg for metric or lbs for imperial.
+      Unit of weights in the log and notifications. Calculations use kg, and
+      Home Assistant always receives kg.
   height_unit:
     name: Height unit
-    description: >-
-      Unit used for the user height and weight range below.
-      Choose cm for metric or in (inches) for imperial.
+    description: Unit of the height below, cm or in.
   display_unit:
     name: Physical scale display unit
     description: >-
-      Unit requested on the physical scale, independently of the unit published
-      to Home Assistant. Choose weight_unit to follow the setting above. Only
-      QN-family and AC 27 (Active Era) scales are told which unit to show;
-      other scales ignore it.
+      Unit shown on the scale's own display; weight_unit follows the setting
+      above. Only QN and Active Era (AC 27) scales are told the unit.
   user_name:
     name: User name
-    description: Display name for the user profile
+    description: Name used in the log and in the Home Assistant device.
   user_height:
     name: Height
-    description: >-
-      Height in the unit selected above (e.g., 183 for cm, 72 for in)
+    description: Height in the height unit above, for example 183 cm or 72 in.
   user_birth_date:
     name: Birth date
-    description: Date of birth in YYYY-MM-DD format (e.g., 1990-06-15)
+    description: Date of birth as YYYY-MM-DD, for example 1990-06-15.
   user_gender:
     name: Gender
-    description: Biological gender (used for body composition calculation)
+    description: Biological sex, used in the body composition formulas.
   user_is_athlete:
     name: Athlete mode
     description: >-
-      Enable if you exercise regularly (5+ hours/week).
-      Adjusts body composition formulas for athletic builds.
+      Adjusts the body composition formulas for people who train regularly.
   user_weight_min:
     name: Weight range min
     description: >-
-      Minimum expected weight in the weight unit selected above
-      (used for multi-user matching)
+      Lowest plausible weight for this person, in kg whatever the weight unit.
   user_weight_max:
     name: Weight range max
     description: >-
-      Maximum expected weight in the weight unit selected above
-      (used for multi-user matching)
+      Highest plausible weight for this person, in kg whatever the weight unit.
+  user_estimate_body_composition:
+    name: Estimate body composition
+    description: >-
+      When the scale measured no body composition, body fat, water, bone,
+      muscle, visceral fat and physique rating are estimated from BMI. Turn
+      off to leave them unknown instead.
   out_of_range:
     name: Readings outside the weight range
     description: >-
-      warn keeps today's behaviour: log the reading and export it anyway.
-      skip stops before the exporters and before the remembered weight is
-      updated, so a suitcase on the scale cannot overwrite it.
+      warn logs such a reading and exports it. skip drops it and leaves the
+      remembered weight alone, so a suitcase on the scale cannot overwrite it.
   mqtt_enabled:
     name: Enable MQTT
-    description: Export measurements to an MQTT broker with Home Assistant auto-discovery
+    description: Send measurements to an MQTT broker with Home Assistant auto-discovery.
   mqtt_auto:
     name: Auto-detect MQTT broker
     description: >-
-      Automatically use the Mosquitto add-on broker.
-      Disable to enter broker details manually.
+      Use the Mosquitto broker app. Turn off to enter the broker details
+      below.
   mqtt_broker_url:
     name: MQTT broker URL
     description: >-
-      MQTT broker URL (e.g., mqtt://192.168.1.10:1883).
-      Only used when auto-detect is disabled. With ble_transport mqtt-proxy and
-      mqtt_proxy_broker shared, the ESP32 proxy uses this broker too.
+      For example mqtt://192.168.1.10:1883, used when auto-detect is off or
+      finds no broker. The ESP32 proxy with a shared broker uses it too.
   mqtt_username:
     name: MQTT username
-    description: MQTT broker username (only when auto-detect is disabled)
+    description: Broker username, used with the broker URL above.
   mqtt_password:
     name: MQTT password
-    description: MQTT broker password (only when auto-detect is disabled)
+    description: Broker password, used with the broker URL above.
   mqtt_topic:
     name: MQTT topic
-    description: Base topic for publishing measurements
+    description: Base topic; each user's readings go to <topic>/<user slug>.
   mqtt_ha_discovery:
     name: HA auto-discovery
-    description: Publish Home Assistant MQTT discovery messages for automatic sensor creation
+    description: Publish Home Assistant discovery messages so the sensors are created.
   mqtt_ha_device_name:
     name: HA device name
-    description: Device name shown in Home Assistant
+    description: Device name shown in Home Assistant.
   garmin_enabled:
     name: Enable Garmin Connect
     description: >-
-      Upload measurements to Garmin Connect.
-      After enabling, run Garmin setup from the add-on terminal.
+      Upload measurements to Garmin Connect; the app signs in with the
+      email and password below on its first start. For an account with MFA,
+      see the Documentation tab.
   garmin_email:
     name: Garmin email
-    description: Garmin Connect account email
+    description: Garmin Connect account email.
   garmin_password:
     name: Garmin password
-    description: Garmin Connect account password
+    description: Garmin Connect account password.
   garmin_upload_timeout_sec:
     name: Garmin upload timeout (seconds)
     description: >-
-      Seconds one upload attempt may take before it is killed (10 to 900).
-      Three attempts are made. Raise it if uploads fail with "timed out" while
-      the same measurement uploads fine later.
+      Seconds one upload attempt may take, 10 to 900, with three attempts.
+      Raise it if uploads time out while the same measurement uploads fine
+      later.
   garmin_weight_only:
     name: Upload weight only
     description: >-
-      Send only the weight to Garmin Connect and leave BMI, body fat, water,
-      bone, muscle, visceral fat, physique rating, metabolic age and BMR unset.
-      Other exporters still receive the full body composition.
+      Send only the weight to Garmin Connect. Other exporters still receive
+      the full body composition.
   scan_cooldown:
     name: Scan cooldown (seconds)
-    description: Seconds to wait between BLE scans in continuous mode (5 to 3600)
+    description: >-
+      Local transport only. Seconds to wait after a reading before scanning
+      again, 5 to 3600.
   retry_failed_exports:
     name: Retry a failed export later
     description: >-
-      Keep a reading whose upload failed and try again on a later cycle, for up
-      to three days. Only targets that can record a past measurement (Garmin,
-      InfluxDB, file, Intervals, Runalyze, wger, HealthLog, Dreeve) can be
-      retried; MQTT and notifications cannot express a past reading and are
-      not queued.
-      Turn off to write nothing to disk.
+      Keep a reading whose upload failed and retry it for up to three days,
+      for the exporters that can record a past measurement. Turn off to keep
+      no queue on disk.
   idle_rescan_delay:
     name: Rescan delay when no scale was found (seconds)
     description: >-
-      Seconds to wait before scanning again after a cycle that found no scale
-      while the Bluetooth adapter was healthy (0 to 3600). Real failures keep
-      their own backoff. Lower it if your scale advertises only briefly.
+      Local transport only. Seconds to wait after a scan that found no scale,
+      0 to 3600; lower it if your scale advertises only briefly.
+  no_reading_rescan_delay:
+    name: Minimum wait after a session without a reading (seconds)
+    description: >-
+      Local transport only. Seconds to wait after a session without a reading,
+      0 to 3600, for a scale that stays connectable; a weigh-in arriving more
+      than 5 minutes late reaches only exporters that can record a past one.
   reset_bluetooth:
     name: Reset Bluetooth adapter on startup
     description: >-
-      Power-cycle the Bluetooth adapter when the add-on starts.
-      Helps with BlueZ stability after ungraceful shutdowns.
-      Disable this if other HA Bluetooth integrations lose
-      connectivity when the add-on restarts. Skipped when ble_transport is
-      not local.
+      Power-cycle the Bluetooth adapter when the app starts, local transport
+      only. Turn off if other Bluetooth integrations lose their connection
+      when the app restarts.
   debug:
     name: Debug logging
-    description: Enable verbose BLE debug output in the add-on logs
+    description: Verbose Bluetooth log, needed for an issue report.
   update_check:
     name: Check for updates
     description: >-
-      At most once a day, after a weigh-in, ask api.blescalesync.dev for the
-      latest version and say in the log when a newer one is out. Only the app
-      version, operating system and CPU architecture are sent. Turn off to send
-      nothing.
+      At most once a day, ask api.blescalesync.dev for the latest version and
+      log when a newer one is out. Only the app version, operating system and
+      CPU architecture are sent.
   custom_config:
     name: Use custom config.yaml
     description: >-
-      Use a custom config.yaml file from /share/ble-scale-sync/config.yaml
-      instead of generating one from the options above.
-      For advanced users who need multi-user support, additional exporters or
-      transport settings these options do not cover.
+      Use /share/ble-scale-sync/config.yaml instead of these options, for
+      several users, other exporters or transport settings not listed here.

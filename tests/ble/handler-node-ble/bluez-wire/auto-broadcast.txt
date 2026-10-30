@@ -1,0 +1,55 @@
++0ms [debug] D-Bus connection established
++0ms :1.1 Hello
++0ms :1.1 Introspect /org/bluez
++0ms :1.1 Introspect /org/bluez
++0ms :1.1 Introspect /org/bluez
++0ms :1.1 AgentManager1.RegisterAgent /org/bluez /org/blescalesync/agent KeyboardDisplay
++0ms [debug] BlueZ pairing agent registered (KeyboardDisplay)
++0ms [debug] Not claiming the BlueZ default-agent role (no users[].beurer_pin configured)
++0ms :1.1 Introspect hci0
++0ms :1.1 Get hci0 Adapter1.Powered
++0ms :1.1 Get hci0 Adapter1.Discovering
++0ms [debug] Discovery state at start: Discovering=false, our filtered session=no
++0ms :1.1 Adapter1.SetDiscoveryFilter hci0 {Transport=le,DuplicateData=true}
++0ms [debug] Discovery filter: Transport=le, DuplicateData=true
++0ms :1.1 Adapter1.StartDiscovery hci0
++0ms [debug] Discovery started
++0ms :1.1 Introspect hci0
++0ms :1.1 Introspect hci0
++0ms :1.1 Introspect hci0/dev_11_22_33_44_55_66
++0ms :1.1 AddMatch hci0/dev_11_22_33_44_55_66 Properties.PropertiesChanged
++0ms :1.1 Get hci0/dev_11_22_33_44_55_66 Device1.Name
++0ms [debug] Discovered: Phone [11:22:33:44:55:66]
++0ms :1.1 Get hci0/dev_11_22_33_44_55_66 Device1.AddressType
++0ms :1.1 Get hci0/dev_11_22_33_44_55_66 Device1.AdvertisingFlags -> InvalidArgs
++0ms :1.1 Get hci0/dev_11_22_33_44_55_66 Device1.UUIDs -> InvalidArgs
++0ms :1.1 Get hci0/dev_11_22_33_44_55_66 Device1.ServiceData -> InvalidArgs
++0ms :1.1 Get hci0/dev_11_22_33_44_55_66 Device1.ManufacturerData -> InvalidArgs
++0ms :1.1 RemoveMatch hci0/dev_11_22_33_44_55_66 Properties.PropertiesChanged
++0ms :1.1 Introspect hci0
++0ms :1.1 Introspect hci0/dev_AA_BB_CC_DD_EE_02
++0ms :1.1 AddMatch hci0/dev_AA_BB_CC_DD_EE_02 Properties.PropertiesChanged
++0ms :1.1 Get hci0/dev_AA_BB_CC_DD_EE_02 Device1.Name
++0ms [debug] Discovered: WIRE-BCAST [AA:BB:CC:DD:EE:02]
++0ms :1.1 Get hci0/dev_AA_BB_CC_DD_EE_02 Device1.AddressType
++0ms :1.1 Get hci0/dev_AA_BB_CC_DD_EE_02 Device1.AdvertisingFlags -> InvalidArgs
++0ms :1.1 Get hci0/dev_AA_BB_CC_DD_EE_02 Device1.UUIDs -> InvalidArgs
++0ms :1.1 Get hci0/dev_AA_BB_CC_DD_EE_02 Device1.ServiceData -> InvalidArgs
++0ms :1.1 Get hci0/dev_AA_BB_CC_DD_EE_02 Device1.ManufacturerData
++0ms [info] Auto-discovered: Wire Broadcast (WIRE-BCAST [AA:BB:CC:DD:EE:02])
++0ms :1.1 Get hci0/dev_AA_BB_CC_DD_EE_02 Device1.AddressType
++0ms :1.1 Get hci0/dev_AA_BB_CC_DD_EE_02 Device1.AdvertisingFlags -> InvalidArgs
++0ms :1.1 Get hci0/dev_AA_BB_CC_DD_EE_02 Device1.UUIDs -> InvalidArgs
++0ms :1.1 Get hci0/dev_AA_BB_CC_DD_EE_02 Device1.ServiceData -> InvalidArgs
++0ms :1.1 Get hci0/dev_AA_BB_CC_DD_EE_02 Device1.ManufacturerData
++0ms [info] Matched adapter: Wire Broadcast
++0ms [info] Adapter prefers passive mode. Listening for broadcast weight data. Step on the scale.
++0ms [debug] Subscribed to Device1 PropertiesChanged for advertisement data
++0ms :1.1 Get hci0/dev_AA_BB_CC_DD_EE_02 Device1.ManufacturerData
++0ms [info] Broadcast reading: 72.50 kg
++0ms [debug] Disconnecting AA:BB:CC:DD:EE:02 after the session...
++0ms :1.1 Device1.Disconnect hci0/dev_AA_BB_CC_DD_EE_02
++0ms :1.1 RemoveMatch hci0/dev_AA_BB_CC_DD_EE_02 Properties.PropertiesChanged
++0ms [debug] Disconnect (teardown) answered in 0 ms
++0ms => {"reading":{"weight":72.5,"impedance":480},"adapter":"Wire Broadcast"}
+--- match rules held

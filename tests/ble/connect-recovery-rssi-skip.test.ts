@@ -37,8 +37,6 @@ const { _internals } = await import('../../src/ble/handler-node-ble/index.js');
 
 interface MockHelper extends EventEmitter {
   prop: ReturnType<typeof vi.fn>;
-  on: EventEmitter['on'];
-  removeListener: EventEmitter['removeListener'];
   callMethod: ReturnType<typeof vi.fn>;
   set: ReturnType<typeof vi.fn>;
   object: string;

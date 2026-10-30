@@ -1,0 +1,39 @@
+{
+  "settled": {
+    "by": "error",
+    "atMs": 0,
+    "error": "Beurer BF720/BF105/BF500/BF788/BF950 needs a consent PIN. Set `users[].beurer_pin` in config.yaml (the code the scale was paired with in the Beurer / openScale app, or shown on the scale's control unit). If the scale was factory reset or had its batteries removed, every user slot and its code are gone; try `beurer_pin: 0`."
+  },
+  "reading": null,
+  "history": [],
+  "subscribes": [
+    {
+      "seq": 0,
+      "atMs": 0,
+      "uuid": "2a9d"
+    },
+    {
+      "seq": 1,
+      "atMs": 0,
+      "uuid": "2a9c"
+    },
+    {
+      "seq": 2,
+      "atMs": 0,
+      "uuid": "2a9f"
+    },
+    {
+      "seq": 3,
+      "atMs": 0,
+      "uuid": "2a99"
+    },
+    {
+      "seq": 4,
+      "atMs": 0,
+      "uuid": "fff2"
+    }
+  ],
+  "writes": [],
+  "rxDropped": 0,
+  "payload": null
+}

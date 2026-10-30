@@ -23,7 +23,13 @@ const { classifyBleFailure, buildCharMapWithRetry, readWithTimeouts, resolveAfte
 const { adapters: registry } = await import('../../../src/scales/index.js');
 const { bleFailureKind } = await import('../../../src/ble/failure-kind.js');
 const { normalizeUuid } = await import('../../../src/ble/types.js');
-import type { BleChar, BleDevice } from '../../../src/ble/shared.js';
+import type { BleChar, BleDevice } from '../../../src/ble/session/ports.js';
+import {
+  AR003_ADDRESS,
+  AR003_CHARS,
+  AR003_MSD,
+  AR003_SERVICES,
+} from '../../helpers/renpho-a-r003.js';
 import type { ScaleAdapter } from '../../../src/interfaces/scale-adapter.js';
 
 /**
@@ -219,6 +225,32 @@ describe('GATT snapshot refresh before a retry (#1489)', () => {
 });
 
 /**
+ * #507: the nameless Renpho A-R003 on node-ble with scale_mac. BlueZ gives no
+ * name and no advertised services, only the manufacturer data; the services
+ * discovered here include 0xFFE0 / 0xFFF0 (QN's nameless fallback) and the
+ * characteristics 0xFFF2 without 0xFFF4 (Inlife's claim).
+ */
+describe('resolveAfterConnect: nameless Renpho A-R003 (#507)', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('resolves to Renpho ES-WBE28 on the first enumeration', async () => {
+    const gatt = {
+      init: vi.fn().mockResolvedValue(undefined),
+      services: vi.fn().mockResolvedValue(AR003_SERVICES),
+      getPrimaryService: vi.fn(),
+    };
+    h.buildCharMap.mockResolvedValue(new Map(AR003_CHARS.map((u) => [u, {} as never])));
+
+    const adapter = await resolveAfterConnect(gatt as never, registry, '', AR003_ADDRESS, {
+      manufacturerData: { id: 0xffff, data: AR003_MSD },
+    });
+
+    expect(adapter.name).toBe('Renpho ES-WBE28');
+    expect(gatt.init).not.toHaveBeenCalled();
+  });
+});
+
+/**
  * #434: the absolute session cap is session_timeout_sec x 3, so 15 s at the
  * lowest allowed 5 s. A 30 s composition hold (the R-MSC04's) armed after the
  * weight settles must still resolve with the held weight instead of being cut
@@ -260,7 +292,6 @@ describe('readWithTimeouts: composition hold against the session cap', () => {
       name: 'HoldScale',
       charNotifyUuid: NOTIFY,
       charWriteUuid: NOTIFY,
-      normalizesWeight: true,
       matches: () => true,
       parseNotification: () => ({ weight: 81.55, impedance: 0 }),
       isComplete: () => true,
@@ -341,13 +372,14 @@ describe('readWithTimeouts: composition hold against the session cap', () => {
 
     async function runSession(
       drive: (s: ReturnType<typeof makeSession>, ac: AbortController) => Promise<void>,
+      overrides: Partial<ScaleAdapter> = {},
     ): Promise<unknown> {
       vi.useFakeTimers();
       try {
         const s = makeSession();
         const ac = new AbortController();
         // Every frame is rejected: an answer to our own writes, not a weigh-in.
-        const adapter = makeAdapter({ parseNotification: () => null });
+        const adapter = makeAdapter({ parseNotification: () => null, ...overrides });
         const promise = readWithTimeouts(s.charMap, s.device, adapter, 'AA:BB:CC:DD:EE:FF', {
           profile: PROFILE,
           readingTimeoutMs: IDLE_MS,
@@ -396,6 +428,24 @@ describe('readWithTimeouts: composition hold against the session cap', () => {
       expect(bleFailureKind(err)).toBe('no-reading');
     });
 
+    // A Yunmai that only answers the unlock (#474, D070): its replies no longer
+    // restart the idle timeout, but they still prove the scale answered, so the
+    // session is no-reading and not a wedge suspect.
+    it('tags the idle timeout of a scale that only sent status frames as no-reading (#474)', async () => {
+      const err = await runSession(
+        async (s) => {
+          const step = IDLE_MS / 2;
+          for (let t = step; t <= IDLE_MS * 3; t += step) {
+            await vi.advanceTimersByTimeAsync(step);
+            s.send(0x01);
+          }
+        },
+        { isStatusFrame: () => true },
+      );
+      expect((err as Error).message).toBe('Timed out waiting for a complete scale reading');
+      expect(bleFailureKind(err)).toBe('no-reading');
+    });
+
     it('does not tag a shutdown after a frame', async () => {
       const err = await runSession(async (s, ac) => {
         await vi.advanceTimersByTimeAsync(1000);
@@ -406,6 +456,55 @@ describe('readWithTimeouts: composition hold against the session cap', () => {
       });
       expect(err).not.toBeNull();
       expect(bleFailureKind(err)).not.toBe('no-reading');
+    });
+  });
+
+  // Characterization of the session policy (arch wave 2): what a timeout and a
+  // shutdown do with what the session holds.
+  describe('what a timeout and a shutdown hand over', () => {
+    const STORED = { weight: 76.55, impedance: 0, timestamp: new Date('2020-01-01T00:00:00Z') };
+
+    it('hands over a stored record when the idle timeout ends the session', async () => {
+      vi.useFakeTimers();
+      try {
+        const s = makeSession();
+        const adapter = makeAdapter({ parseNotification: () => ({ ...STORED }) });
+        const promise = readWithTimeouts(s.charMap, s.device, adapter, 'AA:BB:CC:DD:EE:FF', {
+          profile: PROFILE,
+          readingTimeoutMs: 5000,
+        });
+        await vi.advanceTimersByTimeAsync(1000);
+        s.send(0x01);
+        await vi.advanceTimersByTimeAsync(5000);
+        expect((await promise).reading).toEqual(STORED);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('hands nothing over on a shutdown, a held weight included', async () => {
+      vi.useFakeTimers();
+      try {
+        const s = makeSession();
+        const ac = new AbortController();
+        const adapter = makeAdapter({ completionHoldMs: HOLD_MS, isFinal: () => false });
+        const outcome = readWithTimeouts(s.charMap, s.device, adapter, 'AA:BB:CC:DD:EE:FF', {
+          profile: PROFILE,
+          readingTimeoutMs: 5000,
+          abortSignal: ac.signal,
+        }).then(
+          () => 'resolved',
+          (e: unknown) => e,
+        );
+        await vi.advanceTimersByTimeAsync(1000);
+        s.send(0x01);
+        await vi.advanceTimersByTimeAsync(1000);
+        ac.abort(new Error('shutdown'));
+        await vi.advanceTimersByTimeAsync(0);
+        expect(((await outcome) as Error).message).toBe('shutdown');
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 });

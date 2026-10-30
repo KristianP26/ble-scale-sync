@@ -1,0 +1,99 @@
+{
+  "adverts": [
+    {
+      "atMs": 0,
+      "data": "0x0002 00000001391f065e13388704006a",
+      "decision": "complete",
+      "reading": {
+        "weight": 81.5,
+        "impedance": 0
+      },
+      "sink": "queued"
+    },
+    {
+      "atMs": 10000,
+      "data": "0x0002 00000001391f066013748706002a",
+      "decision": "complete",
+      "reading": {
+        "weight": 81.6,
+        "impedance": 0
+      },
+      "sink": "queued"
+    },
+    {
+      "atMs": 20000,
+      "data": "0x0002 00000001391f067613608720000e",
+      "decision": "complete",
+      "reading": {
+        "weight": 82.7,
+        "impedance": 0
+      },
+      "sink": "queued"
+    }
+  ],
+  "exports": [
+    {
+      "atMs": 0,
+      "by": "advert",
+      "reading": {
+        "weight": 81.5,
+        "impedance": 0
+      },
+      "payload": {
+        "weight": 81.5,
+        "impedance": 0,
+        "bmi": 24.34,
+        "bodyFatPercent": 19.9,
+        "waterPercent": 58.47,
+        "boneMass": 2.74,
+        "muscleMass": 62.54,
+        "visceralFat": 9,
+        "physiqueRating": 5,
+        "bmr": 1813,
+        "metabolicAge": 31
+      }
+    },
+    {
+      "atMs": 10000,
+      "by": "advert",
+      "reading": {
+        "weight": 81.6,
+        "impedance": 0
+      },
+      "payload": {
+        "weight": 81.6,
+        "impedance": 0,
+        "bmi": 24.37,
+        "bodyFatPercent": 19.94,
+        "waterPercent": 58.44,
+        "boneMass": 2.74,
+        "muscleMass": 62.59,
+        "visceralFat": 9,
+        "physiqueRating": 5,
+        "bmr": 1814,
+        "metabolicAge": 31
+      }
+    },
+    {
+      "atMs": 20000,
+      "by": "advert",
+      "reading": {
+        "weight": 82.7,
+        "impedance": 0
+      },
+      "payload": {
+        "weight": 82.7,
+        "impedance": 0,
+        "bmi": 24.69,
+        "bodyFatPercent": 20.33,
+        "waterPercent": 58.16,
+        "boneMass": 2.77,
+        "muscleMass": 63.12,
+        "visceralFat": 9,
+        "physiqueRating": 5,
+        "bmr": 1825,
+        "metabolicAge": 31
+      }
+    }
+  ]
+}

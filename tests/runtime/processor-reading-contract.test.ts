@@ -125,6 +125,8 @@ function makeCtx(users: UserConfig[], over: Partial<AppContext> = {}): AppContex
     signal: new AbortController().signal,
     exporterCache: new Map(),
     lastExportedWeights: new Map(),
+    lastExportedAt: new Map(),
+    replayAnchorsPath: undefined,
     embeddedBroker: null,
     retryFailedExports: false,
     exportQueuePath: undefined,
@@ -178,6 +180,28 @@ describe('D027: what time a reading carries, and what counts as history', () => 
     expect(mqtt.calls.map((c) => c.weight)).toEqual([82]);
     expect(garmin.calls.map((c) => c.weight)).toEqual([80, 82]);
     expect(garmin.calls[0].context.timestamp).toEqual(stored);
+  });
+
+  it('sends a reading the adapter marks as from memory only to backdate exporters, however young (D065)', async () => {
+    // The QN 18-byte record of #463: 260 s old, so by age alone it would be
+    // the live weigh-in, next to the live one the session ended on.
+    const mqtt = exporter('mqtt', false);
+    const garmin = exporter('garmin', true);
+    const stored = new Date(Date.now() - 260_000);
+    const ctx = makeCtx([user({ weight_range: { min: 65, max: 80 }, last_known_weight: null })]);
+    const raw: RawReading = {
+      reading: { weight: 71.6, impedance: 507 },
+      history: [{ weight: 71.55, impedance: 497, timestamp: stored, fromMemory: true }],
+      adapter: recordingAdapter(),
+    };
+
+    await processReading(ctx, raw, { singleUserExporters: [mqtt, garmin] });
+
+    expect(mqtt.calls.map((c) => c.weight)).toEqual([71.6]);
+    expect(garmin.calls.map((c) => c.weight)).toEqual([71.55, 71.6]);
+    expect(garmin.calls[0].context.timestamp).toEqual(stored);
+    expect(garmin.calls[0].context.historical).toBe(true);
+    expect(ctx.lastExportedWeights.get('dad')).toBe(71.6);
   });
 
   it('gives a live weigh-in one measurement time, and the retry queue the same one (F-04, F-06)', async () => {
@@ -298,6 +322,77 @@ describe('D027 / E-04: a stored record belongs to whoever it weighs like', () =>
     expect(by.mom.calls).toHaveLength(0);
     const warned = warnSpy.mock.calls.map((c) => c.map(String).join(' ')).join(' | ');
     expect(warned).toMatch(/Dropping a stored record of 70\.00 kg: it fits more than one user/);
+  });
+});
+
+// The QN 18-byte record the scale kept for no user (#463, D072) carries no
+// userIndex, so it goes by its weight like any stored record without one. The
+// session is the reporter's of 2026-10-20 19:39 (record 72.60 kg at 19:28:16Z,
+// live 72.55 kg); the three users' ranges and last_known_weight values are
+// chosen, the reporter's are not in the log. The processor does not change for
+// D072, so this passes on the code before it too: it pins the route the
+// adapter's new reading takes.
+describe('D072: a stored weigh-in the QN scale kept for no user', () => {
+  const users = (): UserConfig[] => [
+    user({
+      name: 'User1',
+      slug: 'user1',
+      weight_range: { min: 65, max: 80 },
+      last_known_weight: 71.1,
+    }),
+    user({
+      name: 'User2',
+      slug: 'user2',
+      weight_range: { min: 50, max: 64 },
+      last_known_weight: 58,
+    }),
+    user({
+      name: 'User3',
+      slug: 'user3',
+      weight_range: { min: 85, max: 110 },
+      last_known_weight: 95,
+    }),
+  ];
+  const STORED_AT = new Date('2026-10-20T19:28:16.000Z');
+
+  it.each([
+    ['no saved weigh-in, as at 19:39', undefined],
+    ['the 17:58 weigh-in saved, 71.1 @ 17:58:18.706Z', new Date('2026-10-20T17:58:18.706Z')],
+  ])('goes to the user it weighs like as history, %s', async (_label, anchorAt) => {
+    vi.setSystemTime(new Date('2026-10-20T19:39:59.699Z'));
+    try {
+      const by: Record<string, { garmin: Recorder; mqtt: Recorder }> = {};
+      for (const slug of ['user1', 'user2', 'user3']) {
+        by[slug] = { garmin: exporter('garmin', true), mqtt: exporter('mqtt', false) };
+      }
+      const ctx = makeCtx(users());
+      if (anchorAt) {
+        ctx.lastExportedWeights.set('user1', 71.1);
+        ctx.lastExportedAt.set('user1', anchorAt);
+      }
+      const raw: RawReading = {
+        reading: { weight: 72.55, impedance: 4317 },
+        history: [{ weight: 72.6, impedance: 4303, timestamp: STORED_AT, fromMemory: true }],
+        adapter: recordingAdapter(),
+      };
+
+      await processReading(ctx, raw, {
+        getExportersForUser: (slug) => [by[slug].garmin, by[slug].mqtt],
+      });
+
+      expect(by.user1.garmin.calls.map((c) => c.weight)).toEqual([72.6, 72.55]);
+      expect(by.user1.garmin.calls[0].context.historical).toBe(true);
+      expect(by.user1.garmin.calls[0].context.timestamp).toEqual(STORED_AT);
+      expect(by.user1.mqtt.calls.map((c) => c.weight)).toEqual([72.55]);
+      for (const slug of ['user2', 'user3']) {
+        expect(by[slug].garmin.calls).toHaveLength(0);
+        expect(by[slug].mqtt.calls).toHaveLength(0);
+      }
+      const warned = warnSpy.mock.calls.map((c) => c.map(String).join(' ')).join(' | ');
+      expect(warned).not.toMatch(/Dropping a stored record/);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

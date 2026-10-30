@@ -1,11 +1,4 @@
-import {
-  biaFatIfPlausible,
-  buildPayload,
-  compositionRejection,
-  isPlausibleImpedance,
-  ReadingComposition,
-  type ScaleBodyComp,
-} from '../body-comp-helpers.js';
+import { isPlausibleImpedance, biaPayload } from '../body-comp-helpers.js';
 import type {
   BleDeviceInfo,
   ConnectionContext,
@@ -21,65 +14,45 @@ import type {
   HoldForComposition,
 } from '../../interfaces/scale-adapter.js';
 import { bleLog, errMsg, normalizeUuid } from '../../ble/types.js';
-import { isHistoricalReading } from '../../interfaces/reading-time.js';
 import type { MatchDescriptor } from '../match-descriptor.js';
 import {
   jieliAuthResponseFrame,
   JIELI_CHALLENGE_FRAME_LEN,
   JIELI_CHALLENGE_HEADER,
-} from '../jieli-auth.js';
+} from './jieli-auth.js';
 import type { ScaleDisplayUnit } from '../../config/schema.js';
+import type { AdapterOptions } from '../../config/resolve.js';
+import type { QN_BLE_OPTIONS } from './options.js';
 import {
   A4_PRELUDE,
   A4_PRELUDE_GAP_MS,
-  BMI_MATCH_TOLERANCE,
   CHR_AE01,
   CHR_AE02,
   CHR_NOTIFY,
   CHR_NOTIFY_T1,
   CHR_WRITE,
   CHR_WRITE_T1,
-  EIGHT_CHANNEL_ORDER,
-  EXTENDED_INFO_FRAME_LEN,
+  ES30M_MIN_FRAME_LEN,
   IMPEDANCE_GRACE_MS,
+  INFO_DIVISOR_BIT,
   LAST_KNOWN_WEIGHT_TOLERANCE,
   LEGACY_PROTO_TYPE,
-  LIVE20_FRAME_LEN,
-  LIVE20_STATUS_MEASURING,
-  LIVE20_STATUS_RESULT,
-  LIVE20_STATUS_STABLE,
-  LIVE_MATCH_AFTER_MS,
-  LIVE_MATCH_BEFORE_MS,
   LIVE_MATCH_WEIGHT_KG,
-  LIVE_REPLAY_WINDOW_MS,
   MAX_AE00_RESPONSES,
   MAX_STORED_QUERY_ATTEMPTS,
   MAX_STORED_RECORD_AGE_SEC,
-  NINETEEN_BYTE_RESULT_HOLD_MS,
   NO_CONTACT_RESISTANCE,
   POST_START_ANCHOR_DELAY_MS,
-  PROTO_ECHO_MIN_INFO_FRAME_LEN,
-  RECENT_LIVE_RESULTS,
-  RESULT16_FRAME_LEN,
-  RESULT16_OPCODE_COMPOSITION,
-  RESULT16_OPCODE_DONE,
   RESULT_MAX_WEIGHT_KG,
   RESULT_MIN_WEIGHT_KG,
-  RESULT_OPCODE_B1,
-  RESULT_OPCODE_B4,
-  RESULT_RECORD_CLOCK_TOLERANCE_SEC,
   SCALE_EPOCH_OFFSET,
   STORED_FUTURE_TOLERANCE_MS,
-  STORED_MAX_AGE_MS,
-  STORED_OPCODE_COMPOSITION,
-  STORED_OPCODE_DONE,
-  STORED_UNASSIGNED_SLOT,
   STORED_QUERY_RETRY_MS,
   TRIGGER_GAP_MS,
   TRIGGER_REPEATS,
   TRIGGER_WEIGHT_FALLBACK_KG,
-  USER_DELETE_SUBCOMMAND,
   VENDOR_APP_USER_KEY,
+  VISIT_ANSWER_TIMEOUT_MS,
   VISIT_ATHLETE_MIN_AGE,
   WEIGHT_CERTAIN_MAX_KG,
   WEIGHT_CERTAIN_MIN_KG,
@@ -88,51 +61,68 @@ import {
   buildA2Frame,
   buildConfig,
   buildMeasurementTrigger,
+  buildOpenScaleA2,
+  buildStoredDataQuery,
   buildTimeSync,
+  buildUserDelete,
   buildUserProfileFrame,
-  decodeEightResult,
-  decodeEightStoredRecord,
   decodeStoredRecord,
-  decodeVaComposition,
   decryptQnResistance,
   hasValidSumChecksum,
   timeZoneByte,
-  type EightResult,
-  type VaComposition,
+  withChecksum,
+  type StoredRecord,
 } from './frames.js';
-import { qnAdvertTraits, qnMatches, warnOnOneByoneShape } from './matching.js';
+import { QN_NAMES, qnAdvertTraits, qnMatches, warnOnOneByoneShape } from './matching.js';
 import { parseQnBroadcast } from './broadcast.js';
+import {
+  classifyInfoFrame,
+  hex,
+  storedSlotLabel,
+  type QnDialectHandler,
+  type QnDialectKind,
+} from './dialect.js';
+import { classic } from './dialects/classic.js';
+import { ext20 } from './dialects/ext20.js';
+import { unknown } from './dialects/unknown.js';
+import * as va18 from './dialects/va18.js';
+import * as va19 from './dialects/va19.js';
+import { QnLedger } from './stored-ledger.js';
+import { QnSession } from './session.js';
 
-// Re-exported so importers keep the paths they had before the split.
-export {
-  buildA2Frame,
-  buildConfig,
-  buildMeasurementTrigger,
-  buildTimeSync,
-  buildUserProfileFrame,
-  timeZoneByte,
-} from './frames.js';
+const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+/** Each dialect's handler (see QnDialectHandler). */
+const DIALECTS: Record<QnDialectKind, QnDialectHandler> = {
+  unknown,
+  classic,
+  va18: va18.dialect,
+  va19: va19.dialect,
+  ext20,
+};
+
+type QnRuntimeOptions = AdapterOptions<typeof QN_BLE_OPTIONS>;
 
 /**
- * The scale's own results for one 19-byte weigh-in, and what this session sent
- * it and heard back, pinned to the reading they belong to (#331).
+ * The `ble.qn_*` options as configure() resolves them; QN_BLE_OPTIONS
+ * documents each. The protocol byte applies to every protocol-bearing write of
+ * a session, the pre-0x12 unlock config, the classic dialect and the no-0x12
+ * fallback handshake included: a scale whose 0x12 is lost in transit must still
+ * open with the byte its firmware accepts (#75, #331).
  */
-interface ScaleCompositionPin {
-  result: EightResult;
-  composition: VaComposition;
-  /** The profile frame this session sent and its user slot; null if none. */
-  visit: { slot: number; frame: readonly number[] } | null;
-  /** The scale's answer to it: `a1 06 02 <slot> <1 accepted | 0>`. */
-  reply: { slot: number; ok: boolean } | null;
-  /** Bit 0 of the ready frame's [3]: 1 when muscle and bone are percentages. */
-  valueType: number | null;
-  measuredAfterVisit: boolean;
-  a4PreludeSent: boolean;
+function qnOptions(o: QnRuntimeOptions) {
+  return {
+    protocolByte: o.qnProtocolByte ?? null,
+    reportByte: o.qnReportByte ?? null,
+    weightAck: o.qnWeightAck ?? null,
+    userKey: o.qnUserKey ?? null,
+    userSlot: o.qnUserSlot ?? null,
+    a4Prelude: o.qnA4Prelude === true,
+    configLong: o.qnConfigLong === true,
+    timeSyncLong: o.qnTimeSyncLong === true,
+    resultAck: o.qnResultAck === true,
+  };
 }
-
-/** Format bytes as hex string for debug logging. */
-const hex = (data: number[] | Buffer): string =>
-  [...data].map((b) => b.toString(16).padStart(2, '0')).join(' ');
 
 export class QnScaleAdapter
   implements ScaleAdapterCore, GattWiring, BroadcastSource, MultiCharNotify, HoldForComposition
@@ -141,16 +131,7 @@ export class QnScaleAdapter
   readonly match: MatchDescriptor = {
     priority: 250,
     custom: true,
-    // 'seb-scale' and the exact 'fit plus' come from openScale's QN handler,
-    // which annotates the latter as a BTSnoop-confirmed GE CS 10 G (#409, and
-    // we have GE CS10G history in #235). 'fit plus' is EXACT on purpose: as a
-    // substring it would claim any fitness-branded device whose name contains
-    // it. Without these two, such a unit was reachable only through the
-    // ae00/ffe0/fff0 service claim.
-    names: {
-      includes: ['qn-scale', 'renpho', 'senssun', 'sencor', 'seb-scale'],
-      exact: ['fit plus'],
-    },
+    names: QN_NAMES,
     serviceUuids: ['ae00', 'ffe0', 'fff0'],
     charUuids: ['ae01', 'ae02'],
     manufacturerId: 0xffff,
@@ -159,26 +140,9 @@ export class QnScaleAdapter
   readonly charWriteUuid = CHR_WRITE;
   readonly altCharNotifyUuid = CHR_NOTIFY_T1;
   readonly altCharWriteUuid = CHR_WRITE_T1;
-  readonly normalizesWeight = true;
-
-  /**
-   * Weight divisor: 100 (Type 1 default) or 10 (Type 2).
-   * Updated dynamically when a 0x12 scale-info frame arrives.
-   */
-  private weightScaleFactor = 100;
-
-  /**
-   * Whether a 0x12 frame named `weightScaleFactor` this session. Without it the
-   * factor is the default, a guess, and a 0x12 lost to the BlueZ race (which
-   * `runFallbackHandshake` exists for) is exactly when that happens (C-06).
-   */
-  private scaleFactorKnown = false;
 
   /** Every configured user's weight hints (configure(), C-06). */
   private userWeights: readonly UserWeightHint[] = [];
-
-  /** One "divisor in doubt, reading dropped" warning per session (C-06). */
-  private divisorDoubtWarned = false;
 
   /** Stored connection context for notification-driven state machine writes. */
   private ctx: ConnectionContext | null = null;
@@ -199,9 +163,6 @@ export class QnScaleAdapter
    */
   private sessionGeneration = 0;
 
-  /** Protocol type byte captured from the scale's 0x12 frame, echoed in config commands. */
-  private seenProtocolType = 0x00;
-
   /**
    * Configured display unit. The 0x13 config command tells the scale which unit
    * to show, so hardcoding kg flipped a user's lbs display on every read (#269).
@@ -209,316 +170,151 @@ export class QnScaleAdapter
    */
   private displayUnit: ScaleDisplayUnit = 'kg';
 
-  /** Whether the AE00 service is available (newer firmware). */
-  private hasAe00 = false;
-
-  /**
-   * In-flight AE02 subscribe, shared by onConnected and the 0x12 state machine.
-   * Both used to fire because `hasAe00` is only set after the await, and every
-   * subscribe adds another notification listener, so each AE02 frame was
-   * dispatched four times (#75).
-   */
-  private ae02Subscribe: Promise<boolean> | null = null;
-
-  /** Whether an AE00 challenge frame has already been reported this session. */
-  private ae00ChallengeSeen = false;
-
-  /** Serialises every AE01 write within one session (see writeAe01). */
-  private ae01Chain: Promise<void> = Promise.resolve();
-
-  /**
-   * AE00 challenges answered this session. The captured vendor exchange has
-   * exactly one scale-issued challenge, so a scale that keeps challenging is
-   * rejecting our response; answering it forever would be a write storm on a
-   * link that is already failing.
-   */
-  private ae00ResponsesSent = 0;
-
-  /**
-   * Whether the scale sent a long-frame (18-byte) 0x12 variant (e.g. ES-26M).
-   * These scales may never provide impedance, so stable frames with R1=R2=0
-   * must be accepted after a grace period. Classic ES-30M scales always send
-   * an impedance frame after the weight-only stable frame, so skipping
-   * R1=R2=0 is correct there.
-   */
-  private isLongFrameVariant = false;
-
-  /**
-   * Whether the 0x12 frame was the 20-byte extended dialect (#235). That
-   * revision keeps a real protocol type at byte[2] and the vendor app echoes
-   * it, unlike the 18-byte ES-26M frame which needs 0x00.
-   */
-  private isExtendedLongFrame = false;
-
-  /**
-   * Whether the 0x12 frame was exactly 19 bytes (Arboleaf). Set only in the
-   * long-frame branch: the classic branch accepts other lengths too, and a
-   * classic frame must never select the app profile sequence below.
-   */
-  private isNineteenByteInfo = false;
-
-  /**
-   * Whether the 0x12 frame was exactly 18 bytes (Renpho ES-26M, Physiq). Set
-   * only in the long-frame branch, like isNineteenByteInfo, so a classic frame
-   * of that length never counts (#463).
-   */
-  private isEighteenByteInfo = false;
-
-  /**
-   * The vendor-app profile sequence: no ready-time A2, and the A00D #2 profile
-   * frame from the first user's profile. Sent on the 19-byte dialect with
-   * `ble.qn_weight_ack` (#331, D033), and on the 18- and 19-byte dialects with
-   * `ble.qn_user_key` (#463, D055).
-   * Decided once, by whichever of the ready step and the config-request step
-   * runs first, from the 0x12 seen at that point, so the ready-time A2 and the
-   * A00D #2 profile frame always come from the same choice. A 0x12 that
-   * arrives later (after a fallback handshake) does not change it. Null until
-   * decided.
-   */
-  private appProfileSequence: boolean | null = null;
-
   private decideAppProfileSequence(): boolean {
-    if (this.appProfileSequence === null) {
-      this.appProfileSequence = this.wantsAppProfileSequence();
+    if (this.s.appProfileSequence === null) {
+      this.s.appProfileSequence = this.wantsAppProfileSequence();
     }
-    return this.appProfileSequence;
+    return this.s.appProfileSequence;
   }
 
   /** Whether the 0x12 seen so far and the options call for the vendor-app profile sequence. */
   private wantsAppProfileSequence(): boolean {
+    const { kind } = this.s;
     return (
-      (this.forcedWeightAck === true && this.isNineteenByteInfo) ||
-      (this.forcedUserKey !== null && (this.isEighteenByteInfo || this.isNineteenByteInfo))
+      (this.opts.weightAck === true && kind === 'va19') ||
+      (this.opts.userKey !== null && (kind === 'va18' || kind === 'va19' || kind === 'ext20'))
     );
   }
 
   /** Length of the 0x12 the vendor-app profile sequence was chosen for, for the log. */
   private dialectBytes(): number {
-    return this.isEighteenByteInfo ? 18 : 19;
+    return this.s.kind === 'va18' ? 18 : this.s.kind === 'va19' ? 19 : 20;
   }
 
   /**
-   * Protocol byte forced by `ble.qn_protocol_byte`, overriding what the frame
-   * length or the scale-info frame implies (#75, #331). Applied to every
-   * protocol-bearing write in the session, including the pre-0x12 unlock
-   * config, the classic dialect, and the no-0x12 fallback handshake: a scale
-   * whose 0x12 is lost in transit must still open with the byte its firmware
-   * accepts.
-   *
-   * There is no way to detect the wrong choice at runtime: a scale on the wrong
-   * byte acknowledges 0x14, 0x21 and 0x23 exactly as it does on the right one
-   * and simply never streams a weight, which is indistinguishable from nobody
-   * standing on it. So this is a setting, not a heuristic.
+   * `ble.qn_user_slot`, when it applies: with `ble.qn_user_key`, on a dialect
+   * the key applies to (#501). Null otherwise, and the frames go to slot 1.
    */
-  private forcedProtocolType: number | null = null;
+  private configuredSlot(): number | null {
+    const { kind } = this.s;
+    if (this.opts.userKey === null || this.opts.userSlot === null) return null;
+    return kind === 'va18' || kind === 'va19' || kind === 'ext20' ? this.opts.userSlot : null;
+  }
 
   /**
-   * Slot mask of the A00D user-delete frame, set by `ble.qn_report_byte`. Null
-   * (the default) sends no such frame at all; see USER_DELETE_SUBCOMMAND (#461).
+   * The user slot every A2 and 0x22 of this session is for: `ble.qn_user_slot`
+   * while it applies, which covers the weight echo before the profile frame;
+   * else the slot of the profile frame sent, else 1 (#501). Before a 0x12 none
+   * of these goes out with the option on another slot (holdsSlotFrames).
    */
-  private forcedReportByte: number | null = null;
+  private writeSlot(): number {
+    return this.configuredSlot() ?? this.s.visitSent?.slot ?? 1;
+  }
+
+  /** ` for user slot N` for a debug line while `ble.qn_user_slot` applies, '' otherwise. */
+  private slotNote(): string {
+    return this.configuredSlot() === null ? '' : ` for user slot ${this.writeSlot()}`;
+  }
 
   /**
-   * `ble.qn_weight_ack`. Null leaves the dialect gate alone (#75).
+   * Whether the frames that name a user slot (every A2, the A00D frames, the
+   * 0x22, the A4 prelude) are not sent: with ble.qn_user_key and
+   * ble.qn_user_slot on a slot other than 1, until a 0x12 names the dialect.
+   * Before one the option may not apply (not on the classic dialect), and the
+   * frames this session could send are openScale's, for slot 1, not the
+   * configured user's: the CS10G took that A2 in a session without a 0x12 (#501).
    */
-  private forcedWeightAck: boolean | null = null;
+  private holdsSlotFrames(): boolean {
+    const slot = this.opts.userSlot;
+    if (this.opts.userKey === null || slot === null || slot === 1) return false;
+    if (this.s.kind !== 'unknown') return false;
+    if (!this.s.slotFramesHeldLogged) {
+      this.s.slotFramesHeldLogged = true;
+      bleLog.debug(
+        'QN: no frame for a user slot until a scale-info frame (0x12) names the dialect: no ' +
+          'ready-time A2, no profile frame or START on the config request, no weight echo or ' +
+          `re-query. ble.qn_user_slot is ${slot}, and without a 0x12 they would be for user ` +
+          'slot 1 (#501)',
+      );
+    }
+    return true;
+  }
 
   /**
-   * `ble.qn_user_key`: the user key the vendor app registered slot 1 with
-   * (#463). Null sends openScale's frames on the 18-byte dialect and leaves the
-   * 19-byte one to `ble.qn_weight_ack`, as before.
+   * Readings that stand in for a weigh-in the scale has not finished yet, or
+   * (18-byte, heldForStoredAnswer) one that waits for the scale's stored
+   * weigh-ins. Keyed by the reading object, so isFinal
+   * answers for the object it is handed rather than for whichever frame was
+   * parsed last. Never reset: a reading from an earlier session is never
+   * handed back.
    */
-  private forcedUserKey: number | null = null;
+  readonly provisionalReadings = new WeakSet<ScaleReading>();
 
-  /** One "refused the profile sent with ble.qn_user_key" line per session (#463). */
-  private visitRefusedLogged = false;
+  /** What a later session's stored records and result blocks are compared with. */
+  readonly ledger = new QnLedger();
 
-  /** One anchor-fallback warning per session, reset in onConnected. */
-  private anchorFallbackWarned = false;
-
-  /** One "20-byte live frame" debug line per session, on either 20-byte path (#331). */
-  private twentyByteFrameLogged = false;
+  /** This session's state; replaced whole in onSessionStart. The dialect handlers use it too. */
+  s = new QnSession();
 
   /**
-   * The 19-byte dialect's streamed weigh-in (#331, D037). `live20Seen`: a
-   * well-formed 20-byte 0x10 arrived this session, which is what makes later
-   * 0x15/0x16 frames part of the same weigh-in.
-   * `live20Weight`: the stable weight, held until 0x16 (`live20ResultSeen`)
-   * closes the weigh-in.
-   */
-  private live20Seen = false;
-  private live20Weight: number | null = null;
-  private live20ResultSeen = false;
-
-  /**
-   * What the scale's own composition for this session's weigh-in is judged by
-   * (#331): the result block's parts and its 0x15, the profile frame sent and
-   * the scale's answer, whether the scale reports percentages (ready frame),
-   * whether it measured after accepting the profile, and whether the
-   * `qn_a4_prelude` frames went out.
-   */
-  private live20Block: Buffer[] = [];
-  private live20C15: Buffer | null = null;
-  private visitSent: { slot: number; frame: readonly number[] } | null = null;
-  private visitReply: { slot: number; ok: boolean } | null = null;
-  private readyValueType: number | null = null;
-  private measuredAfterVisit = false;
-  private a4PreludeSent = false;
-
-  /** The scale's own results, by the reading they belong to (#331). */
-  private readonly scaleComposition = new ReadingComposition<ScaleCompositionPin | null>();
-
-  /**
-   * Readings that stand in for a weigh-in the scale has not finished yet. Keyed
-   * by the reading, like ReadingComposition, so isFinal answers for the object
-   * it is handed rather than for whichever frame was parsed last. Never reset:
-   * a reading from an earlier session is never handed back.
-   */
-  private readonly provisionalReadings = new WeakSet<ScaleReading>();
-
-  /**
-   * A 0x10 first part with status measuring or stable arrived this session, so
-   * the scale measured while we were connected. A result block without one is
-   * a weigh-in the scale finished before the link came up (#331).
-   */
-  private live20Measured = false;
-
-  /** This session's result block repeated a live result already reported. */
-  private live20Replayed = false;
-
-  /**
-   * The 19-byte dialect's stored weigh-ins (#331): the frames of the record
-   * being assembled (three 0x23 parts, 0x24, 0x25), whether a fresh one is
-   * held for a live result that may replace it, and the scale-epoch seconds of
-   * the records reported this session.
-   */
-  private storedParts: Buffer[] = [];
-  private storedHoldArmed = false;
-  private readonly storedEmitted = new Set<number>();
-
-  /**
-   * The fresh stored weigh-in the session holds right now ("W kg at T"), so the
-   * log can say when a later reading takes its place in the hold and it is not
-   * exported (#331).
-   */
-  private heldStoredWeighIn: string | null = null;
-
-  /**
-   * High-water mark of the stored weigh-ins reported, in scale-epoch seconds,
-   * persisted by the runtime across restarts (dedupMark). Records are judged
-   * against the mark as it stood when the session started: a batch need not
-   * arrive in time order, and an earlier record behind a later one is still new.
-   */
-  private storedMark = 0;
-  private storedMarkAtSessionStart = 0;
-
-  /**
-   * The last few live results this adapter published, by weight and the time
-   * of their 0x16. Kept across sessions: they are what a stored record or a
-   * repeated result block in a later session is compared with.
-   */
-  private readonly recentLiveResults: { weight: number; atMs: number }[] = [];
-
-  /**
-   * Hold the link from the 19-byte dialect's stable weight until its 0x16
-   * (D037), and on a fresh stored weigh-in, so a live result in the same
-   * session replaces it. Undefined otherwise and on every other dialect, so
-   * nothing else this adapter returns is held.
+   * The hold of the 19- or the 18-byte dialect while one is armed (see their
+   * hold()); undefined otherwise, so nothing else this adapter returns is held.
    */
   get completionHoldMs(): number | undefined {
-    return this.live20Weight !== null || this.storedHoldArmed
-      ? NINETEEN_BYTE_RESULT_HOLD_MS
-      : undefined;
+    return (va19.dialect.hold(this.s) ?? va18.dialect.hold(this.s))?.ms;
   }
 
-  /** Only the 19-byte stable weight and fresh stored weigh-ins are provisional. */
+  /**
+   * Only the 19-byte stable weight, fresh 19-byte stored weigh-ins and the
+   * 18-byte weigh-in held for the stored ones are provisional.
+   */
   isFinal(reading: ScaleReading): boolean {
     return !this.provisionalReadings.has(reading);
   }
 
-  /**
-   * True from the 19-byte stable weight until 0x16. HoldTimer asks only when a
-   * window ends, so this has to cover the scale's whole BIA, not just the
-   * result block: a BIA that outlasts the window then gets the extension steps
-   * instead of a cut link and a reconnect that sends START into it.
-   */
+  /** Whether either of those holds still has frames of its weigh-in to come. */
   isCompositionPending(): boolean {
-    return this.live20Weight !== null && !this.live20ResultSeen;
+    return (
+      va19.dialect.hold(this.s)?.pending === true || va18.dialect.hold(this.s)?.pending === true
+    );
   }
 
-  /**
-   * Whether a completed-weigh-in result frame (0xB4/0xB1) has already produced a
-   * reading this session. The scale repeats the 0xB4 frame ~3x and then sends
-   * the 0xB1 records, all describing the one weigh-in, so the reading is emitted
-   * exactly once and the repeats are suppressed (#235).
-   */
-  private extendedResultEmitted = false;
+  /** The `ble.qn_*` options (qnOptions), replaced whole by configure(). */
+  opts = qnOptions({});
 
-  /**
-   * Timestamp (Date.now()) of the first stable R1=R2=0 frame seen on a
-   * long-frame variant. After IMPEDANCE_GRACE_MS without an impedance frame,
-   * subsequent R1=R2=0 stable frames are accepted.
-   */
-  private firstStableNoImpedanceAt: number | null = null;
-
-  /**
-   * Scale-epoch seconds (2000-epoch) captured when the connection opened, used
-   * as the freshness reference for 0x23 stored records. Falls back to the
-   * current time when a record arrives before onConnected ran.
-   */
-  private sessionStartedScaleSeconds: number | null = null;
-
-  /** Deduplication guards: prevent duplicate state machine responses. */
-  private configSent = false;
-  private timeSyncSent = false;
-  private historyResponseSent = false;
-
-  /** Fallback timer handle for cancellation when state machine fires normally. */
-  private fallbackTimer: ReturnType<typeof setTimeout> | null = null;
-
-  /** Send the undecoded 0xA4 prelude after START (`ble.qn_a4_prelude`, #331). */
-  private a4PreludeEnabled = false;
-
-  /** Send the 10-byte 0x13 config frame (`ble.qn_config_long`, #331). */
-  private configLong = false;
-
-  /** Send the 9-byte 0x20 time sync (`ble.qn_time_sync_long`, #331). */
-  private timeSyncLong = false;
-
-  /** Number of 0x22 stored-data re-queries sent this session. */
-  private storedQueryAttempts = 0;
-
-  /** Timer handle for the pending stored-data re-query. */
-  private storedRetryTimer: ReturnType<typeof setTimeout> | null = null;
-
-  /**
-   * The advertisement this session matched on flags the resistance as
-   * scrambled (#461, see SCRAMBLE_FLAG_BIT). Set in onConnected, before
-   * anything is written, so it is in place before any frame with a resistance
-   * can arrive: the scale sends those only after the handshake.
-   */
-  private resistanceScrambled = false;
-
-  /** One "unscrambled impedance is not a body" warning per session (#461). */
-  private unscrambledImplausibleWarned = false;
-
-  /** Receive the configured display unit from the composition root (#269). */
-  configure(opts: AdapterRuntimeConfig): void {
+  /** Receive the configured display unit and options from the composition root (#269). */
+  configure(opts: AdapterRuntimeConfig & QnRuntimeOptions): void {
     if (opts.displayUnit) this.displayUnit = opts.displayUnit;
-    this.forcedProtocolType = opts.qnProtocolByte ?? null;
-    this.forcedReportByte = opts.qnReportByte ?? null;
-    if (this.forcedReportByte !== null) {
+    this.opts = qnOptions(opts);
+    if (this.opts.reportByte !== null) {
       bleLog.warn(
-        `QN: ble.qn_report_byte is set (${this.forcedReportByte}), so every QN session sends ` +
+        `QN: ble.qn_report_byte is set (${this.opts.reportByte}), so every QN session sends ` +
           'the frame that deletes the user slots its bits select on the scale. Remove the ' +
           'setting unless your scale stopped reporting without it (#461).',
       );
     }
-    this.forcedWeightAck = opts.qnWeightAck ?? null;
-    this.forcedUserKey = opts.qnUserKey ?? null;
-    this.a4PreludeEnabled = opts.qnA4Prelude === true;
-    this.timeSyncLong = opts.qnTimeSyncLong === true;
-    this.configLong = opts.qnConfigLong === true;
+    const slot = this.opts.userSlot;
+    if (slot !== null && this.opts.userKey === null) {
+      bleLog.warn(
+        `QN: ble.qn_user_slot is set (${slot}) without ble.qn_user_key, so it is ignored ` +
+          'and the profile frame goes to user slot 1. Set ble.qn_user_key too (#501).',
+      );
+    } else if (slot !== null) {
+      // Bit i-1 of the mask deletes slot i (USER_DELETE_SUBCOMMAND).
+      if (this.opts.reportByte !== null && (this.opts.reportByte >> (slot - 1)) & 1) {
+        bleLog.warn(
+          `QN: ble.qn_report_byte ${this.opts.reportByte} selects user slot ${slot}, the ` +
+            'slot of ble.qn_user_slot, so every QN session deletes that user from the scale ' +
+            'before it sends the profile frame (#461, #501).',
+        );
+      }
+      if (this.opts.a4Prelude && slot !== 1) {
+        bleLog.warn(
+          `QN: ble.qn_a4_prelude is not sent with ble.qn_user_slot ${slot}: its frames write ` +
+            'user slot 1 (#501).',
+        );
+      }
+    }
     this.userWeights = opts.userWeights ?? [];
   }
 
@@ -529,7 +325,7 @@ export class QnScaleAdapter
   }
 
   /** Write to FFF2 (write char), fall back to FFE3 (Type 1). */
-  private async writeCmd(data: number[]): Promise<void> {
+  async writeCmd(data: number[]): Promise<void> {
     // Hold the context for both attempts. The 0x1F ack is issued from
     // parseNotification, whose caller ends the session (onSessionEnd nulls
     // this.ctx) in the same tick, so on FFE3-only scales the fallback would
@@ -580,75 +376,32 @@ export class QnScaleAdapter
         // AE01 not available
       }
     };
-    this.ae01Chain = this.ae01Chain.then(run, run);
-    return this.ae01Chain;
+    this.s.ae01Chain = this.s.ae01Chain.then(run, run);
+    return this.s.ae01Chain;
   }
 
   /**
-   * Clear every per-session field BEFORE anything is subscribed (#394, #406).
+   * Start a fresh QnSession BEFORE anything is subscribed (#394, #406), and
+   * stop the timers of the one before.
    *
-   * This used to live in onConnected(), which is too late on this adapter: QN
-   * is a MultiCharNotify adapter, and subscribeAndInit enables every notify
-   * binding before it awaits init, so a frame can be parsed against the
-   * PREVIOUS session's seenProtocolType, weightScaleFactor or configSent. That
-   * is the exact ordering the onSessionStart contract exists for.
+   * The reset used to live in onConnected(), which is too late on this
+   * adapter: QN is a MultiCharNotify adapter, and subscribeAndInit enables
+   * every notify binding before it awaits init, so a frame can be parsed
+   * against the PREVIOUS session's seenProtocolType, weightScaleFactor or
+   * configSent. That is the exact ordering the onSessionStart contract exists
+   * for.
    *
    * `this.ctx` stays in onConnected: it is the one thing that does not exist
    * until then.
    */
   onSessionStart(): void {
     this.sessionGeneration += 1;
-    this.seenProtocolType = this.forcedProtocolType ?? 0x00;
-    this.weightScaleFactor = 100;
-    this.scaleFactorKnown = false;
-    this.divisorDoubtWarned = false;
-    this.hasAe00 = false;
-    this.ae02Subscribe = null;
-    this.ae00ChallengeSeen = false;
-    this.ae01Chain = Promise.resolve();
-    this.ae00ResponsesSent = 0;
-    this.isLongFrameVariant = false;
-    this.isExtendedLongFrame = false;
-    this.isNineteenByteInfo = false;
-    this.isEighteenByteInfo = false;
-    this.appProfileSequence = null;
-    this.visitRefusedLogged = false;
-    this.extendedResultEmitted = false;
-    this.firstStableNoImpedanceAt = null;
-    this.sessionStartedScaleSeconds = Math.floor(Date.now() / 1000) - SCALE_EPOCH_OFFSET;
-    this.anchorFallbackWarned = false;
-    this.twentyByteFrameLogged = false;
-    this.live20Seen = false;
-    this.live20Weight = null;
-    this.live20ResultSeen = false;
-    this.live20Block = [];
-    this.live20C15 = null;
-    this.visitSent = null;
-    this.visitReply = null;
-    this.readyValueType = null;
-    this.measuredAfterVisit = false;
-    this.a4PreludeSent = false;
-    this.live20Measured = false;
-    this.live20Replayed = false;
-    this.storedParts = [];
-    this.storedHoldArmed = false;
-    this.heldStoredWeighIn = null;
-    this.storedEmitted.clear();
-    this.storedMarkAtSessionStart = this.storedMark;
-    this.configSent = false;
-    this.timeSyncSent = false;
-    this.historyResponseSent = false;
-    this.storedQueryAttempts = 0;
-    this.resistanceScrambled = false;
-    this.unscrambledImplausibleWarned = false;
-    if (this.fallbackTimer) {
-      clearTimeout(this.fallbackTimer);
-      this.fallbackTimer = null;
-    }
-    if (this.storedRetryTimer) {
-      clearTimeout(this.storedRetryTimer);
-      this.storedRetryTimer = null;
-    }
+    this.s.dispose();
+    this.s = new QnSession(
+      this.opts.protocolByte ?? 0x00,
+      this.ledger.mark,
+      Math.floor(Date.now() / 1000) - SCALE_EPOCH_OFFSET,
+    );
   }
 
   /**
@@ -667,8 +420,8 @@ export class QnScaleAdapter
     // The session clock is re-stamped here as well as in onSessionStart, for a
     // caller that drives onConnected directly (a test, or a transport that
     // predates the hook).
-    if (this.sessionStartedScaleSeconds === null) {
-      this.sessionStartedScaleSeconds = Math.floor(Date.now() / 1000) - SCALE_EPOCH_OFFSET;
+    if (this.s.sessionStartedScaleSeconds === null) {
+      this.s.sessionStartedScaleSeconds = Math.floor(Date.now() / 1000) - SCALE_EPOCH_OFFSET;
     }
 
     // #320: the nameless fallback claims any device on a QN vendor service,
@@ -685,36 +438,21 @@ export class QnScaleAdapter
     // working installs break. This line is how that capture gets reported.
     warnOnOneByoneShape(ctx);
 
-    // Try subscribing to AE02 (newer firmware detection).
-    // NOTE: on Linux, 0x12 may arrive before this completes. The state machine
-    // handlers do NOT depend on hasAe00; they always attempt AE01 writes
-    // (which fail silently on older firmware without AE00). Both paths go
-    // through the same memoised helper so they cannot subscribe twice (#75).
+    // AE02 subscribe (newer firmware), memoised with the 0x12 path so the two
+    // cannot subscribe twice (#75).
     const hasAe02 = await this.ensureAe02Subscribed();
 
     if (!hasAe02) {
       // Older firmware: send legacy unlock variants on FFF2.
       // These work with Renpho, Sencor, and generic QN-Scale devices
       // that don't use the notification-driven handshake.
-      // The second unlock is the 0x10 config variant whose byte[3] is the unit
-      // flag; honour the configured unit and recompute its checksum (#269). The
-      // first unlock is a different 0x01 subcommand and is left as-is.
-      const config = [
-        0x13,
-        0x09,
-        // Stay deterministic when the override is unset: seenProtocolType can be
-        // seeded by a 0x12 that races the AE02 subscribe on native BLE, and this
-        // fixed frame must not depend on that timing. The override, when set, is
-        // applied before onConnected runs, so every targeted case is unchanged.
-        this.forcedProtocolType ?? 0x00,
-        this.unitFlag(),
-        0x10,
-        0x00,
-        0x00,
-        0x00,
-        0x00,
-      ];
-      config[8] = config.reduce((a, b) => a + b, 0) & 0xff;
+      // The second unlock is the short 0x13 config, whose byte[3] is the unit
+      // flag; honour the configured unit (#269). The first unlock is a different
+      // 0x01 subcommand and is left as-is. The protocol byte stays 00 when the
+      // override is unset: seenProtocolType can be seeded by a 0x12 that races
+      // the AE02 subscribe on native BLE, and this fixed frame must not depend on
+      // that timing. The override, when set, is applied before onConnected runs.
+      const config = buildConfig(this.opts.protocolByte ?? 0x00, this.unitFlag());
       const unlocks = [[0x13, 0x09, 0x00, 0x01, 0x01, 0x02], config];
       for (const cmd of unlocks) {
         await this.writeCmd(cmd);
@@ -725,26 +463,27 @@ export class QnScaleAdapter
     // normally (0x12 received), handleScaleInfo cancels this timer.
     // If 0x12 is lost (Linux BlueZ race) or never sent (older firmware
     // that only responds to unlocks), the fallback runs the full handshake.
-    if (!this.configSent) {
-      this.fallbackTimer = setTimeout(() => void this.runFallbackHandshake(), 2000);
+    if (!this.s.configSent) {
+      this.s.fallbackTimer = setTimeout(() => void this.runFallbackHandshake(), 2000);
     }
   }
 
   /**
    * Fallback handshake for Linux node-ble where 0x12 may be lost.
-   * Sends AE01 init first, then the full handshake sequence.
+   * Sends AE01 init first, then the full handshake sequence. With
+   * ble.qn_user_slot on a slot other than 1 that is only the frames without a
+   * user slot (holdsSlotFrames, #501).
    */
   private async runFallbackHandshake(): Promise<void> {
     if (!this.ctx) return;
-    this.fallbackTimer = null;
-    const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+    this.s.fallbackTimer = null;
     const gen = this.sessionGeneration;
 
-    if (!this.configSent) {
-      this.seenProtocolType = this.forcedProtocolType ?? 0xff;
+    if (!this.s.configSent) {
+      this.s.seenProtocolType = this.opts.protocolByte ?? 0xff;
       bleLog.debug(
         `QN: fallback: no 0x12 received, running handshake with ` +
-          `proto=0x${this.seenProtocolType.toString(16).padStart(2, '0')}`,
+          `proto=0x${this.s.seenProtocolType.toString(16).padStart(2, '0')}`,
       );
       // handleScaleInfo sends AE01 init + 0x13 config
       await this.handleScaleInfo();
@@ -752,28 +491,38 @@ export class QnScaleAdapter
       if (gen !== this.sessionGeneration) return;
     }
 
-    if (!this.timeSyncSent) {
+    if (!this.s.timeSyncSent) {
       bleLog.debug('QN: fallback: sending time sync + profile');
       await this.handleReady();
       await wait(500);
       if (gen !== this.sessionGeneration) return;
     }
 
-    if (!this.historyResponseSent) {
+    if (!this.s.historyResponseSent) {
       bleLog.debug('QN: fallback: sending the profile frame + start');
       await this.handleConfigRequest();
     }
   }
 
-  /** Read the impedance flag from the session's advertisement (#461). */
+  /**
+   * Read the impedance flag from the session's advertisement (#461). A company
+   * id without bytes carries no flag, so it counts as no advertisement (#463).
+   */
   private readImpedanceFlag(ctx: ConnectionContext): void {
-    const traits = qnAdvertTraits(ctx.manufacturerData, ctx.deviceAddress);
-    this.resistanceScrambled = traits?.scrambled === true;
-    if (!ctx.manufacturerData) {
-      bleLog.debug('QN: no advertisement for this session, impedance read as sent (#461)');
+    const md = ctx.manufacturerData?.data.length ? ctx.manufacturerData : undefined;
+    const traits = qnAdvertTraits(md, ctx.deviceAddress);
+    this.s.resistanceScrambled = traits?.scrambled === true;
+    this.s.noAdvertisement = md === undefined;
+    if (!md) {
+      bleLog.debug(
+        'QN: no advertisement for this session, impedance read as sent unless the 18-byte ' +
+          'dialect sends one only a scrambled body gives (#461, #463)',
+      );
+      // A 0x12 parsed before onConnected has told the dialect already.
+      va18.logNoAdvertisementOnce(this);
     } else if (!traits) {
       bleLog.debug(
-        `QN: advertisement (company 0x${ctx.manufacturerData.id.toString(16).padStart(4, '0')}) ` +
+        `QN: advertisement (company 0x${md.id.toString(16).padStart(4, '0')}) ` +
           'is not a QN one for this device, impedance read as sent (#461)',
       );
     } else if (traits.category === null) {
@@ -792,16 +541,26 @@ export class QnScaleAdapter
 
   /**
    * The resistance a frame carries, unscrambled when the advertisement said so
-   * (see SCRAMBLE_FLAG_BIT). Untouched otherwise, so a scale that does not set
-   * the flag gets exactly the bytes it sent.
+   * (see SCRAMBLE_FLAG_BIT). Untouched otherwise, so a scale that advertises
+   * without the flag gets exactly the bytes it sent. Without any advertisement,
+   * an 18-byte value only a scrambled body resistance can be is unscrambled
+   * (readsUnscrambledWithoutAdvert, #463).
    */
-  private resistance(raw: number): number {
-    if (!this.resistanceScrambled || raw === 0) return raw;
+  resistance(raw: number): number {
+    if (raw === 0) return raw;
+    if (!this.s.resistanceScrambled) {
+      if (!va18.readsUnscrambledWithoutAdvert(this, raw)) return raw;
+      const value = decryptQnResistance(raw);
+      bleLog.debug(
+        `QN: impedance ${raw} read unscrambled as ${value} Ohm without an advertisement (#463)`,
+      );
+      return value;
+    }
     const unscrambled = decryptQnResistance(raw);
     const value = unscrambled >= NO_CONTACT_RESISTANCE ? 0 : unscrambled;
     bleLog.debug(`QN: impedance ${raw} unscrambled to ${value} Ohm (#461)`);
-    if (value !== 0 && !isPlausibleImpedance(value) && !this.unscrambledImplausibleWarned) {
-      this.unscrambledImplausibleWarned = true;
+    if (value !== 0 && !isPlausibleImpedance(value) && !this.s.unscrambledImplausibleWarned) {
+      this.s.unscrambledImplausibleWarned = true;
       bleLog.warn(
         `QN: this scale advertises a scrambled impedance, and unscrambling ${raw} gives ` +
           `${value} Ohm, which is not a body. Please report this log on #461.`,
@@ -824,22 +583,22 @@ export class QnScaleAdapter
   private async ensureAe02Subscribed(): Promise<boolean> {
     const ctx = this.ctx;
     if (!ctx) return false;
-    if (this.hasAe00) return true;
-    if (!this.ae02Subscribe) {
-      this.ae02Subscribe = ctx.subscribe(CHR_AE02).then(
+    if (this.s.hasAe00) return true;
+    if (!this.s.ae02Subscribe) {
+      this.s.ae02Subscribe = ctx.subscribe(CHR_AE02).then(
         () => {
-          this.hasAe00 = true;
+          this.s.hasAe00 = true;
           bleLog.debug('QN: subscribed to AE02');
           return true;
         },
         () => {
-          this.ae02Subscribe = null;
+          this.s.ae02Subscribe = null;
           bleLog.debug('QN: AE02 not available (older firmware)');
           return false;
         },
       );
     }
-    return this.ae02Subscribe;
+    return this.s.ae02Subscribe;
   }
 
   /**
@@ -892,9 +651,9 @@ export class QnScaleAdapter
    * present on ES-CS20M firmware that already reads fine.
    */
   private answerAe00Challenge(data: Buffer): void {
-    if (this.ae00ResponsesSent >= MAX_AE00_RESPONSES) {
-      if (this.ae00ResponsesSent === MAX_AE00_RESPONSES) {
-        this.ae00ResponsesSent++;
+    if (this.s.ae00ResponsesSent >= MAX_AE00_RESPONSES) {
+      if (this.s.ae00ResponsesSent === MAX_AE00_RESPONSES) {
+        this.s.ae00ResponsesSent++;
         bleLog.warn(
           `QN: the scale re-issued the AE00 challenge more than ${MAX_AE00_RESPONSES} times, ` +
             'so it is rejecting our response. This firmware likely uses a different ' +
@@ -907,7 +666,7 @@ export class QnScaleAdapter
     // Count the attempt before it can fail: a challenge shape this code cannot
     // answer must still consume the budget, or a malformed repeat would be
     // retried for the whole session.
-    this.ae00ResponsesSent++;
+    this.s.ae00ResponsesSent++;
     let frame: Buffer;
     try {
       frame = jieliAuthResponseFrame(data);
@@ -915,30 +674,35 @@ export class QnScaleAdapter
       bleLog.debug(`QN: AE00 challenge response could not be computed: ${errMsg(e)}`);
       return;
     }
-    if (!this.ae00ChallengeSeen) {
-      this.ae00ChallengeSeen = true;
+    if (!this.s.ae00ChallengeSeen) {
+      this.s.ae00ChallengeSeen = true;
       bleLog.debug('QN: AE00 challenge received, answering on AE01 (#235)');
     }
     void this.writeAe01([...frame]);
   }
 
   /**
-   * Parse QN vendor notifications.
+   * Parse QN vendor notifications: a notification-driven handshake (0x12 ->
+   * AE01 init + 0x13 config, 0x14 -> 0x20 time sync + ready-time A2 + AE01
+   * "pass", 0x21 -> A00D profile frame + 0x22 start, 0xA1 -> the scale's answer
+   * to the profile), then each dialect's own frames (dialects/) and the live
+   * 0x10 weight. The handshake writes are fire-and-forget, so they do not block
+   * this synchronous return.
    *
-   * Implements a notification-driven state machine for the handshake:
-   *   0x12 (scale info) -> AE01 init + 0x13 config with echoed protocol type
-   *   0x14 (ready ACK)  -> 0x20 time sync + A2 user profile + "pass" auth
-   *                        (no A2 on the 19-byte dialect with ble.qn_weight_ack,
-   *                        nor on the 18- and 19-byte ones with ble.qn_user_key)
-   *   0x21 (config req)  -> A00D profile frame + 0x22 start
-   *   0x10 (weight)      -> parse weight (original or ES-30M format)
-   *                        (19-byte dialect: 20-byte stream, weight held until
-   *                        its 0x16, nothing written back, D037)
-   *
-   * State machine writes are fire-and-forget (async, not awaited) so they
-   * don't block the synchronous parseNotification return.
+   * A frame that ends the scale's answer while a weigh-in is held for it
+   * hands over a copy of that weigh-in, which is final, so the session ends on
+   * it (heldForStoredAnswer, #463).
    */
   parseNotification(data: Buffer): ScaleReading | null {
+    const reading = this.parseFrame(data);
+    if (reading === null && this.s.heldForStoredAnswer !== null && this.s.storedAnswerDone) {
+      return va18.releaseHeldWeighIn(this, 'the scale has answered the stored-record query');
+    }
+    return reading;
+  }
+
+  /** One notification through the state machine above. */
+  private parseFrame(data: Buffer): ScaleReading | null {
     if (data.length < 3) return null;
 
     bleLog.debug(`QN RAW (${data.length}B): [${hex(data)}]`);
@@ -947,69 +711,7 @@ export class QnScaleAdapter
 
     // 0x12: scale info, update weight scale factor and capture protocol type
     if (opcode === 0x12 && data.length > 10) {
-      // Renpho ES-26M (and similar newer firmware) sends an 18-byte 0x12
-      // frame where byte[1] == packet length and bytes [2-7] contain the
-      // MAC address. The classic QN format has ~11 bytes with protocol
-      // type at [2] and weight scale flag at [10].
-      if (data.length >= 18 && data[1] === data.length) {
-        // Long frame. Every captured one carries 0xff at byte[2] whatever its
-        // length, and the disagreement is over what the firmware ACCEPTS BACK:
-        //   18 bytes (Renpho ES-26M / ES-CS20M): 0x00, which has a working
-        //     unit behind it (45e4d6e). The only vendor-app capture of this
-        //     length drives the scale end to end on 0xff instead (#84), so the
-        //     value is genuinely in doubt for this length and `qn_protocol_byte`
-        //     exists to try the other one without a rebuild.
-        //   19 bytes (Arboleaf): the echo. 0x00 is what the adapter has always
-        //     sent and two reporters get a complete handshake followed by
-        //     silence (#75, #331).
-        //   20 bytes (GE CS 10 G "Fit Plus"): the echo, hardware confirmed on
-        //     the same unit the vendor app was captured from (#235).
-        //
-        // The choice cannot be corrected at runtime: a scale on the wrong byte
-        // acknowledges everything and stays silent, which is exactly what a
-        // scale nobody is standing on does.
-        this.isLongFrameVariant = true;
-        this.isExtendedLongFrame = data.length >= EXTENDED_INFO_FRAME_LEN;
-        this.isNineteenByteInfo = data.length === PROTO_ECHO_MIN_INFO_FRAME_LEN;
-        this.isEighteenByteInfo = data.length === 18;
-        if (this.wantsAppProfileSequence() && this.appProfileSequence === false) {
-          bleLog.debug(
-            `QN: ${data.length}-byte 0x12 after the handshake already chose openScale's frames; ` +
-              'the profile frame stays as sent (#331)',
-          );
-        }
-        const byLength = data.length >= PROTO_ECHO_MIN_INFO_FRAME_LEN ? data[2] : LEGACY_PROTO_TYPE;
-        this.seenProtocolType = this.forcedProtocolType ?? byLength;
-        this.weightScaleFactor = 10;
-      } else {
-        // Classic short frame
-        this.isLongFrameVariant = false;
-        this.isExtendedLongFrame = false;
-        this.isNineteenByteInfo = false;
-        this.isEighteenByteInfo = false;
-        this.seenProtocolType = this.forcedProtocolType ?? data[2];
-        this.weightScaleFactor = data[10] === 1 ? 100 : 10;
-      }
-      this.scaleFactorKnown = true;
-      const dialect = this.isExtendedLongFrame
-        ? 'extended'
-        : this.isLongFrameVariant
-          ? 'es26m'
-          : 'classic';
-      // The byte the frame actually carried, for triage. Not seenProtocolType:
-      // on the 18-byte variant that is forced to 0x00 for the handshake, but the
-      // log should still report the 0xff the scale sent.
-      const reported = data[2];
-      const forcedNote =
-        this.forcedProtocolType !== null && this.forcedProtocolType !== reported
-          ? ` (forced, scale reported 0x${reported.toString(16).padStart(2, '0')})`
-          : '';
-      bleLog.debug(
-        `QN: scale info (${data.length}B, dialect=${dialect}), ` +
-          `factor=${this.weightScaleFactor}, ` +
-          `proto=0x${this.seenProtocolType.toString(16).padStart(2, '0')}${forcedNote}`,
-      );
-      void this.handleScaleInfo();
+      this.onScaleInfo(data);
       return null;
     }
 
@@ -1017,7 +719,7 @@ export class QnScaleAdapter
     if (opcode === 0x14) {
       bleLog.debug('QN: ready frame, sending time sync and the ready-time frames');
       // Bit 0 of [3]: the scale reports muscle and bone as percentages (#331).
-      if (data.length >= 4 && hasValidSumChecksum(data)) this.readyValueType = data[3] & 0x01;
+      if (data.length >= 4 && hasValidSumChecksum(data)) this.s.readyValueType = data[3] & 0x01;
       void this.handleReady();
       return null;
     }
@@ -1033,137 +735,138 @@ export class QnScaleAdapter
     // profile frame, `a1 06 02 <slot> <1 accepted | 0>`, is kept: the scale's
     // own composition is only for a profile it accepted (#331).
     if (opcode === 0xa1 || opcode === 0xa3) {
-      if (
-        opcode === 0xa1 &&
-        data.length === 6 &&
-        data[1] === 0x06 &&
-        data[2] === 0x02 &&
-        hasValidSumChecksum(data)
-      ) {
-        this.visitReply = { slot: data[3], ok: data[4] === 0x01 };
-        bleLog.debug(
-          `QN: the scale ${this.visitReply.ok ? 'accepted' : 'did not accept'} the profile ` +
-            `for user slot ${data[3]} (#331)`,
-        );
-        // Only a frame sent with the option gets this: an install without it
-        // sees the same log as before (#463). Info, not a warning, because the
-        // weigh-in can still arrive, from the scale's memory.
-        if (
-          !this.visitReply.ok &&
-          this.visitSent !== null &&
-          this.forcedUserKey !== null &&
-          !this.visitRefusedLogged
-        ) {
-          this.visitRefusedLogged = true;
-          // The key is the leading explanation, not a confirmed one, so the
-          // line says "most likely".
-          const sentKey = (this.visitSent.frame[4] << 8) | this.visitSent.frame[5];
-          bleLog.info(
-            `QN: the scale refused the profile frame sent with ble.qn_user_key ${sentKey} ` +
-              `for user slot ${data[3]}. Most likely the vendor app set up that slot with ` +
-              'another key, or never set it up. Check ble.qn_user_key, and that the first ' +
-              'user in config.yaml is the first user in the vendor app (#463).',
-          );
-        }
-      }
+      this.onProfileAnswer(data);
       return null;
     }
 
-    // 0x23: stored measurement record returned after the 0x22 history query.
-    // V10 Renpho / ES-CS20M firmware delivers the weigh-in here, not reliably
-    // via live 0x10 frames (#213 / #75). Layout in decodeStoredRecord: R50 and
-    // R500 big-endian at [12..13] and [14..15], as the vendor SDK reads them
-    // (#461), not openScale's little-endian [13..14] and [15..16].
+    // Every other frame goes to the session's dialect first.
+    const own = DIALECTS[this.s.kind].frame(this, data);
+    if (own !== undefined) return own;
+
+    return this.liveFrame(data);
+  }
+
+  /** A 0x12 scale-info frame: the dialect, protocol byte and divisor, then the 0x13 config. */
+  private onScaleInfo(data: Buffer): void {
+    this.s.kind = classifyInfoFrame(data);
+    if (this.s.kind !== 'classic') {
+      // Only the 0x12 tells the dialect, so the line waits for it.
+      va18.logNoAdvertisementOnce(this);
+      if (this.wantsAppProfileSequence() && this.s.appProfileSequence === false) {
+        bleLog.debug(
+          `QN: ${data.length}-byte 0x12 after the handshake already chose openScale's frames; ` +
+            'the profile frame stays as sent (#331)',
+        );
+      }
+    }
+    // The long frame carries 0xff at byte[2] in every capture whatever its
+    // length, and the disagreement is over what the firmware ACCEPTS BACK:
+    //   18 bytes (Renpho ES-26M / ES-CS20M): 0x00, which has a working
+    //     unit behind it (45e4d6e). The only vendor-app capture of this
+    //     length drives the scale end to end on 0xff instead (#84), so the
+    //     value is genuinely in doubt for this length and `qn_protocol_byte`
+    //     exists to try the other one without a rebuild.
+    //   19 bytes (Arboleaf): the echo. 0x00 is what the adapter has always
+    //     sent and two reporters get a complete handshake followed by
+    //     silence (#75, #331).
+    //   20 bytes (GE CS 10 G "Fit Plus"): the echo, hardware confirmed on
+    //     the same unit the vendor app was captured from (#235).
+    // A classic frame is echoed.
     //
-    // A session that positively identified a classic scale (a short 0x12)
-    // keeps the old offsets. Classic firmware has a different 0x23 layout
-    // altogether, the record time included, so its records fail the freshness
-    // check below as stale; changing how they are read is a separate change
-    // with its own evidence. A session without any 0x12 reads the long layout,
-    // which is what every real record we have uses.
-    if (opcode === 0x23) {
-      // The 19-byte dialect sends 8-electrode records in their own layout and
-      // never gets a re-query: the scale answers our one 0x22 once it is done
-      // measuring, and a second 0x22 is the same request again (#331).
-      if (this.isNineteenByteInfo) return this.parseEightStoredPart(data);
-      const record = data.length < 17 ? null : decodeStoredRecord(data);
-      if (!record) {
-        this.scheduleStoredDataRetry();
-        return null;
-      }
-      const { weight, recordSeconds } = record;
-      if (weight <= 5 || weight >= 300) {
-        this.scheduleStoredDataRetry();
-        return null;
-      }
-      const sessionSeconds =
-        this.sessionStartedScaleSeconds ?? Math.floor(Date.now() / 1000) - SCALE_EPOCH_OFFSET;
-      if (recordSeconds + MAX_STORED_RECORD_AGE_SEC < sessionSeconds) {
-        this.scheduleStoredDataRetry();
-        return null;
-      }
-      const classic = this.scaleFactorKnown && !this.isLongFrameVariant;
-      const r1 = classic ? data.readUInt16LE(13) : record.r50;
-      const r2 = classic ? data.readUInt16LE(15) : record.r500;
-      if (this.storedRetryTimer) {
-        clearTimeout(this.storedRetryTimer);
-        this.storedRetryTimer = null;
-      }
+    // The choice cannot be corrected at runtime: a scale on the wrong byte
+    // acknowledges everything and stays silent, which is exactly what a
+    // scale nobody is standing on does.
+    const byLength = this.s.kind === 'va18' ? LEGACY_PROTO_TYPE : data[2];
+    this.s.seenProtocolType = this.opts.protocolByte ?? byLength;
+    // Bit 0 on every dialect, as the vendor's published SDK reads it.
+    // openScale's whole-byte `[10] === 1` read the 17-byte classic frames
+    // ([10] 0x03) as /10, and the long frame was set to /10 whatever its
+    // flags said, only to reach the ES-30M layout (D068).
+    this.s.weightScaleFactor = (data[10] & INFO_DIVISOR_BIT) !== 0 ? 100 : 10;
+    const dialect =
+      this.s.kind === 'ext20' ? 'extended' : this.s.kind === 'classic' ? 'classic' : 'es26m';
+    // The byte the frame actually carried, for triage. Not seenProtocolType:
+    // on the 18-byte variant that is forced to 0x00 for the handshake, but the
+    // log should still report the 0xff the scale sent.
+    const reported = data[2];
+    const forcedNote =
+      this.opts.protocolByte !== null && this.opts.protocolByte !== reported
+        ? ` (forced, scale reported 0x${reported.toString(16).padStart(2, '0')})`
+        : '';
+    bleLog.debug(
+      `QN: scale info (${data.length}B, dialect=${dialect}), ` +
+        `factor=${this.s.weightScaleFactor}, ` +
+        `proto=0x${this.s.seenProtocolType.toString(16).padStart(2, '0')}${forcedNote}`,
+    );
+    void this.handleScaleInfo();
+  }
+
+  /** The scale's answer to the profile frame, `a1 06 02 <slot> <1 accepted | 0>`. */
+  private onProfileAnswer(data: Buffer): void {
+    if (data[0] !== 0xa1 || data.length !== 6 || data[1] !== 0x06 || data[2] !== 0x02) return;
+    if (!hasValidSumChecksum(data)) return;
+    this.s.visitReply = { slot: data[3], ok: data[4] === 0x01 };
+    this.s.answerVisit();
+    if (this.s.visitReply.ok && this.s.visitAcceptedAtMs === null) {
+      this.s.visitAcceptedAtMs = Date.now();
+    }
+    bleLog.debug(
+      `QN: the scale ${this.s.visitReply.ok ? 'accepted' : 'did not accept'} the profile ` +
+        `for user slot ${data[3]} (#331)`,
+    );
+    // The vendor's published SDK asks for the stored weigh-ins as soon as
+    // the scale accepts the profile, and the Feelfit capture shows it. The
+    // handshake's own 0x22 comes about 125 ms later, and in two logs the
+    // final live frame came first (#463). Only for the profile built from
+    // the first user with the key, as the export of a stored weigh-in
+    // needs it; the handshake then skips its 0x22.
+    if (
+      this.s.visitAccepted &&
+      this.s.kind === 'va18' &&
+      this.opts.userKey !== null &&
+      this.s.storedQuerySentAtMs === null
+    ) {
       bleLog.debug(
-        `QN: stored 0x23 reading ${weight}kg, R50 ${r1} / R500 ${r2}` +
-          (classic ? ' (classic offsets)' : ''),
+        'QN: the scale accepted the profile, asking it for its stored weigh-ins now, as ' +
+          'the vendor app does (#463)',
       );
-      return { weight, impedance: this.resistance(r1 > 0 ? r1 : r2) };
+      this.s.storedQuerySentAtMs = Date.now();
+      void this.writeCmd(buildStoredDataQuery(this.s.seenProtocolType, this.writeSlot()));
     }
-
-    // Extended-dialect completed-weigh-in result frames (#235). Gated to the
-    // 20-byte dialect so no other QN variant is touched. On this firmware the
-    // scale never streams 0x10 after a full body-composition weigh-in; it sends
-    // these 0xB4/0xB1 frames instead, which were dropped at the ignore branch
-    // below, so nothing reached MQTT even though the whole handshake succeeded.
-    if (this.isExtendedLongFrame && (opcode === RESULT_OPCODE_B4 || opcode === RESULT_OPCODE_B1)) {
-      const reading = this.parseExtendedResultFrame(data);
-      // Return null (not fall through) for the non-weight parts of the burst —
-      // the repeated 0xB4s, the 0xB1 03 02/03 records — so they are consumed
-      // quietly instead of re-logged as ignored frames.
-      return reading;
+    // Only a frame sent with the option gets this: an install without it
+    // sees the same log as before (#463). Info, not a warning, because the
+    // weigh-in can still arrive, from the scale's memory.
+    if (
+      !this.s.visitReply.ok &&
+      this.s.visitSent !== null &&
+      this.opts.userKey !== null &&
+      !this.s.visitRefusedLogged
+    ) {
+      this.s.visitRefusedLogged = true;
+      // The key is the leading explanation, not a confirmed one, so the
+      // line says "most likely".
+      const sentKey = (this.s.visitSent.frame[4] << 8) | this.s.visitSent.frame[5];
+      bleLog.info(
+        `QN: the scale refused the profile frame sent with ble.qn_user_key ${sentKey} ` +
+          `for user slot ${data[3]}. Most likely the vendor app set up that slot with ` +
+          'another key, or never set it up. ' +
+          (this.configuredSlot() === null
+            ? 'Check ble.qn_user_key, and that the first user in config.yaml is the first ' +
+              'user in the vendor app (#463).'
+            : 'Check ble.qn_user_key and ble.qn_user_slot, and that the first user in ' +
+              "config.yaml is the vendor app's user in that slot (#463, #501)."),
+      );
     }
+  }
 
-    // The 19-byte dialect's weigh-in stream (#331, D037). Gated on the dialect
-    // explicitly: the GE CS 10 G's live frame has the identical 20-byte shape
-    // and stays on the logged-and-dropped path below. 0x15/0x16 only count
-    // after the stream, so elsewhere they still reach the ignore branch.
-    if (this.isNineteenByteInfo) {
-      if (opcode === 0x10 && data.length === LIVE20_FRAME_LEN && data[1] === LIVE20_FRAME_LEN) {
-        return this.parseNineteenByteLiveFrame(data);
-      }
-      if (
-        (opcode === STORED_OPCODE_COMPOSITION || opcode === STORED_OPCODE_DONE) &&
-        data.length >= RESULT16_FRAME_LEN &&
-        data[2] === 0xff
-      ) {
-        return this.parseEightStoredTail(data);
-      }
-      if (
-        this.live20Seen &&
-        (opcode === RESULT16_OPCODE_COMPOSITION || opcode === RESULT16_OPCODE_DONE) &&
-        data.length === RESULT16_FRAME_LEN &&
-        data[1] === RESULT16_FRAME_LEN
-      ) {
-        return this.parseNineteenByteResultFrame(data);
-      }
-    }
-
-    // 0x10: live weight frame.
-    // Anything else lands here and used to be discarded in silence, which is why
-    // #75 read as a decode bug: the AE00 challenge frames the scale sends on AE02
-    // reached this parser through a UUID-blind path and vanished without a trace.
-    // parseCharNotification now intercepts the challenge, but any other AE02
-    // frame still falls through to here, so log it and the next reporter log
-    // carries the evidence.
-    if (opcode !== 0x10 || data.length < 10) {
+  /** A live 0x10 weight frame, original or ES-30M layout; any other frame is logged and dropped. */
+  private liveFrame(data: Buffer): ScaleReading | null {
+    // Anything else is logged, not dropped in silence: an AE02 frame other than
+    // the AE00 challenge still falls through to here, and while such frames
+    // vanished without a trace #75 read as a decode bug.
+    if (data[0] !== 0x10 || data.length < 10) {
       bleLog.debug(
-        `QN: ignoring frame opcode=0x${opcode.toString(16).padStart(2, '0')} ` +
+        `QN: ignoring frame opcode=0x${data[0].toString(16).padStart(2, '0')} ` +
           `len=${data.length} hex=${Buffer.from(data).toString('hex')}`,
       );
       return null;
@@ -1174,11 +877,19 @@ export class QnScaleAdapter
     let r1: number;
     let r2: number;
 
-    // ES-30M format: byte[4] is a state flag (0x00/0x01/0x02) instead of weight LSB.
-    // Detected when weightScaleFactor=10, byte[4] <= 0x02, and frame has enough bytes.
-    // In the original format, byte[4] is the low byte of the 16-bit weight, which is
-    // almost always > 0x02 for adult weights (> 25.5 kg raw value with factor 10).
-    const isEs30m = data.length >= 11 && data[4] <= 0x02 && this.weightScaleFactor === 10;
+    // ES-30M (VA) format: byte[4] is a state flag (0x00/0x01/0x02) instead of
+    // the weight's low byte. The layout is picked by the frame's shape, 14
+    // bytes or more with its own length at [1], and never after a classic
+    // 0x12. It used to be keyed on the divisor 10, so a classic frame whose
+    // weight had a low byte of 0x00 to 0x02 went this way (84.50 kg read as
+    // 25.7 kg), and a VA frame in a session without a 0x12 went the original
+    // way (D068).
+    const classicSession = this.s.kind === 'classic';
+    const isEs30m =
+      !classicSession &&
+      data.length >= ES30M_MIN_FRAME_LEN &&
+      data[1] === data.length &&
+      data[4] <= 0x02;
 
     if (isEs30m) {
       // ES-30M: [4]=state (0x02=stable), [5-6]=weight, [7-8]=R1, [9-10]=R2
@@ -1188,8 +899,9 @@ export class QnScaleAdapter
       r2 = data.readUInt16BE(9);
 
       if (stable && r1 === 0 && r2 === 0) {
-        if (!this.isLongFrameVariant) {
-          // Classic ES-30M: always skip, impedance frame follows.
+        if (this.s.kind === 'unknown') {
+          // A session without a 0x12 (a classic one never gets here): always
+          // skip, an impedance frame follows.
           return null;
         }
         // Long-frame variant (ES-26M): accept after grace period.
@@ -1198,11 +910,11 @@ export class QnScaleAdapter
         // frames are accepted. This prevents losing BIA data if the
         // scale sends a transient R1=R2=0 before the impedance frame.
         const now = Date.now();
-        if (this.firstStableNoImpedanceAt === null) {
-          this.firstStableNoImpedanceAt = now;
+        if (this.s.firstStableNoImpedanceAt === null) {
+          this.s.firstStableNoImpedanceAt = now;
           return null;
         }
-        if (now - this.firstStableNoImpedanceAt < IMPEDANCE_GRACE_MS) {
+        if (now - this.s.firstStableNoImpedanceAt < IMPEDANCE_GRACE_MS) {
           return null;
         }
         // Grace period elapsed: accept this weight-only reading.
@@ -1215,58 +927,39 @@ export class QnScaleAdapter
       r2 = data.readUInt16BE(8);
     }
 
-    // The live 0x10 frame every capture of the long dialects actually shows is
-    // 20 bytes, with the weight as a big-endian u16 /100 at [5..6]:
-    //
-    //   10 14 01 00 11 1d c4 00 .. 00 17   Arboleaf, 76.20 kg (#331)
-    //   10 14 01 00 11 22 79 00 .. 00 d1   Arboleaf, 88.25 kg (#331)
-    //   10 14 01 00 11 1e be 00 .. 00 12   GE CS 10 G, 78.70 kg (#235)
-    //
-    // On the 19-byte dialect the frame is decoded above (parseNineteenByteLiveFrame)
-    // and never gets here. Elsewhere neither branch above reads it. [4] is 0x11,
-    // so it falls into the original layout, which takes the weight from [3..4]
-    // and gets 0x0011. Whether the GE frame shares the Arboleaf status and part
-    // bytes is not known, so there it is still logged once per session with the
-    // weight where the captures put it.
+    // The 20-byte live frame every capture of the long dialects shows has its
+    // weight as a big-endian u16 /100 at [5..6] (PROTOCOLS.md, QN family). The
+    // 19-byte dialect decodes it in its handler. Elsewhere its [4] 0x11 puts it
+    // in the original layout, which reads 0x0011, and whether the GE frame
+    // shares the Arboleaf status and part bytes is not known, so it is logged
+    // once per session with the weight where the captures put it. On the
+    // extended dialect [2] is the user slot, as on the 19-byte one: the CS10G
+    // streams `10 14 02 ..` for the user its app registered in slot 2 (#501).
     const twentyByteLive = data.length === 20 && data[1] === 0x14;
-    if (twentyByteLive && !this.twentyByteFrameLogged) {
-      this.twentyByteFrameLogged = true;
+    if (twentyByteLive && !this.s.twentyByteFrameLogged) {
+      this.s.twentyByteFrameLogged = true;
       bleLog.debug(
         `QN: 20-byte live frame, weight ${data.readUInt16BE(5) / 100} kg at [5..6], ` +
+          (this.s.kind === 'ext20' ? `user slot ${data[2]}, ` : '') +
           'not echoed and not yet decoded (#331)',
       );
     }
 
-    // Nothing the original layout reads is right for this shape. Its weight is
-    // 0x0011, and its stability byte [5] is the real weight's high byte, so a
-    // frame between 2.56 and 5.11 kg, which a step-off ramps through, read as a
-    // stable 1.7 kg (0.17 at factor 100) and was acknowledged with 0x1F. At
-    // exactly 2.56 kg ([6] zero, so no impedance either) it passed isComplete
-    // and ended the session, to be exported as the weigh-in. Stop here until
-    // the layout is decoded. A 20-byte frame that takes the ES-30M branch reads
-    // its weight from [5..6] and is left as it was.
+    // Nothing else the original layout reads is right for this shape either: a
+    // step-off ramp read as a stable 1.7 kg, and at exactly 2.56 kg it ended
+    // the session. Stop here until the layout is decoded. A 20-byte frame on
+    // the ES-30M branch reads its weight from [5..6] and is left as it was.
     if (twentyByteLive && !isEs30m) return null;
 
     // Per-frame weight echo (`ble.qn_weight_ack`, on by default on the 20-byte
-    // extended dialect). One reading of the GE CS 10 G capture has the vendor
-    // app answering live 0x10 frames with an A2 carrying that frame's own
-    // weight bytes (`... 1e be` -> `a2 06 01 1e be 85`); a later reading of the
-    // same capture disagrees, so this is unconfirmed. No hardware run has shown
-    // a scale needing it either: the completed GE weigh-ins predate the echo and
-    // never delivered a 0x10 to this adapter at all, their weight came from
-    // 0xB1 (#235).
-    //
-    // Never sent for the 20-byte layout above. Read through the original layout
-    // its rawWeight is 0x0011, so the echo handed the scale `a2 06 01 00 11 ba`,
-    // i.e. 0.17 kg, on every live frame; that path returns above now, and the
-    // 19-byte dialect's decode writes nothing at all, since its one complete
-    // weigh-in arrived without an echo or a 0x1F (#331). Whether the app echoes
-    // this shape at all is not known, so a 20-byte frame on the ES-30M branch is
-    // not echoed either. The 14-byte ES-30M and 10-byte classic frames keep it:
-    // their offsets are right. Sent before the stability gate, fire and forget,
-    // like the 0x1F stable ACK below.
-    if (this.weightAckEnabled() && this.ctx && !twentyByteLive) {
-      void this.writeCmd(buildA2Frame(rawWeight));
+    // extended dialect): one reading of the GE CS 10 G capture has the vendor
+    // app answer each live 0x10 with an A2 of that frame's weight bytes, a later
+    // reading disagrees, and no hardware run has needed it (#235). Never for a
+    // 20-byte frame: through the original layout it handed the scale 0.17 kg on
+    // every frame, and the 19-byte dialect writes nothing back (#331). Sent
+    // before the stability gate, fire and forget, like the 0x1F stable ACK below.
+    if (this.weightAckEnabled() && this.ctx && !twentyByteLive && !this.holdsSlotFrames()) {
+      void this.writeCmd(buildA2Frame(rawWeight, this.writeSlot()));
     }
 
     if (!stable) return null;
@@ -1278,16 +971,45 @@ export class QnScaleAdapter
     const impedance = this.resistance(r1 > 0 ? r1 : r2);
 
     // Reset the impedance grace timer on successful reading
-    this.firstStableNoImpedanceAt = null;
+    this.s.firstStableNoImpedanceAt = null;
+
+    const reading: ScaleReading = { weight, impedance };
+    const complete = this.isComplete(reading);
+    const held = this.s.heldForStoredAnswer;
+    // Another weigh-in while one is held for the stored ones: someone else
+    // stepped on. The session ends on the held one, and the new one is not
+    // acknowledged, so the scale need not count it as handed over (#463).
+    if (held !== null && complete && Math.abs(held.weight - weight) > LIVE_MATCH_WEIGHT_KG) {
+      return va18.releaseHeldWeighIn(this, `another weigh-in (${weight} kg) came during the wait`);
+    }
+    const holds = held === null && complete && va18.waitsForStoredAnswer(this);
+    if (holds) va18.holdForStoredAnswer(this, reading);
 
     // Acknowledge stable reading (0x1F) so the scale knows we received it
     if (this.ctx) {
-      const ackCmd = [0x1f, 0x05, this.seenProtocolType, 0x10, 0x00];
-      ackCmd[4] = ackCmd.reduce((a, b) => a + b, 0) & 0xff;
-      void this.writeCmd(ackCmd);
+      void this.writeCmd(withChecksum([0x1f, 0x05, this.s.seenProtocolType, 0x10]));
     }
 
-    return { weight, impedance };
+    if (holds) return reading;
+    // The held weigh-in again: acknowledged like every stable frame, and
+    // nothing new to hand over.
+    if (held !== null && complete) return null;
+    // A stored weigh-in the scale sends after the session settled on this one
+    // is never parsed (#463). The 18-byte scale answers our 0x22 within a
+    // second, so this is rare, and without the line it would be invisible.
+    if (
+      this.s.kind === 'va18' &&
+      this.s.storedQuerySentAtMs !== null &&
+      !this.s.queryAnswered &&
+      complete
+    ) {
+      bleLog.debug(
+        'QN: the weigh-in ends the session before the scale answered the stored-record ' +
+          'query; a stored weigh-in it sends after this is not read (#463)',
+      );
+    }
+    if (this.s.kind === 'va18' && complete) this.ledger.remember(weight);
+    return reading;
   }
 
   /**
@@ -1300,8 +1022,9 @@ export class QnScaleAdapter
    * weight. Both readings of the raw value are then candidates:
    *
    * - one that cannot be a body (0 or below, WEIGHT_CERTAIN_MAX_KG or above) is
-   *   ruled out, and if only one is left it is the weight. This is the ES-26M
-   *   case, whose 0x12 implies /10 and whose captured frames read 978.5 kg so;
+   *   ruled out, and if only one is left it is the weight. Until D068 this was
+   *   the ES-26M case: its long 0x12 was taken as /10, and its captured frames
+   *   read 978.5 kg so;
    * - if both are left, the configured users decide: the one candidate inside
    *   some user's `weight_range` or near their `last_known_weight` wins;
    * - if both fit or neither does, the frame is dropped with a warning.
@@ -1312,9 +1035,9 @@ export class QnScaleAdapter
    * The owner's decision is to drop rather than guess.
    */
   private resolveWeight(rawWeight: number): number | null {
-    const primary = rawWeight / this.weightScaleFactor;
+    const primary = rawWeight / this.s.weightScaleFactor;
     if (
-      this.scaleFactorKnown &&
+      this.s.kind !== 'unknown' &&
       primary > WEIGHT_CERTAIN_MIN_KG &&
       primary < WEIGHT_CERTAIN_MAX_KG
     ) {
@@ -1336,11 +1059,12 @@ export class QnScaleAdapter
     const fitting = candidates.filter(fitsSomeone);
     if (fitting.length === 1) return fitting[0];
 
-    if (!this.divisorDoubtWarned) {
-      this.divisorDoubtWarned = true;
-      const why = this.scaleFactorKnown
-        ? `the divisor its scale-info frame (0x12) named gives ${primary} kg`
-        : 'its scale-info frame (0x12), which names the divisor, never arrived';
+    if (!this.s.divisorDoubtWarned) {
+      this.s.divisorDoubtWarned = true;
+      const why =
+        this.s.kind !== 'unknown'
+          ? `the divisor its scale-info frame (0x12) named gives ${primary} kg`
+          : 'its scale-info frame (0x12), which names the divisor, never arrived';
       bleLog.warn(
         `QN: dropping a weight that reads ${candidates[0]} kg or ${candidates[1]} kg: ${why}, ` +
           `and ${fitting.length === 0 ? 'neither fits' : 'both fit'} a configured user's ` +
@@ -1352,452 +1076,135 @@ export class QnScaleAdapter
   }
 
   /**
-   * Decode an extended-dialect completed-weigh-in result frame (#235).
+   * A 0x23 stored measurement record returned after the 0x22 history query,
+   * read in the VA layout on every dialect but the classic and the 19-byte one.
+   * V10 Renpho / 18-byte ES-CS20M firmware delivers the weigh-in here, not
+   * reliably via live 0x10 frames (#213 / #75). Layout in decodeStoredRecord:
+   * R50 and R500 big-endian at [12..13] and [14..15], as the vendor SDK reads
+   * them (#461), not openScale's little-endian [13..14] and [15..16].
    *
-   * Accepts the consolidated 0xB4 (weight at [11]) or, as a fallback, the first
-   * multi-part 0xB1 03 01 record (weight at [5]). Returns a weight-only reading
-   * (impedance 0 — see RESULT_OPCODE_* for why the raw channels are not used
-   * yet), or null when the frame is not a recognised result frame, fails its
-   * trailing sum checksum, carries an out-of-range weight, or a reading was
-   * already emitted this session.
+   * A record from up to MAX_STORED_RECORD_AGE_SEC before the session, and not
+   * stamped more than STORED_FUTURE_TOLERANCE_MS after its receipt, is this
+   * session's weigh-in and ends it, without a time. An older one is the
+   * scale's memory: on the 18-byte dialect it can go out as history
+   * (eighteenByteStoredWeighIn, #463), elsewhere it is logged and not read.
    */
-  private parseExtendedResultFrame(data: Buffer): ScaleReading | null {
-    if (this.extendedResultEmitted) return null;
-
-    // Standard QN trailing checksum, verified against every captured 0xB4/0xB1
-    // frame; a cheap guard against a truncated or mis-framed notification being
-    // read as a weight.
-    if (!hasValidSumChecksum(data)) return null;
-
-    let rawWeight: number | null = null;
-    if (data[0] === RESULT_OPCODE_B1 && data.length >= 7 && data[2] === 0x03 && data[3] === 0x01) {
-      // Live sweep record.
-      rawWeight = data.readUInt16LE(5);
-    } else if (
-      data[0] === RESULT_OPCODE_B4 &&
-      data.length >= 13 &&
-      data[2] === 0x04 &&
-      data[3] === 0x01
-    ) {
-      // History record: usable only when it was written DURING this session.
-      //
-      // Deliberately stricter than the 0x23 stored-record window, which accepts
-      // a record from the minute or so before the connect. These scales keep
-      // advertising for a while after a weigh-in, so a proxy transport
-      // reconnects seconds later and finds the just-finished measurement still
-      // sitting in history; a backward-looking window would republish it as a
-      // second weigh-in. A record stamped after the session opened can only be
-      // the one being taken now. The tolerance absorbs the offset between the
-      // scale's clock and ours, which the 0x20 time sync sets each session.
-      const recordSeconds = data.readUInt32LE(7);
-      const sessionSeconds =
-        this.sessionStartedScaleSeconds ?? Math.floor(Date.now() / 1000) - SCALE_EPOCH_OFFSET;
-      if (recordSeconds + RESULT_RECORD_CLOCK_TOLERANCE_SEC < sessionSeconds) {
-        bleLog.debug(
-          `QN: ignoring 0xB4 history record (${data.readUInt16LE(11) / 100}kg, written ` +
-            `${sessionSeconds - recordSeconds}s before this session began); ` +
-            'waiting for the live 0xB1 #235',
-        );
-        return null;
-      }
-      rawWeight = data.readUInt16LE(11);
-    }
-    if (rawWeight === null) return null;
-
-    const weight = rawWeight / 100;
-    if (weight <= RESULT_MIN_WEIGHT_KG || weight >= RESULT_MAX_WEIGHT_KG) return null;
-
-    this.extendedResultEmitted = true;
-    bleLog.debug(
-      `QN: extended result 0x${data[0].toString(16)} decoded ${weight}kg ` +
-        '(impedance sweep not yet calibrated, emitting weight-only) #235',
-    );
-    return { weight, impedance: 0 };
-  }
-
-  /**
-   * One 20-byte 0x10 frame of the 19-byte dialect (#331, D037); layout at
-   * LIVE20_FRAME_LEN. The stable weight comes back provisional, so the session
-   * holds the link through the scale's BIA (isFinal, completionHoldMs). The
-   * result block's three parts are kept for 0x16.
-   *
-   * Writes nothing. The one log of a complete weigh-in got there without a
-   * 0x1F or an A2 echo, and nobody has seen what the vendor app answers here.
-   */
-  private parseNineteenByteLiveFrame(data: Buffer): ScaleReading | null {
-    if (!hasValidSumChecksum(data)) {
-      bleLog.debug('QN: 20-byte frame with a bad checksum dropped (#331)');
-      return null;
-    }
-    this.live20Seen = true;
-
-    const total = data[4] >> 4;
-    const index = data[4] & 0x0f;
-    if (total === 0 || index === 0 || index > total) {
+  storedRecord(data: Buffer): ScaleReading | null {
+    const record = data.length < 17 ? null : decodeStoredRecord(data);
+    if (!record) {
       bleLog.debug(
-        `QN: 20-byte frame with part byte 0x${data[4].toString(16).padStart(2, '0')} dropped (#331)`,
+        `QN: 0x23 too short for a stored record (${data.length} bytes): [${hex(data)}] (#463)`,
       );
+      this.scheduleStoredDataRetry();
       return null;
     }
-    // A continuation part's [2..3] is payload, so the checks below are for the
-    // first part only.
-    if (index > 1) {
-      if (total === 3 && this.live20Block.length === index - 1) {
-        this.live20Block.push(Buffer.from(data));
-      } else {
-        this.live20Block = [];
-      }
-      bleLog.debug(`QN: 20-byte result part ${index}/${total} (#331)`);
-      return null;
-    }
-
-    // [2] is the scale's user slot (per the vendor's published SDK), not a
-    // unit: the weight is kg x100 whatever it says. Every slot's weight is
-    // read; only the slot this session's profile went to can have the scale's
-    // own body composition used (computeMetrics).
-    const slot = data[2];
-    const status = data[3];
-    const weight = data.readUInt16BE(5) / 100;
-    if (!this.twentyByteFrameLogged) {
-      this.twentyByteFrameLogged = true;
-      bleLog.debug(
-        `QN: 20-byte live frame, weight ${weight} kg at [5..6], user slot ${slot}, ` +
-          `status 0x${status.toString(16).padStart(2, '0')} (19-byte dialect, #331)`,
-      );
-    }
-    if (status === LIVE20_STATUS_MEASURING || status === LIVE20_STATUS_STABLE) {
-      this.live20Measured = true;
-      if (this.visitReply?.ok === true) this.measuredAfterVisit = true;
-    }
-    if (status === LIVE20_STATUS_MEASURING) return null;
-    if (status !== LIVE20_STATUS_STABLE && status !== LIVE20_STATUS_RESULT) {
-      bleLog.debug(`QN: 20-byte frame with unknown status 0x${status.toString(16)} dropped (#331)`);
-      return null;
-    }
+    const { weight, recordSeconds } = record;
+    const sessionSeconds =
+      this.s.sessionStartedScaleSeconds ?? Math.floor(Date.now() / 1000) - SCALE_EPOCH_OFFSET;
     if (weight <= RESULT_MIN_WEIGHT_KG || weight >= RESULT_MAX_WEIGHT_KG) {
-      bleLog.debug(`QN: 20-byte stable weight ${weight} kg out of range, dropped (#331)`);
+      this.logUnreadStoredRecord(data, record, sessionSeconds, 'out of range');
+      this.scheduleStoredDataRetry();
       return null;
     }
-
-    // A result block with no measurement before it in this session is a
-    // weigh-in the scale finished before we connected. When it repeats a
-    // result already published, it is that weigh-in handed over again after a
-    // reconnect, not a second one (#331).
-    if (status === LIVE20_STATUS_RESULT && !this.live20Measured && this.live20Weight === null) {
-      const repeated = this.recentLiveResults.find(
-        (r) =>
-          Math.abs(r.weight - weight) <= LIVE_MATCH_WEIGHT_KG &&
-          Date.now() - r.atMs <= LIVE_REPLAY_WINDOW_MS,
-      );
-      if (repeated) {
-        this.live20Replayed = true;
-        bleLog.debug(
-          `QN: result block of ${weight} kg came with no measurement in this session and ` +
-            `repeats the one reported at ${new Date(repeated.atMs).toISOString()}, dropped (#331)`,
-        );
-        return null;
-      }
-    }
-    if (status === LIVE20_STATUS_RESULT) {
-      this.live20Block = total === 3 ? [Buffer.from(data)] : [];
-    }
-
-    // The result block's first part (status 0x02) repeats the weight. Returning
-    // it too keeps the hold armed if the single stable frame was lost on a proxy
-    // link; once armed, a second held reading does not move the window.
-    this.live20Weight = weight;
-    this.replaceHeldStoredWeighIn(`the weigh-in in progress (${weight} kg)`);
-    const reading: ScaleReading = { weight, impedance: 0 };
-    this.provisionalReadings.add(reading);
-    bleLog.debug(
-      `QN: 20-byte stable weight ${weight} kg, holding for the result frames; ` +
-        'stay on the scale until its display shows the results (#331)',
-    );
-    return reading;
-  }
-
-  /**
-   * 0x15/0x16 after the 19-byte dialect's stream (#331, D037). 0x15 is kept;
-   * 0x16 is the last frame of the weigh-in, so it is what publishes the held
-   * weight, with the scale's own results pinned to it (computeMetrics decides
-   * whether they are used). The reading is a new object and therefore final.
-   */
-  private parseNineteenByteResultFrame(data: Buffer): ScaleReading | null {
-    if (!hasValidSumChecksum(data)) {
-      bleLog.debug(`QN: 0x${data[0].toString(16)} frame with a bad checksum dropped (#331)`);
-      return null;
-    }
-    if (data[0] === RESULT16_OPCODE_COMPOSITION) {
-      this.live20C15 = Buffer.from(data);
-      return null;
-    }
-    this.live20ResultSeen = true;
-    if (this.live20Weight === null) {
+    // A record stamped after it arrived was not measured in this session: the
+    // scale's clock is ahead (a vendor app that set it with a UTC+8 base,
+    // R-6), and taking it as this session's weigh-in would end the session
+    // on an old weight without a time, before the real one. The 19-byte
+    // dialect drops the same (parseEightStoredPart). The re-query stays. In a
+    // session without a 0x12 too: two classic scales in the reports lose
+    // theirs (#283, #336), and a classic record read through the long layout
+    // can land in the future (D068).
+    const recordAtMs = (recordSeconds + SCALE_EPOCH_OFFSET) * 1000;
+    const aheadMs = recordAtMs - Date.now();
+    if (aheadMs > STORED_FUTURE_TOLERANCE_MS) {
+      const at = new Date(recordAtMs).toISOString();
+      const ahead = Math.round(aheadMs / 1000);
       bleLog.debug(
-        this.live20Replayed
-          ? 'QN: 0x16 closes a repeated result block, nothing published (#331)'
-          : 'QN: 0x16 closes a 19-byte weigh-in that sent no stable weight (#331)',
+        this.s.kind !== 'unknown'
+          ? `QN: stored weigh-in ${weight} kg at ${at}, ${storedSlotLabel(data[5])}, is stamped ` +
+              `${ahead} s ahead of this host's clock, so it is not the weigh-in of this ` +
+              'session, not read (#463)'
+          : `QN: 0x23 in a session without a scale-info frame, not read: [${hex(data)}]; ` +
+              `read as the VA layout it is ${weight} kg at ${at}, ${ahead} s ahead of this ` +
+              "host's clock (#463)",
       );
+      this.scheduleStoredDataRetry();
       return null;
     }
-    bleLog.debug(`QN: 0x16 closes the 19-byte weigh-in, publishing ${this.live20Weight} kg (#331)`);
-    this.recentLiveResults.push({ weight: this.live20Weight, atMs: Date.now() });
-    if (this.recentLiveResults.length > RECENT_LIVE_RESULTS) this.recentLiveResults.shift();
-    const reading: ScaleReading = { weight: this.live20Weight, impedance: 0 };
-    this.pinScaleComposition(reading, data);
-    return reading;
+    if (recordSeconds + MAX_STORED_RECORD_AGE_SEC < sessionSeconds) {
+      // The re-query stays: V10 firmware may save the fresh weigh-in only a
+      // moment after handing over an old one (#213 / #75).
+      this.scheduleStoredDataRetry();
+      if (this.s.kind === 'va18') return va18.eighteenByteStoredWeighIn(this, data, record);
+      this.logUnreadStoredRecord(data, record, sessionSeconds, 'old');
+      return null;
+    }
+    // This session's weigh-in is the one held; see recentStoredDuringHold.
+    if (this.s.heldForStoredAnswer !== null) return va18.recentStoredDuringHold(this, data, record);
+    const r1 = record.r50;
+    const r2 = record.r500;
+    if (this.s.storedRetryTimer) {
+      clearTimeout(this.s.storedRetryTimer);
+      this.s.storedRetryTimer = null;
+    }
+    bleLog.debug(`QN: stored 0x23 reading ${weight}kg, R50 ${r1} / R500 ${r2}`);
+    const fresh: ScaleReading = { weight, impedance: this.resistance(r1 > 0 ? r1 : r2) };
+    // This session's weigh-in, so a later session that is handed the same
+    // record as history knows it went out already (#463).
+    if (this.s.kind === 'va18' && this.isComplete(fresh)) this.ledger.remember(weight);
+    return fresh;
   }
 
   /**
-   * Pin the scale's own results for this weigh-in to its reading, when the
-   * result block, 0x15 and 0x16 all decode and the block carries a
-   * measurement: the scale sends an all-zero block when it has none (#331).
-   * Snapshot at emit time, see ReadingComposition.
-   */
-  private pinScaleComposition(reading: ScaleReading, d16: Buffer): void {
-    const [p1, p2, p3] = this.live20Block;
-    const result =
-      this.live20Block.length === 3
-        ? decodeEightResult(p1, p2, p3, this.resistanceScrambled)
-        : null;
-    const composition = this.live20C15 ? decodeVaComposition(this.live20C15, d16) : null;
-    if (!result || !composition) {
-      bleLog.debug('QN: no complete result block for this weigh-in (#331)');
-      return;
-    }
-    const measured =
-      result.fatPercent > 0 && [...result.original, ...result.adjusted].some((v) => v > 0);
-    if (!measured) {
-      bleLog.info('QN: the scale sent no body composition for this weigh-in (#331)');
-      return;
-    }
-    bleLog.info('QN: the scale sent its own body composition for this weigh-in (#331)');
-    const channels = (values: number[]): string =>
-      EIGHT_CHANNEL_ORDER.map((name, i) => `${name} ${values[i]}`).join(', ');
-    bleLog.debug(
-      `QN: result block, user slot ${result.slot}, ${result.weight} kg, body fat ` +
-        `${result.fatPercent} %; measured Ohm: ${channels(result.original)}; ` +
-        `corrected Ohm: ${channels(result.adjusted)} (#331)`,
-    );
-    bleLog.debug(
-      `QN: 0x15/0x16: ${Object.entries(composition)
-        .map(([k, v]) => `${k} ${v}`)
-        .join(', ')} (#331)`,
-    );
-    this.scaleComposition.pin(reading, {
-      result,
-      composition,
-      visit: this.visitSent,
-      reply: this.visitReply,
-      valueType: this.readyValueType,
-      measuredAfterVisit: this.measuredAfterVisit,
-      a4PreludeSent: this.a4PreludeSent,
-    });
-  }
-
-  /**
-   * Why the scale's own composition pinned to a reading does not belong to the
-   * user it was matched to, or null when it does (#331).
+   * Say why a 0x23 outside the 19-byte dialect is not read (#463). The record
+   * used to vanish without a line, and a frame that arrives after the session
+   * settled is not even in the DEBUG log, so nothing showed that a weigh-in the
+   * scale kept had been handed over at all.
    *
-   * The scale computes it for the profile in the visit frame we sent (age,
-   * height in mm, sex; its BMI in 0x15 fits the height we sent, not the app's),
-   * and for nothing else we can check. So it is used only when the scale
-   * accepted that profile and measured after accepting it, the weigh-in is on
-   * that slot, the matched user has exactly that profile, and the scale's BMI
-   * fits the height to within its 0.1 rounding: one centimetre already moves
-   * it by more than that. A session that sent the `qn_a4_prelude` frames
-   * overwrote the slot's stored segment values with someone else's, which the
-   * scale corrects its channels with, so it is never used there.
+   * Only the long-frame dialects get the record's values: the VA layout is
+   * known there. A session without a 0x12 does not know its dialect, so its
+   * line gives the VA reading as one possibility. A classic session never gets
+   * here: its 0x23 is logged and dropped before it is decoded (D068).
    */
-  private scaleCompositionRejection(pin: ScaleCompositionPin, profile: UserProfile): string | null {
-    const { visit, reply, result, composition } = pin;
-    if (!visit) return 'this session sent the scale no profile of a configured user';
-    if (!reply) return 'the scale did not answer the profile frame';
-    if (!reply.ok || reply.slot !== visit.slot) return 'the scale did not accept the profile';
-    if (!pin.measuredAfterVisit) return 'the scale measured before it accepted the profile';
-    if (pin.a4PreludeSent) {
-      return "ble.qn_a4_prelude overwrote the scale's segment values in this session";
-    }
-    if (result.slot !== visit.slot) return 'the weigh-in is on another user slot of the scale';
-    if (pin.valueType !== 1) return 'the scale did not report its results as percentages';
-    const expected = buildUserProfileFrame(profile.age, profile.height, profile.gender);
-    if (expected.slice(6, 10).some((b, i) => b !== visit.frame[6 + i])) {
-      return "the matched user's age, height or sex is not the profile sent to the scale";
-    }
-    const heightM = ((visit.frame[8] << 8) | visit.frame[9]) / 1000;
-    if (Math.abs(composition.bmi - result.weight / (heightM * heightM)) > BMI_MATCH_TOLERANCE) {
-      return "the scale's BMI does not fit the height sent to it";
-    }
-    return null;
-  }
-
-  /**
-   * One 0x23 part of an 8-electrode stored record on the 19-byte dialect
-   * (#331, layout at STORED_OPCODE_COMPOSITION). Parts are collected until
-   * 0x25 completes the record; nothing is ever re-queried.
-   */
-  private parseEightStoredPart(data: Buffer): null {
-    if (data.length !== LIVE20_FRAME_LEN || !hasValidSumChecksum(data)) {
-      bleLog.debug(`QN: 0x23 that is not a stored-record part dropped: [${hex(data)}] (#331)`);
-      return null;
-    }
-    if (data[4] === 0) {
-      bleLog.debug('QN: 0x23 with no parts: the scale holds no stored weigh-ins (#331)');
-      return null;
-    }
-    const total = data[4] >> 4;
-    const index = data[4] & 0x0f;
-    if (total !== 3 || index === 0 || index > total) {
-      this.storedParts = [];
-      bleLog.debug(`QN: 0x23 not read as a stored-record part: [${hex(data)}] (#331)`);
-      return null;
-    }
-    if (index === 1) {
-      if (this.storedParts.length > 0) {
-        bleLog.debug('QN: stored record left incomplete by the next one, dropped (#331)');
-      }
-      this.storedParts = [Buffer.from(data)];
-      return null;
-    }
-    if (this.storedParts.length !== index - 1) {
-      bleLog.debug(`QN: stored-record part ${index}/3 out of order, record dropped (#331)`);
-      this.storedParts = [];
-      return null;
-    }
-    this.storedParts.push(Buffer.from(data));
-    return null;
-  }
-
-  /** 0x24 or 0x25 of an 8-electrode stored record (#331); 0x25 completes it. */
-  private parseEightStoredTail(data: Buffer): ScaleReading | null {
-    const expected = data[0] === STORED_OPCODE_COMPOSITION ? 3 : 4;
-    if (this.storedParts.length !== expected) {
+  private logUnreadStoredRecord(
+    data: Buffer,
+    record: StoredRecord,
+    sessionSeconds: number,
+    why: 'out of range' | 'old',
+  ): void {
+    const bytes = hex(data);
+    const at = new Date((record.recordSeconds + SCALE_EPOCH_OFFSET) * 1000).toISOString();
+    const age = sessionSeconds - record.recordSeconds;
+    if (this.s.kind === 'unknown') {
       bleLog.debug(
-        `QN: 0x${data[0].toString(16)} without the stored-record frames before it, dropped (#331)`,
+        `QN: 0x23 in a session without a scale-info frame, not read: [${bytes}]; read as the ` +
+          `VA layout it is ${record.weight} kg at ${at}, ` +
+          (why === 'old' ? `${age} s before the session` : 'out of range') +
+          ' (#463)',
       );
-      this.storedParts = [];
-      return null;
+      return;
     }
-    this.storedParts.push(Buffer.from(data));
-    if (data[0] === STORED_OPCODE_COMPOSITION) return null;
-    const [s1, s2, s3, s24, s25] = this.storedParts;
-    this.storedParts = [];
-    return this.storedWeighIn(s1, s2, s3, s24, s25);
-  }
-
-  /**
-   * A complete stored record as a reading with the time the scale took it
-   * (#331). Its weight only: which profile the scale computed the record's
-   * body composition with is not in it. A fresh record is provisional, so a
-   * live result of the same session replaces it; an older one is history, which
-   * the session keeps apart and the runtime sends only to exporters that can
-   * record a past measurement.
-   */
-  private storedWeighIn(
-    s1: Buffer,
-    s2: Buffer,
-    s3: Buffer,
-    s24: Buffer,
-    s25: Buffer,
-  ): ScaleReading | null {
-    const rec = decodeEightStoredRecord(s1, s2, s3, s24, s25, this.resistanceScrambled);
-    if (!rec) {
-      const frames = [s1, s2, s3, s24, s25].map((f) => hex(f)).join(' | ');
-      bleLog.debug(`QN: stored record did not decode, dropped: [${frames}] (#331)`);
-      return null;
-    }
-    const atMs = (rec.recordSeconds + SCALE_EPOCH_OFFSET) * 1000;
-    const what = `${rec.weight} kg at ${new Date(atMs).toISOString()}`;
-    if (rec.slot === STORED_UNASSIGNED_SLOT) {
-      bleLog.info(
-        `QN: a stored weigh-in (${what}) is not exported: the scale did not assign it to ` +
-          'a user (#331)',
-      );
-      return null;
-    }
-    const now = Date.now();
-    if (atMs > now + STORED_FUTURE_TOLERANCE_MS || now - atMs > STORED_MAX_AGE_MS) {
-      bleLog.debug(`QN: stored weigh-in ${what} is not from the past year, dropped (#331)`);
-      return null;
-    }
-    if (rec.weight <= RESULT_MIN_WEIGHT_KG || rec.weight >= RESULT_MAX_WEIGHT_KG) {
-      bleLog.debug(`QN: stored weigh-in ${what} is out of range, dropped (#331)`);
-      return null;
-    }
-    if (
-      rec.recordSeconds <= this.storedMarkAtSessionStart ||
-      this.storedEmitted.has(rec.recordSeconds)
-    ) {
-      bleLog.debug(`QN: stored weigh-in ${what} was already reported (#331)`);
-      return null;
-    }
-    const live = this.recentLiveResults.find(
-      (r) =>
-        Math.abs(r.weight - rec.weight) <= LIVE_MATCH_WEIGHT_KG &&
-        atMs >= r.atMs - LIVE_MATCH_BEFORE_MS &&
-        atMs <= r.atMs + LIVE_MATCH_AFTER_MS,
-    );
-    if (live) {
+    if (why === 'out of range') {
       bleLog.debug(
-        `QN: stored weigh-in ${what} is the live result reported at ` +
-          `${new Date(live.atMs).toISOString()}, dropped (#331)`,
+        data[3] === 0
+          ? 'QN: 0x23 says the scale holds no stored weigh-ins (#463)'
+          : `QN: stored 0x23 weight ${record.weight} kg is out of range, not read (#463)`,
       );
-      return null;
-    }
-
-    const reading: ScaleReading = { weight: rec.weight, impedance: 0, timestamp: new Date(atMs) };
-    const historical = isHistoricalReading(reading, now);
-    if (this.live20Weight !== null && !historical) {
-      bleLog.info(
-        `QN: a stored weigh-in (${what}) is superseded by the weigh-in in progress, ` +
-          'not exported (#331)',
-      );
-      return null;
-    }
-    this.storedMark = Math.max(this.storedMark, rec.recordSeconds);
-    this.storedEmitted.add(rec.recordSeconds);
-    this.provisionalReadings.add(reading);
-    if (!historical) {
-      this.storedHoldArmed = true;
-      this.replaceHeldStoredWeighIn(`a later stored weigh-in (${what})`);
-      this.heldStoredWeighIn = what;
+      return;
     }
     bleLog.debug(
-      `QN: stored weigh-in ${what}, user slot ${rec.slot}, ` +
-        (historical ? 'reported as history' : 'held: a live result in this session replaces it') +
-        ' (#331)',
+      `QN: stored weigh-in ${record.weight} kg at ${at}, ${storedSlotLabel(data[5])}, is ${age} s ` +
+        `older than this session (window ${MAX_STORED_RECORD_AGE_SEC} s), not read (#213 / #75)`,
     );
-    return reading;
   }
 
-  /**
-   * The session hold keeps one reading, so a fresh stored weigh-in held there
-   * is gone once `by` takes its place, and it is already counted in the mark.
-   * Said at info with its weight and time, so it can be entered by hand (#331).
-   */
-  private replaceHeldStoredWeighIn(by: string): void {
-    if (this.heldStoredWeighIn === null) return;
-    bleLog.info(
-      `QN: a stored weigh-in (${this.heldStoredWeighIn}) is replaced by ${by}, ` +
-        'not exported (#331)',
-    );
-    this.heldStoredWeighIn = null;
-  }
-
-  /** The newest stored weigh-in reported, in scale-epoch seconds (#331). */
+  /** See QnLedger. */
   dedupMark(): number | undefined {
-    return this.storedMark || undefined;
+    return this.ledger.dedupMark();
   }
 
-  /**
-   * Take back the mark of an earlier process. Raises only, and ignores anything
-   * that is not a whole number of seconds up to a day past now on the scale's
-   * clock: the file can be edited by hand.
-   */
   restoreDedupMark(mark: number): void {
-    const limit = Math.floor(Date.now() / 1000) - SCALE_EPOCH_OFFSET + 86_400;
-    if (!Number.isInteger(mark) || mark <= 0 || mark > limit) return;
-    if (mark > this.storedMark) this.storedMark = mark;
+    this.ledger.restoreDedupMark(mark);
   }
 
   // ── State machine handlers (fire-and-forget from parseNotification) ─────
@@ -1812,16 +1219,15 @@ export class QnScaleAdapter
    * AE01/AE02 writes fail silently on older firmware without AE00 service.
    */
   private async handleScaleInfo(): Promise<void> {
-    if (this.configSent) return;
-    this.configSent = true;
+    if (this.s.configSent) return;
+    this.s.configSent = true;
 
     // Cancel the fallback timer since the state machine is running normally
-    if (this.fallbackTimer) {
-      clearTimeout(this.fallbackTimer);
-      this.fallbackTimer = null;
+    if (this.s.fallbackTimer) {
+      clearTimeout(this.s.fallbackTimer);
+      this.s.fallbackTimer = null;
     }
 
-    const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
     // See sessionGeneration: every await below can outlive this session.
     const gen = this.sessionGeneration;
 
@@ -1838,8 +1244,10 @@ export class QnScaleAdapter
 
     // Step 3: 0x13 config. See buildConfig for the 9 vs 10 byte forms and why
     // the longer one is opt-in.
-    await this.writeCmd(buildConfig(this.seenProtocolType, this.unitFlag(), this.configLong));
-    if (this.configLong) {
+    await this.writeCmd(
+      buildConfig(this.s.seenProtocolType, this.unitFlag(), this.opts.configLong),
+    );
+    if (this.opts.configLong) {
       bleLog.debug(
         'QN: 0x13 config sent in the 10-byte vendor-app form ' +
           '(ble.qn_config_long, trailing pair undecoded, #331)',
@@ -1849,22 +1257,25 @@ export class QnScaleAdapter
 
   /**
    * Respond to 0x14 (ready) with 0x20 time sync + A2 user profile + AE01 auth.
-   * No A2 under the vendor-app profile sequence (see appProfileSequence).
+   * No A2 under the vendor-app profile sequence (see appProfileSequence), nor
+   * while the frames for a user slot are held (holdsSlotFrames), which also
+   * leaves the sequence undecided.
    */
   private async handleReady(): Promise<void> {
-    if (this.timeSyncSent) return;
-    this.timeSyncSent = true;
+    if (this.s.timeSyncSent) return;
+    this.s.timeSyncSent = true;
     const gen = this.sessionGeneration;
-    const appProfile = this.decideAppProfileSequence();
+    const held = this.holdsSlotFrames();
+    const appProfile = !held && this.decideAppProfileSequence();
     // 0x20 time sync: seconds since 2000-01-01, little-endian. See
     // TIME_SYNC_TRAILER for the 9-byte form and why it is opt-in. Its extra
     // byte is the host's UTC offset now, daylight saving included.
     const secs = Math.floor(Date.now() / 1000) - SCALE_EPOCH_OFFSET;
     const offsetMin = -new Date().getTimezoneOffset();
     const tz = timeZoneByte(offsetMin);
-    await this.writeCmd(buildTimeSync(this.seenProtocolType, secs, this.timeSyncLong, tz));
+    await this.writeCmd(buildTimeSync(this.s.seenProtocolType, secs, this.opts.timeSyncLong, tz));
     if (gen !== this.sessionGeneration) return;
-    if (this.timeSyncLong) {
+    if (this.opts.timeSyncLong) {
       bleLog.debug(
         `QN: 0x20 time sync sent in the 9-byte vendor-app form with UTC offset ` +
           `${offsetMin >= 0 ? '+' : '-'}${Math.abs(offsetMin)} min ` +
@@ -1872,46 +1283,35 @@ export class QnScaleAdapter
       );
     }
 
-    // A2, which openScale labels a user profile and fills with 0x32 plus the
-    // user's age. The GE CS 10 G capture shows the vendor app using this exact
-    // frame to carry a WEIGHT, so under that reading `0x32 <age>` decodes as a
-    // weight nobody has: @chriba2567's log writes `a2 06 01 32 3a 15`, which is
-    // 128.58 kg, and his scale then goes silent right after START (#331, #75).
-    //
-    // Not changed by default. openScale's bytes are what every QN scale in the
-    // registry reads with today, and two silent units are not enough to move a
-    // default under the whole family. `ble.qn_weight_ack` swaps in the
-    // configured anchor for the reporters who can actually test it.
-    // With the vendor-app profile sequence (the 19-byte dialect with
-    // `ble.qn_weight_ack`, or the 18- and 19-byte ones with `ble.qn_user_key`)
-    // the frame is not sent at all: neither the Arboleaf nor the Feelfit app
-    // sends an A2 before START, and per the vendor's published SDK this frame
-    // sets the slot's identify weight, which `0x32 <age>` puts at over 128 kg
-    // (#331, D033, #463).
+    // A2, which openScale fills with 0x32 plus the user's age as a "user
+    // profile". Per the vendor's SDK it sets the slot's identify weight, and
+    // `0x32 <age>` puts that at over 128 kg (#331, #75). Kept by default: every
+    // QN scale in the registry reads with it today. Not sent at all under the
+    // vendor-app profile sequence: neither the Arboleaf nor the Feelfit app
+    // sends an A2 before START (D033, #463), and the CS10G app sends none at
+    // ready time (#501). On the extended dialect that drops the ready-time
+    // anchor of `ble.qn_weight_ack` too; its anchor pair follows START. Nor
+    // before a 0x12 with ble.qn_user_slot on another slot: this A2 is for
+    // slot 1 (holdsSlotFrames, #501).
     if (appProfile) {
       bleLog.debug(
-        this.forcedUserKey === null
+        this.opts.userKey === null
           ? 'QN: no A2 before START on the 19-byte dialect, as the vendor app ' +
               '(ble.qn_weight_ack, #331)'
           : `QN: no A2 before START on the ${this.dialectBytes()}-byte dialect, as the ` +
               'vendor app (ble.qn_user_key, #463)',
       );
-    } else if (this.ctx) {
+    } else if (this.ctx && !held) {
       // The anchor goes here ONLY on the 20-byte extended dialect. Everywhere
       // else `handleConfigRequest` sends it twice right after START instead,
       // which is where both Android captures of the Arboleaf app put it (#331,
       // #75), and sending it in both places would mean one switch moves two
       // things and the reporter's experiment stops being readable.
-      const anchorAtReady = this.forcedWeightAck === true && this.isExtendedLongFrame;
+      const anchorAtReady = this.opts.weightAck === true && this.s.kind === 'ext20';
       const anchorKg = anchorAtReady ? this.resolveAnchorKg() : 0;
       const profileCmd = anchorAtReady
         ? buildMeasurementTrigger(anchorKg)
-        : (() => {
-            const age = Math.min(0xff, Math.max(1, this.ctx!.profile.age));
-            const cmd = [0xa2, 0x06, 0x01, 0x32, age, 0x00];
-            cmd[5] = cmd.reduce((a, b) => a + b, 0) & 0xff;
-            return cmd;
-          })();
+        : buildOpenScaleA2(this.ctx!.profile.age);
       if (anchorAtReady) {
         bleLog.debug(
           `QN: ready-time A2 carries the configured weight anchor ` +
@@ -1926,12 +1326,20 @@ export class QnScaleAdapter
     await this.writeAe01([0x02, 0x70, 0x61, 0x73, 0x73]);
   }
 
-  /** Respond to 0x21 (config request) with the A00D profile frame + 0x22 start measurement. */
+  /**
+   * Respond to 0x21 (config request) with the A00D profile frame + 0x22 start
+   * measurement. Skipped whole while the frames for a user slot are held
+   * (holdsSlotFrames); left unsent, the step still runs on a 0x21 that comes
+   * after a 0x12 in the same session.
+   */
   private async handleConfigRequest(): Promise<void> {
-    if (this.historyResponseSent) return;
-    this.historyResponseSent = true;
+    if (this.s.historyResponseSent) return;
+    if (this.holdsSlotFrames()) {
+      bleLog.debug('QN: config request: not sending the profile frame until a 0x12 (#501)');
+      return;
+    }
+    this.s.historyResponseSent = true;
     const appProfile = this.decideAppProfileSequence();
-    const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
     // See sessionGeneration. The whole sequence spans several timers, and
     // writeCmd reads this.ctx at write time, so a session that ends and
     // reconnects inside it must not be handed this one's A00D, START, anchor,
@@ -1943,28 +1351,12 @@ export class QnScaleAdapter
     // when `ble.qn_report_byte` asks for it, with that byte as the slot mask;
     // see USER_DELETE_SUBCOMMAND (#461). The 200 ms that followed it stays, so
     // nothing else in the sequence moves in time.
-    if (this.forcedReportByte !== null) {
-      const deleteUsers = [
-        0xa0,
-        0x0d,
-        USER_DELETE_SUBCOMMAND,
-        this.forcedReportByte,
-        0x00,
-        0x00,
-        0x00,
-        0x00,
-        0x00,
-        0x00,
-        0x00,
-        0x00,
-        0x00,
-      ];
-      deleteUsers[12] = deleteUsers.reduce((a, b) => a + b, 0) & 0xff;
+    if (this.opts.reportByte !== null) {
       bleLog.debug(
         `QN: sending the A00D user-delete frame with mask ` +
-          `0x${this.forcedReportByte.toString(16).padStart(2, '0')} (ble.qn_report_byte, #461)`,
+          `0x${this.opts.reportByte.toString(16).padStart(2, '0')} (ble.qn_report_byte, #461)`,
       );
-      await this.writeCmd(deleteUsers);
+      await this.writeCmd(buildUserDelete(this.opts.reportByte));
     } else {
       bleLog.debug('QN: A00D user-delete frame not sent (ble.qn_report_byte unset, #461)');
     }
@@ -1976,81 +1368,98 @@ export class QnScaleAdapter
     // age 33, 1720 mm) everywhere except the vendor-app profile sequence, which
     // gets the first user's age, height and sex the way the vendor apps send
     // them: the 19-byte dialect with `ble.qn_weight_ack` (#331, D033), and the
-    // 18- and 19-byte ones with `ble.qn_user_key`, which also sets the user key
-    // at [4..5] (#463, D055). The athlete step in [10] is the Feelfit app's on
-    // the 18-byte dialect only; see VISIT_ALGORITHM.
-    let msg2 = [0xa0, 0x0d, 0x02, 0x01, 0x00, 0x08, 0x00, 0x21, 0x06, 0xb8, 0x04, 0x02, 0x00];
-    msg2[12] = msg2.reduce((a, b) => a + b, 0) & 0xff;
+    // 18-, 19- and 20-byte ones with `ble.qn_user_key`, which also sets the user
+    // key at [4..5] (#463, D055, #501). The athlete step in [10] is the Feelfit
+    // app's on the 18-byte dialect only; see VISIT_ALGORITHM.
+    let msg2 = withChecksum([
+      0xa0, 0x0d, 0x02, 0x01, 0x00, 0x08, 0x00, 0x21, 0x06, 0xb8, 0x04, 0x02,
+    ]);
     const profile = this.ctx?.profile;
     if (appProfile && profile) {
-      const key = this.forcedUserKey ?? VENDOR_APP_USER_KEY;
+      const key = this.opts.userKey ?? VENDOR_APP_USER_KEY;
       const athlete =
-        this.isEighteenByteInfo && profile.isAthlete && profile.age >= VISIT_ATHLETE_MIN_AGE;
-      msg2 = buildUserProfileFrame(profile.age, profile.height, profile.gender, { key, athlete });
-      this.visitSent = { slot: msg2[3], frame: msg2 };
+        this.s.kind === 'va18' && profile.isAthlete && profile.age >= VISIT_ATHLETE_MIN_AGE;
+      const slot = this.configuredSlot() ?? 1;
+      msg2 = buildUserProfileFrame(profile.age, profile.height, profile.gender, {
+        slot,
+        key,
+        athlete,
+      });
+      this.s.visitSent = { slot: msg2[3], frame: msg2 };
       const sent =
         `age ${msg2[7]}, height ${(msg2[8] << 8) | msg2[9]} mm, ` +
         `sex ${msg2[6] === 0x01 ? 'female' : 'male'}`;
+      // The slot is named only with ble.qn_user_slot, so a slot-1 line reads
+      // as it always has.
+      const slotPart = this.configuredSlot() === null ? '' : `user slot ${slot}, `;
       bleLog.debug(
-        this.forcedUserKey === null
+        this.opts.userKey === null
           ? `QN: A00D profile frame with ${sent} (ble.qn_weight_ack, 19-byte dialect, #331)`
-          : `QN: A00D profile frame with key ${key}, ${sent}, athlete ${athlete ? 'yes' : 'no'} ` +
-              `(ble.qn_user_key, ${this.dialectBytes()}-byte dialect, #463)`,
+          : `QN: A00D profile frame with key ${key}, ${slotPart}${sent}, athlete ` +
+              `${athlete ? 'yes' : 'no'} (ble.qn_user_key, ${this.dialectBytes()}-byte dialect, #463)`,
       );
-    } else if (!appProfile && this.forcedUserKey !== null && !this.wantsAppProfileSequence()) {
-      // An 18- or 19-byte 0x12 that came after the decision has its own line
-      // in parseNotification, so this one is only for a dialect without it.
+    } else if (!appProfile && this.opts.userKey !== null && !this.wantsAppProfileSequence()) {
+      // A 0x12 of 18 bytes or longer that came after the decision has its own
+      // line in onScaleInfo, so this one is only for a dialect without it.
       bleLog.debug(
         "QN: ble.qn_user_key is not used on this dialect, sending openScale's profile frame " +
-          '(18- and 19-byte scale-info frames only, #463)',
+          '(18-, 19- and 20-byte scale-info frames only, #463)',
       );
     }
     await this.writeCmd(msg2);
 
-    await wait(200);
-    if (!live()) return;
+    // The extended dialect's vendor sequence sends its START and anchor only
+    // once the scale has answered the profile frame, as the CS10G app does
+    // (#501) and the 18-byte dialect does with its 0x22 (D065). An answer that
+    // never comes holds them for VISIT_ANSWER_TIMEOUT_MS. Elsewhere, 200 ms.
+    if (appProfile && this.s.kind === 'ext20') {
+      const answered = await Promise.race([
+        this.s.visitAnswered.then(() => true),
+        wait(VISIT_ANSWER_TIMEOUT_MS).then(() => false),
+      ]);
+      if (!live()) return;
+      if (!answered) {
+        bleLog.debug(
+          `QN: no answer to the profile frame within ${VISIT_ANSWER_TIMEOUT_MS} ms, sending ` +
+            'START and the weight anchor anyway (ble.qn_user_key, #501)',
+        );
+      }
+    } else {
+      await wait(200);
+      if (!live()) return;
+    }
 
-    // 0x22 start measurement / stored-data query with echoed protocol type
-    await this.writeCmd(this.buildStoredDataQuery());
-    if (!live()) return;
+    // 0x22 start measurement / stored-data query with echoed protocol type.
+    // Its send time is what the scale's first answer is measured against. On
+    // the 18-byte dialect with ble.qn_user_key it may have gone out already,
+    // on the scale's acceptance of the profile (#463). The anchor and prelude
+    // below still go out when they did before, after it, also while a
+    // weigh-in is held for the answer.
+    if (this.s.storedQuerySentAtMs === null) {
+      this.s.storedQuerySentAtMs = Date.now();
+      await this.writeCmd(buildStoredDataQuery(this.s.seenProtocolType, this.writeSlot()));
+      if (!live()) return;
+    }
 
-    // Weight anchor, twice, right after START. Every dialect except the 20-byte
-    // extended one, which has its own hardware-confirmed burst further down,
-    // and only when `ble.qn_weight_ack` is explicitly true, so no install that
-    // does not ask for it sees a frame it did not see before.
-    //
-    // Two Android btsnoops of the Arboleaf app completing a weigh-in on the
-    // 19-byte es26m dialect, the same unit a month apart, agree (#331, #75):
-    //
-    //   APP    22 06 ff 00 03 2a    START
-    //   APP    a2 06 01 1c ed b2    75 ms later, 0x1ced = 7405 = 74.05 kg
-    //   SCALE  a3 04 01 a8          the scale's ack to that A2
-    //   APP    a2 06 01 1c ed b2    the same frame again, 71 ms after the first
-    //   SCALE  10 14 ...            the first live frame, 22 ms later
-    //
-    // Neither sends an A2 before START. The one transcript that has it there is
-    // an iOS one without timestamps whose order is in doubt (it labels the a3 a
-    // start ack, but every A2 gets an a3), and replaying that order, as this
-    // adapter did from v1.28.0, never produced a weight on either reporter's
-    // unit.
-    //
-    // POST_START_ANCHOR_DELAY_MS is the capture's 75 ms. The gap between the
-    // copies is TRIGGER_GAP_MS rather than the capture's 71 ms, see there. Sent
-    // twice unconditionally rather than on the a3, which a proxy transport may
-    // deliver late or not at all.
-    //
-    // The burst spans two timers, so like the rest of this sequence it is bound
-    // to the session that started it (`live()`).
-    if (this.forcedWeightAck === true && !this.isExtendedLongFrame) {
+    // Weight anchor, twice, right after START, where two Android btsnoops of the
+    // Arboleaf app completing a weigh-in put it (#331, #75; PROTOCOLS.md,
+    // "Arboleaf 19 B: A2 dvakrat po START"); replaying an iOS transcript that
+    // had it before START never produced a weight. Every dialect but the
+    // extended one, which has its own burst below, and only with
+    // `ble.qn_weight_ack` true, so no other install sees a new frame.
+    // POST_START_ANCHOR_DELAY_MS is the capture's 75 ms, the second copy follows
+    // after TRIGGER_GAP_MS, unconditionally rather than on the a3, which a proxy
+    // transport may deliver late or not at all. Bound to the session (`live()`).
+    if (this.opts.weightAck === true && this.s.kind !== 'ext20') {
       const anchorKg = this.resolveAnchorKg();
-      const anchor = buildMeasurementTrigger(anchorKg);
+      const anchor = buildMeasurementTrigger(anchorKg, this.writeSlot());
       for (let i = 0; i < TRIGGER_REPEATS; i++) {
         await wait(i === 0 ? POST_START_ANCHOR_DELAY_MS : TRIGGER_GAP_MS);
         if (!live()) return;
         await this.writeCmd([...anchor]);
       }
       bleLog.debug(
-        `QN: weight anchor ${anchorKg.toFixed(2)} kg sent twice after START ` +
+        `QN: weight anchor ${anchorKg.toFixed(2)} kg sent twice after START${this.slotNote()} ` +
           `(ble.qn_weight_ack, sequence from the #331/#75 Android captures)`,
       );
     }
@@ -2058,8 +1467,16 @@ export class QnScaleAdapter
     // Opt-in only. See A4_PRELUDE for why these bytes are a replay rather than
     // something built from this user's profile, and why that keeps it off by
     // default.
-    if (this.a4PreludeEnabled) {
-      this.a4PreludeSent = true;
+    // Not with ble.qn_user_slot on another slot: the replayed frames write
+    // slot 1 (`a4 0f 01 ..`), and with the option nothing goes there (#501).
+    const preludeSlot = this.configuredSlot();
+    if (this.opts.a4Prelude && preludeSlot !== null && preludeSlot !== 1) {
+      bleLog.debug(
+        `QN: the two 0xA4 0x0F prelude frames are not sent: they write user slot 1, and ` +
+          `ble.qn_user_slot is ${preludeSlot} (#501)`,
+      );
+    } else if (this.opts.a4Prelude) {
+      this.s.a4PreludeSent = true;
       for (let i = 0; i < A4_PRELUDE.length; i++) {
         if (i > 0) await wait(A4_PRELUDE_GAP_MS);
         if (!live()) return;
@@ -2080,9 +1497,9 @@ export class QnScaleAdapter
     // Deliberately NOT gated on weightAckEnabled(): this is the measurement
     // trigger, not the weight acknowledgement, and a GE CS 10 G owner who turns
     // the echo off must not lose the frame that makes their scale stream at all.
-    if (!this.isExtendedLongFrame) return;
+    if (this.s.kind !== 'ext20') return;
     const anchorKg = this.resolveAnchorKg();
-    const trigger = buildMeasurementTrigger(anchorKg);
+    const trigger = buildMeasurementTrigger(anchorKg, this.writeSlot());
     for (let i = 0; i < TRIGGER_REPEATS; i++) {
       if (i > 0) await wait(TRIGGER_GAP_MS);
       if (!live()) return;
@@ -2090,7 +1507,7 @@ export class QnScaleAdapter
     }
     bleLog.debug(
       `QN: extended-dialect measurement trigger sent, weight anchor ` +
-        `${anchorKg.toFixed(2)} kg (#235, #75)`,
+        `${anchorKg.toFixed(2)} kg${this.slotNote()} (#235, #75)`,
     );
   }
 
@@ -2103,15 +1520,9 @@ export class QnScaleAdapter
    */
   onSessionEnd(): void {
     this.sessionGeneration += 1;
-    if (this.fallbackTimer) {
-      clearTimeout(this.fallbackTimer);
-      this.fallbackTimer = null;
-    }
-    if (this.storedRetryTimer) {
-      clearTimeout(this.storedRetryTimer);
-      this.storedRetryTimer = null;
-    }
-    this.sessionStartedScaleSeconds = null;
+    this.s.dispose();
+    va18.logHeldAtSessionEnd(this);
+    this.s.sessionStartedScaleSeconds = null;
     this.ctx = null;
   }
 
@@ -2131,8 +1542,8 @@ export class QnScaleAdapter
   private resolveAnchorKg(): number {
     const anchor = this.ctx?.profile.lastKnownWeight;
     if (anchor !== undefined) return anchor;
-    if (!this.anchorFallbackWarned) {
-      this.anchorFallbackWarned = true;
+    if (!this.s.anchorFallbackWarned) {
+      this.s.anchorFallbackWarned = true;
       bleLog.warn(
         `QN: no usable weight anchor in config, falling back to ` +
           `${TRIGGER_WEIGHT_FALLBACK_KG} kg, which is a value from a capture and not ` +
@@ -2155,14 +1566,7 @@ export class QnScaleAdapter
    * handshake and then streams nothing (#75).
    */
   private weightAckEnabled(): boolean {
-    return this.forcedWeightAck ?? this.isExtendedLongFrame;
-  }
-
-  /** Build the 0x22 stored-data query frame with a trailing checksum. */
-  private buildStoredDataQuery(): number[] {
-    const cmd = [0x22, 0x06, this.seenProtocolType, 0x00, 0x03, 0x00];
-    cmd[5] = cmd.reduce((a, b) => a + b, 0) & 0xff;
-    return cmd;
+    return this.opts.weightAck ?? this.s.kind === 'ext20';
   }
 
   /**
@@ -2170,17 +1574,18 @@ export class QnScaleAdapter
    * bounded by MAX_STORED_QUERY_ATTEMPTS. Gives V10 firmware a moment to save
    * the fresh weigh-in before the scale disconnects (#213 / #75).
    */
-  private scheduleStoredDataRetry(): void {
-    if (!this.ctx || this.storedQueryAttempts >= MAX_STORED_QUERY_ATTEMPTS) return;
-    if (this.storedRetryTimer) clearTimeout(this.storedRetryTimer);
-    this.storedRetryTimer = setTimeout(() => {
-      this.storedRetryTimer = null;
-      if (!this.ctx || this.storedQueryAttempts >= MAX_STORED_QUERY_ATTEMPTS) return;
-      this.storedQueryAttempts += 1;
+  scheduleStoredDataRetry(): void {
+    if (!this.ctx || this.s.storedQueryAttempts >= MAX_STORED_QUERY_ATTEMPTS) return;
+    if (this.holdsSlotFrames()) return;
+    if (this.s.storedRetryTimer) clearTimeout(this.s.storedRetryTimer);
+    this.s.storedRetryTimer = setTimeout(() => {
+      this.s.storedRetryTimer = null;
+      if (!this.ctx || this.s.storedQueryAttempts >= MAX_STORED_QUERY_ATTEMPTS) return;
+      this.s.storedQueryAttempts += 1;
       bleLog.debug(
-        `QN: stored-data re-query ${this.storedQueryAttempts}/${MAX_STORED_QUERY_ATTEMPTS}`,
+        `QN: stored-data re-query ${this.s.storedQueryAttempts}/${MAX_STORED_QUERY_ATTEMPTS}`,
       );
-      void this.writeCmd(this.buildStoredDataQuery());
+      void this.writeCmd(buildStoredDataQuery(this.s.seenProtocolType, this.writeSlot()));
     }, STORED_QUERY_RETRY_MS);
   }
 
@@ -2190,6 +1595,11 @@ export class QnScaleAdapter
   }
 
   isComplete(reading: ScaleReading): boolean {
+    // A stored weigh-in is complete as it is: the processor judges its
+    // impedance (D028). Gated on impedance like a live frame, one with 1-200
+    // Ohm would be dropped by the session after the mark had already counted
+    // it as reported (#463).
+    if (reading.fromMemory === true) return reading.weight > 0;
     // Broadcast readings have impedance=0; GATT readings have impedance>200
     if (reading.impedance === 0) return reading.weight > 0;
     return reading.weight > 10 && reading.impedance > 200;
@@ -2197,9 +1607,9 @@ export class QnScaleAdapter
 
   computeMetrics(reading: ScaleReading, profile: UserProfile): BodyComposition {
     // The 19-byte dialect's own results, when they belong to this user (#331).
-    const pin = this.scaleComposition.of(reading, null);
+    const pin = reading.scaleComposition as va19.ScaleCompositionPin | undefined;
     if (pin) {
-      const payload = this.scaleCompositionPayload(pin, reading, profile);
+      const payload = va19.scaleCompositionPayload(pin, reading, profile);
       if (payload) return payload;
     }
 
@@ -2212,44 +1622,6 @@ export class QnScaleAdapter
     // WHEN a session ends), so an r1 far above the whole-body range still
     // completes a reading - it just no longer produces a pinned 60 % as if it
     // had been measured (#405).
-    const fat = biaFatIfPlausible(reading.weight, reading.impedance, profile);
-    return buildPayload(reading.weight, reading.impedance, { fat }, profile);
-  }
-
-  /**
-   * The scale's own body fat, water, muscle, bone and visceral fat, as one set
-   * that stands or falls as a whole, or null with the reason logged when they
-   * are not this user's or not plausible (#331). Athlete mode: the scale has none for these scales in
-   * the vendor's published SDK, so an athlete gets its values with a note
-   * rather than the BMI estimate, which is the worst one for a muscular body.
-   */
-  private scaleCompositionPayload(
-    pin: ScaleCompositionPin,
-    reading: ScaleReading,
-    profile: UserProfile,
-  ): BodyComposition | null {
-    const why = this.scaleCompositionRejection(pin, profile);
-    const w = reading.weight;
-    const set: ScaleBodyComp = {
-      fat: pin.result.fatPercent,
-      water: pin.composition.water,
-      muscle: pin.composition.muscle,
-      bone: (pin.composition.bone * w) / 100,
-    };
-    const implausible = why === null ? compositionRejection(set) : null;
-    if (why !== null || implausible !== null) {
-      bleLog.info(
-        `QN: the scale's own body composition is not used for this weigh-in: ` +
-          `${why ?? `its values are not plausible (${implausible})`}; estimating instead (#331)`,
-      );
-      return null;
-    }
-    const visceral = pin.composition.visceral;
-    if (visceral >= 1 && visceral <= 59) set.visceralFat = visceral;
-    bleLog.info("QN: using the scale's own body composition for this weigh-in (#331)");
-    if (profile.isAthlete) {
-      bleLog.info('QN: the scale computed it without an athlete mode (#331)');
-    }
-    return buildPayload(w, reading.impedance, set, profile);
+    return biaPayload(reading, profile);
   }
 }

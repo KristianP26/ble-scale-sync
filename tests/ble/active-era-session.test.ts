@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { waitForRawReading } from '../../src/ble/shared.js';
-import type { BleChar, BleDevice } from '../../src/ble/shared.js';
+import type { BleChar, BleDevice } from '../../src/ble/session/ports.js';
 import { normalizeUuid } from '../../src/ble/types.js';
 import { uuid16 } from '../../src/scales/body-comp-helpers.js';
 import { ActiveEraAdapter } from '../../src/scales/active-era.js';
@@ -18,6 +18,9 @@ import {
   timed,
   type TimedFrame,
 } from '../helpers/ac27-captures.js';
+import { freshAdapter, replaySession } from '../helpers/replay/session.js';
+import { session as ac27 } from '../fixtures/active-era/ac27.js';
+import { session as fitdays } from '../fixtures/active-era/ac27-fitdays-profile.js';
 
 /**
  * AC 27 weigh-ins end to end through `waitForRawReading`, at the spacing the
@@ -85,7 +88,14 @@ async function startSession(profile: UserProfile = PROFILE) {
     [normalizeUuid(uuid16(0xffb1)), write],
   ]);
   const adapter = new ActiveEraAdapter();
-  const promise = waitForRawReading(charMap, device, adapter, profile, 'E0D38E019138');
+  const promise = waitForRawReading({
+    charMap,
+    device,
+    adapter,
+    profile,
+    address: 'E0D38E019138',
+    scaleAuth: undefined,
+  });
   let result: ScaleReading | null = null;
   let settled = false;
   void promise.then(
@@ -164,7 +174,7 @@ describe('AC 27 weigh-ins through waitForRawReading (#458, #462, #466)', () => {
     const s = await startSession();
     await s.play(received(ALPHA_LOCK_D6_NO_IMPEDANCE));
     expect(s.isSettled()).toBe(true);
-    expect(s.reading()).toEqual({ weight: 89.24, impedance: 0 });
+    expect(s.reading()).toEqual({ weight: 89.24, impedance: 0, scaleComposition: 36 });
   });
 
   // I3
@@ -175,7 +185,7 @@ describe('AC 27 weigh-ins through waitForRawReading (#458, #462, #466)', () => {
     expect(s.isSettled()).toBe(false);
     await s.play([frames.at(-1)!]);
     expect(s.isSettled()).toBe(true);
-    expect(s.reading()).toEqual({ weight: 88.97, impedance: 469 });
+    expect(s.reading()).toEqual({ weight: 88.97, impedance: 469, scaleComposition: 36 });
   });
 
   // I4: #458 locks, runs a balance phase for 13 s and sends D6 16 s after the
@@ -201,7 +211,7 @@ describe('AC 27 weigh-ins through waitForRawReading (#458, #462, #466)', () => {
     expect(s.isSettled()).toBe(false);
     await s.play([frames.at(-1)!]);
     expect(s.isSettled()).toBe(true);
-    expect(s.reading()).toEqual({ weight: 88.58, impedance: 469 });
+    expect(s.reading()).toEqual({ weight: 88.58, impedance: 469, scaleComposition: 36 });
   });
 
   it('a disconnect during the hold settles on the held weight', async () => {
@@ -224,7 +234,64 @@ describe('AC 27 weigh-ins through waitForRawReading (#458, #462, #466)', () => {
     expect(s.write.written.map((w) => w.data)).toEqual([captured[0], captured[3], captured[4]]);
     expect(events.slice(0, 2)).toEqual(['subscribed', 'write']);
     await s.play(received(ALPHA_HANDSHAKE));
-    expect(s.reading()).toEqual({ weight: 88.95, impedance: 469 });
+    expect(s.reading()).toEqual({ weight: 88.95, impedance: 469, scaleComposition: 36 });
     expect(s.write.written.at(-1)).toEqual({ data: captured.at(-1), withResponse: true });
+  });
+});
+
+// The session goldens of tests/fixtures/active-era rest on the generic replay
+// harness (D074), so it has to reach what the hand-driven sessions above reach.
+describe('the same AC 27 captures through the replay harness', () => {
+  it.each([
+    ['alpha-no-write', 'reading', 10920, { weight: 88.58, impedance: 0 }],
+    ['openscale-1358', 'reading', 11543, { weight: 98.64, impedance: 0 }],
+    [
+      'alpha-lock-d6-no-impedance',
+      'reading',
+      2186,
+      { weight: 89.24, impedance: 0, scaleComposition: 36 },
+    ],
+    ['alpha-lock-d6', 'reading', 9933, { weight: 88.97, impedance: 469, scaleComposition: 36 }],
+    [
+      'issue-458-dump-2',
+      'reading',
+      19000,
+      {
+        weight: expect.closeTo(87.62, 3),
+        impedance: expect.closeTo(434.92, 2),
+        scaleComposition: 7,
+      },
+    ],
+    [
+      'alpha-plateau-then-lock',
+      'reading',
+      6767,
+      { weight: 88.58, impedance: 469, scaleComposition: 36 },
+    ],
+    ['alpha-no-write-dropped-in-hold', 'disconnect', 6220, { weight: 88.58, impedance: 0 }],
+  ])('%s: settled by %s at %i ms', async (name, by, atMs, reading) => {
+    const r = await replaySession(freshAdapter(ac27), ac27.traces[name], ac27);
+    expect(r.settled).toEqual({ by, atMs });
+    expect(r.reading).toEqual(reading);
+  });
+
+  it('alpha-handshake: subscribe, the profile writes, the D6 ACK', async () => {
+    const r = await replaySession(
+      freshAdapter(fitdays),
+      fitdays.traces['alpha-handshake'],
+      fitdays,
+    );
+    const captured = timed(ALPHA_HANDSHAKE)
+      .filter((f) => f.dir === 'tx')
+      .map((f) => f.frame.toString('hex'));
+    expect(r.subscribes[0].seq).toBe(0);
+    expect(r.writes.map((w) => w.hex)).toEqual([
+      captured[0],
+      captured[3],
+      captured[4],
+      captured.at(-1),
+    ]);
+    expect(r.writes.at(-1)!.withResponse).toBe(true);
+    expect(r.reading).toEqual({ weight: 88.95, impedance: 469, scaleComposition: 36 });
   });
 });

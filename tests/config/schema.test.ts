@@ -423,6 +423,65 @@ describe('BleSchema', () => {
     }
   });
 
+  it('accepts ble.qn_user_slot from 1 to 8 and keeps the value', () => {
+    for (const slot of [1, 2, 8, null]) {
+      const result = BleSchema.safeParse({ qn_user_slot: slot });
+      expect(result.success).toBe(true);
+      expect(result.data?.qn_user_slot).toBe(slot);
+    }
+  });
+
+  it('rejects a ble.qn_user_slot outside 1 to 8 or not an integer', () => {
+    for (const slot of [0, 9, 255, 1.5, -1, '2']) {
+      expect(BleSchema.safeParse({ qn_user_slot: slot }).success).toBe(false);
+    }
+  });
+
+  // Kept through the parse, like qn_user_key above (#331).
+  it('accepts ble.qn_result_ack as a boolean or null and keeps the value', () => {
+    for (const value of [true, false, null]) {
+      const result = BleSchema.safeParse({ qn_result_ack: value });
+      expect(result.success).toBe(true);
+      expect(result.data?.qn_result_ack).toBe(value);
+    }
+    expect(BleSchema.safeParse({ qn_result_ack: 'yes' }).success).toBe(false);
+  });
+
+  const PROFILE_BYTE_HINT = 'Must be one byte as two hex digits (0-9, a-f) in quotes';
+
+  // A string: YAML reads an unquoted 99 as a decimal number (#434, D079).
+  it('accepts ble.rmsc04_profile_byte as two hex digits or null and keeps the string', () => {
+    for (const value of ['9e', '9E', 'a9', '00', 'ff', null]) {
+      const result = BleSchema.safeParse({ rmsc04_profile_byte: value });
+      expect(result.success).toBe(true);
+      expect(result.data?.rmsc04_profile_byte).toBe(value);
+    }
+  });
+
+  // 'xx' is the placeholder in the docs' example.
+  it.each([77, true, '0x9e', '9', 'q7', ' 9e', 'xx'])(
+    'rejects ble.rmsc04_profile_byte %j with the hint',
+    (value) => {
+      const result = BleSchema.safeParse({ rmsc04_profile_byte: value });
+      expect(result.success).toBe(false);
+      expect(result.error?.issues.map((i) => i.message)).toEqual([PROFILE_BYTE_HINT]);
+    },
+  );
+
+  it('names ble.rmsc04_profile_byte in the error, never its value', () => {
+    for (const value of [77, 'q7']) {
+      const result = AppConfigSchema.safeParse({
+        ...VALID_CONFIG,
+        ble: { ...VALID_CONFIG.ble, rmsc04_profile_byte: value },
+      });
+      expect(result.success).toBe(false);
+      const msg = formatConfigError(result.error!);
+      expect(msg).toContain('ble.rmsc04_profile_byte');
+      expect(msg).toContain(PROFILE_BYTE_HINT);
+      expect(msg).not.toContain(String(value));
+    }
+  });
+
   it('rejects ble.session_timeout_sec outside 5 to 600', () => {
     for (const secs of [4, 601]) {
       expect(BleSchema.safeParse({ session_timeout_sec: secs }).success).toBe(false);
@@ -447,6 +506,21 @@ describe('BleSchema', () => {
   it('rejects a ble.preemptive_adapter_reset that is not a boolean', () => {
     for (const value of ['false', 0, 1]) {
       expect(BleSchema.safeParse({ preemptive_adapter_reset: value }).success).toBe(false);
+    }
+  });
+
+  it('keeps ble.pairing_retry_max_min from 0 to 1440 (#471)', () => {
+    for (const value of [0, 60, 1440]) {
+      const result = BleSchema.safeParse({ pairing_retry_max_min: value });
+      expect(result.success).toBe(true);
+      if (result.success) expect(result.data.pairing_retry_max_min).toBe(value);
+    }
+    expect(BleSchema.safeParse({ pairing_retry_max_min: null }).success).toBe(true);
+  });
+
+  it('rejects a ble.pairing_retry_max_min outside 0 to 1440 or not a whole number', () => {
+    for (const value of [-1, 1441, 1.5, '60']) {
+      expect(BleSchema.safeParse({ pairing_retry_max_min: value }).success).toBe(false);
     }
   });
 
@@ -885,7 +959,6 @@ describe('formatConfigError()', () => {
       {
         code: 'invalid_type',
         expected: 'object',
-        received: 'string',
         path: [],
         message: 'Expected object, received string',
       },
@@ -956,6 +1029,33 @@ describe('runtime.idle_rescan_delay (#398)', () => {
     ).toBe(false);
     expect(
       AppConfigSchema.safeParse({ ...VALID_CONFIG, runtime: { idle_rescan_delay: 1.5 } }).success,
+    ).toBe(false);
+  });
+});
+
+describe('runtime.no_reading_rescan_delay (#475)', () => {
+  it('defaults to 0, which keeps the retry backoff as it was', () => {
+    const result = AppConfigSchema.safeParse({
+      ...VALID_CONFIG,
+      runtime: { continuous_mode: true },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.runtime?.no_reading_rescan_delay).toBe(0);
+  });
+
+  it.each([900, 3600])('keeps a configured %i', (value) => {
+    const result = AppConfigSchema.safeParse({
+      ...VALID_CONFIG,
+      runtime: { continuous_mode: true, no_reading_rescan_delay: value },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.runtime?.no_reading_rescan_delay).toBe(value);
+  });
+
+  it.each([-1, 1.5, 3601])('rejects %d', (value) => {
+    expect(
+      AppConfigSchema.safeParse({ ...VALID_CONFIG, runtime: { no_reading_rescan_delay: value } })
+        .success,
     ).toBe(false);
   });
 });

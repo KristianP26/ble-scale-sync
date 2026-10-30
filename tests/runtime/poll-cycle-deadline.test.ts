@@ -12,7 +12,8 @@ vi.mock('../../src/ble/index.js', () => ({ scanAndReadRaw }));
 
 // The deadline is the subject here, not profile resolution, so keep the context
 // minimal and stub the resolver rather than building a full valid config.
-vi.mock('../../src/config/resolve.js', () => ({
+vi.mock('../../src/config/resolve.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../src/config/resolve.js')>()),
   resolveUserProfile: () => ({ sex: 'male', age: 40, heightCm: 180, athlete: false }),
 }));
 

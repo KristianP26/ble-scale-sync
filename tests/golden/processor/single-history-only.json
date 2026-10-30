@@ -1,0 +1,45 @@
+{
+  "returned": true,
+  "exports": [
+    {
+      "to": "dad/garmin@global:0",
+      "weight": 85.1,
+      "impedance": 470,
+      "user": "dad",
+      "timestamp": "2026-10-20T22:00:00.000Z",
+      "historical": true
+    }
+  ],
+  "computeMetrics": [
+    {
+      "weight": 85.1,
+      "impedance": 470,
+      "profile": {
+        "height": 183,
+        "age": 36,
+        "gender": "male",
+        "isAthlete": false,
+        "birthDate": "1990-06-15",
+        "lastKnownWeight": 82
+      }
+    }
+  ],
+  "queued": [],
+  "lastKnownWeightWrites": [],
+  "replayAnchorWrites": [],
+  "updateChecks": 1,
+  "display": [],
+  "after": {
+    "lastExportedWeights": {},
+    "lastExportedAt": {},
+    "lastKnownWeight": {
+      "dad": 82
+    }
+  },
+  "log": [
+    "[Sync] [historic 2026-10-20T22:00:00.000Z] Measurement: 85.10 kg / 470 Ohm",
+    "[Sync] Historical reading (2026-10-20T22:00:00.000Z): skipping non-back-date exporters [mqtt]",
+    "[Sync] Exporting to: garmin...",
+    "[Sync] Done."
+  ]
+}

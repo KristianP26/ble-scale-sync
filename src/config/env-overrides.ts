@@ -1,5 +1,5 @@
 import { createLogger } from '../logger.js';
-import type { AppConfig, BleConfig, ExporterEntry } from './schema.js';
+import { RuntimeSchema, type AppConfig, type BleConfig, type ExporterEntry } from './schema.js';
 import { KNOWN_EXPORTER_NAMES } from '../exporters/registry.js';
 import { isValidScaleId, SCALE_ID_HINT } from '../ble/scale-id.js';
 import { BOOL_WORDS_HINT, isFromEnvFile, parseBoolWord } from './env-refs.js';
@@ -87,16 +87,7 @@ function boolEnv(name: string, field: string, current: boolean): boolean {
 }
 
 export function applyEnvOverrides(config: AppConfig): AppConfig {
-  const runtime = {
-    continuous_mode: config.runtime?.continuous_mode ?? false,
-    scan_cooldown: config.runtime?.scan_cooldown ?? 30,
-    dry_run: config.runtime?.dry_run ?? false,
-    debug: config.runtime?.debug ?? false,
-    watchdog_max_consecutive_failures: config.runtime?.watchdog_max_consecutive_failures ?? 10,
-    watch_config: config.runtime?.watch_config ?? true,
-    idle_rescan_delay: config.runtime?.idle_rescan_delay ?? 5,
-    retry_failed_exports: config.runtime?.retry_failed_exports ?? true,
-  };
+  const runtime = { ...RuntimeSchema.parse({}), ...config.runtime };
 
   // Runtime overrides
   runtime.continuous_mode = boolEnv(

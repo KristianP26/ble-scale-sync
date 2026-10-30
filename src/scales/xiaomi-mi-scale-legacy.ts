@@ -34,7 +34,6 @@ export class XiaomiMiScaleLegacyAdapter implements ScaleAdapterCore, BroadcastSo
     serviceUuids: ['181d'],
     manufacturerId: HUAMI_COMPANY_ID,
   };
-  readonly normalizesWeight = true;
   readonly preferPassive = true;
 
   matches(device: BleDeviceInfo): boolean {

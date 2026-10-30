@@ -3,7 +3,8 @@ import type { BodyComposition } from '../interfaces/scale-adapter.js';
 import type { Exporter, ExportContext, ExportResult } from '../interfaces/exporter.js';
 import type { ExporterSchema } from '../interfaces/exporter-schema.js';
 import type { RunalyzeConfig } from './config.js';
-import { withRetry, httpError, NonRetryableError } from '../utils/retry.js';
+import { NonRetryableError } from '../utils/retry.js';
+import { sendWithRetry } from './http.js';
 import { errMsg } from '../utils/error.js';
 
 const log = createLogger('Runalyze');
@@ -43,9 +44,9 @@ interface BodyCompositionPayload {
   bone_percentage?: number;
 }
 
-/** Round to 1 decimal and return undefined for non-finite or non-positive values. */
-function optionalPercent(value: number): number | undefined {
-  if (!Number.isFinite(value) || value <= 0) return undefined;
+/** Round to 1 decimal and return undefined for a withheld (null, #497), non-finite or non-positive value. */
+function optionalPercent(value: number | null): number | undefined {
+  if (value === null || !Number.isFinite(value) || value <= 0) return undefined;
   return Number(value.toFixed(1));
 }
 
@@ -84,10 +85,14 @@ export class RunalyzeExporter implements Exporter {
     if (water !== undefined) payload.water_percentage = water;
 
     if (data.weight > 0) {
-      const muscle = optionalPercent((data.muscleMass / data.weight) * 100);
+      const muscle = optionalPercent(
+        data.muscleMass === null ? null : (data.muscleMass / data.weight) * 100,
+      );
       if (muscle !== undefined) payload.muscle_percentage = muscle;
 
-      const bone = optionalPercent((data.boneMass / data.weight) * 100);
+      const bone = optionalPercent(
+        data.boneMass === null ? null : (data.boneMass / data.weight) * 100,
+      );
       if (bone !== undefined) payload.bone_percentage = bone;
     }
 
@@ -98,29 +103,20 @@ export class RunalyzeExporter implements Exporter {
     const timestamp = context?.timestamp ?? new Date();
     const body = JSON.stringify(this.buildPayload(data, timestamp));
 
-    return withRetry(
-      async () => {
-        const response = await fetch(METRIC_PATH, {
-          method: 'POST',
-          headers: this.headers(),
-          body,
-          signal: AbortSignal.timeout(10_000),
-        });
-
-        if (!response.ok) {
-          throw httpError(response.status);
-        }
-
-        // A valid HTTP 200 can still carry a token-rejection body.
-        const text = await response.text();
-        if (INVALID_TOKEN_RE.test(text)) {
-          throw new NonRetryableError('Runalyze rejected the API token');
-        }
-
-        log.info(`Runalyze body composition pushed for ${timestamp.toISOString()}.`);
-        return { success: true };
+    return sendWithRetry(
+      METRIC_PATH,
+      { method: 'POST', headers: this.headers(), body },
+      {
+        log,
+        label: 'Runalyze body composition upload',
+        onOk: async (response) => {
+          // A valid HTTP 200 can still carry a token-rejection body.
+          if (INVALID_TOKEN_RE.test(await response.text())) {
+            throw new NonRetryableError('Runalyze rejected the API token');
+          }
+          log.info(`Runalyze body composition pushed for ${timestamp.toISOString()}.`);
+        },
       },
-      { log, label: 'Runalyze body composition upload' },
     );
   }
 

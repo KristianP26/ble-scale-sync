@@ -45,7 +45,7 @@ describe('summaryStep out_of_range (S-02)', () => {
         version: 1,
         scale: { weight_unit: 'kg', height_unit: 'cm', display_unit: 'weight_unit' },
         unknown_user: 'nearest',
-        ble: {},
+        ble: { handler: 'auto' },
         global_exporters: [{ type: 'file', file_path: './measurements.csv' }],
         ...config,
       },
@@ -350,7 +350,7 @@ global_exporters:
   it('prints the changed settings before asking to save, secrets masked', async () => {
     const { text, asked } = await save(true, (c) => {
       c.scale!.weight_unit = 'lbs';
-      (c.global_exporters![0] as { token: string }).token = 'new-plain-token';
+      c.global_exporters![0].token = 'new-plain-token';
       (c.global_exporters![0] as { password?: string }).password = 'added-plain-password';
     });
 

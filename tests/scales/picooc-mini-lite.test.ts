@@ -190,9 +190,8 @@ describe('PicoocMiniLiteAdapter (#408)', () => {
       expect(adapter.match.custom).toBeUndefined();
     });
 
-    it('reads from the advertisement and normalises its own weight', () => {
+    it('reads from the advertisement', () => {
       expect(adapter.preferPassive).toBe(true);
-      expect(adapter.normalizesWeight).toBe(true);
       expect('parseLiveBroadcast' in adapter).toBe(false);
     });
 

@@ -1,9 +1,9 @@
 import { describe, it, expect, vi } from 'vitest';
 import { ExcelvanCF369Adapter } from '../../src/scales/excelvan-cf369.js';
-import type { ConnectionContext } from '../../src/interfaces/scale-adapter.js';
 import {
   mockPeripheral,
   defaultProfile,
+  makeConnectionContext,
   assertPayloadRanges,
 } from '../helpers/scale-test-utils.js';
 import { WEIGHT_ONLY_HOLD_MS } from '../../src/scales/body-comp-helpers.js';
@@ -149,12 +149,12 @@ describe('ExcelvanCF369Adapter', () => {
       const writeFn = vi.fn().mockResolvedValue(undefined);
       const profile = defaultProfile({ gender: 'male', height: 183, age: 30 });
 
-      const ctx: ConnectionContext = {
+      const ctx = makeConnectionContext({
         write: writeFn,
         read: vi.fn(),
         subscribe: vi.fn(),
         profile,
-      };
+      });
 
       await adapter.onConnected(ctx);
 
@@ -179,12 +179,12 @@ describe('ExcelvanCF369Adapter', () => {
       const writeFn = vi.fn().mockResolvedValue(undefined);
       const profile = defaultProfile({ gender: 'female', height: 165, age: 25 });
 
-      const ctx: ConnectionContext = {
+      const ctx = makeConnectionContext({
         write: writeFn,
         read: vi.fn(),
         subscribe: vi.fn(),
         profile,
-      };
+      });
 
       await adapter.onConnected(ctx);
 

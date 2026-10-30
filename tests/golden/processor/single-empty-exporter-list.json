@@ -1,0 +1,61 @@
+{
+  "returned": true,
+  "exports": [],
+  "computeMetrics": [
+    {
+      "weight": 83.4,
+      "impedance": 480,
+      "profile": {
+        "height": 183,
+        "age": 36,
+        "gender": "male",
+        "isAthlete": false,
+        "birthDate": "1990-06-15",
+        "lastKnownWeight": 82
+      }
+    }
+  ],
+  "queued": [],
+  "lastKnownWeightWrites": [],
+  "replayAnchorWrites": [
+    {
+      "slug": "dad",
+      "weight": 83.4,
+      "time": "2026-10-21T08:00:00.000Z"
+    }
+  ],
+  "updateChecks": 1,
+  "display": [
+    [
+      "reading",
+      "dad",
+      "Dad",
+      83.4,
+      480,
+      []
+    ],
+    [
+      "result",
+      "dad",
+      "Dad",
+      83.4,
+      []
+    ]
+  ],
+  "after": {
+    "lastExportedWeights": {
+      "dad": 83.4
+    },
+    "lastExportedAt": {
+      "dad": "2026-10-21T08:00:00.000Z"
+    },
+    "lastKnownWeight": {
+      "dad": 83.4
+    }
+  },
+  "log": [
+    "[Sync] Measurement: 83.40 kg / 480 Ohm",
+    "[Sync] No exporters configured, measurement processed but not sent anywhere.",
+    "[Sync]   Run `ble-scale-sync setup` and pick at least one export target, or edit config.yaml."
+  ]
+}

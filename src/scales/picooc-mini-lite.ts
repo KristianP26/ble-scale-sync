@@ -8,6 +8,7 @@ import type {
 } from '../interfaces/scale-adapter.js';
 import { buildPayload } from './body-comp-helpers.js';
 import { bleLog } from '../ble/types.js';
+import { LogKey, UnitMap } from './device-state.js';
 import type { MatchDescriptor } from './match-descriptor.js';
 
 // ─── PICOOC Mini Lite (PICOOC-L, broadcast-only) ────────────────────────────
@@ -86,21 +87,9 @@ const WEIGHT_MAX_KG = 250;
  */
 const REPEAT_WINDOW_MS = 60_000;
 
-/** Units tracked at once, oldest out. A household has one; this is a leak bound. */
-const MAX_UNITS = 8;
-
-/** See SenssunIfB7Adapter: same expiry, same reason. */
-const LOG_KEY_TTL_MS = 3_000;
-
 interface Exported {
   weightRaw: number;
   /** When this weight was last seen from the unit, monotonic ms. */
-  seenAt: number;
-}
-
-/** One logging key: the last payload logged, and when it was last seen. */
-interface LogKey {
-  key: string | null;
   seenAt: number;
 }
 
@@ -135,13 +124,12 @@ export class PicoocMiniLiteAdapter implements ScaleAdapterCore, BroadcastSource 
     priority: 217,
     names: { exact: [NAME] },
   };
-  readonly normalizesWeight = true;
   readonly preferPassive = true;
 
   /** Last weight handed out per unit, keyed by [0..3]; see REPEAT_WINDOW_MS. */
-  private readonly units = new Map<string, Exported>();
+  private readonly units = new UnitMap<Exported>();
   /** Logging state only; nothing below feeds a reading. */
-  private readonly lastResult: LogKey = { key: null, seenAt: -Infinity };
+  private readonly lastResult = new LogKey();
   /** Values already warned about, as `field:value`. */
   private readonly warned = new Set<string>();
 
@@ -231,7 +219,7 @@ export class PicoocMiniLiteAdapter implements ScaleAdapterCore, BroadcastSource 
           `on #408.`,
       );
     }
-    this.remember(unitKey, { weightRaw, seenAt: t });
+    this.units.put(unitKey, { weightRaw, seenAt: t });
     return { weight: kg, impedance: 0 };
   }
 
@@ -241,25 +229,13 @@ export class PicoocMiniLiteAdapter implements ScaleAdapterCore, BroadcastSource 
     bleLog.warn(message);
   }
 
-  private remember(unitKey: string, exported: Exported): void {
-    if (!this.units.has(unitKey) && this.units.size >= MAX_UNITS) {
-      const oldest = this.units.keys().next().value;
-      if (oldest !== undefined) this.units.delete(oldest);
-    }
-    this.units.delete(unitKey);
-    this.units.set(unitKey, exported);
-  }
-
   /**
    * One debug line per payload, not per advert (#372), including a repeat: a
    * new value in [8..9] at the same weight is worth a line of its own.
    */
   private logResult(d: Buffer, kg: number, lb: number, at: number, repeat: boolean): void {
     const hex = d.toString('hex');
-    const first = hex !== this.lastResult.key || at - this.lastResult.seenAt > LOG_KEY_TTL_MS;
-    this.lastResult.key = hex;
-    this.lastResult.seenAt = at;
-    if (!first) return;
+    if (!this.lastResult.first(hex, at)) return;
 
     const zRaw = d.readUInt16BE(IMPEDANCE_OFFSET);
     const z = zRaw === IMPEDANCE_NONE ? 'none' : (zRaw / 10).toFixed(1);

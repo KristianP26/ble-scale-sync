@@ -41,6 +41,8 @@ config.yaml.*
 .update-check-state.json.tmp
 .scale-dedup-marks.json
 .scale-dedup-marks.json.tmp
+.last-live-weigh-ins.json
+.last-live-weigh-ins.json.tmp
 
 # IDE & editor
 .idea

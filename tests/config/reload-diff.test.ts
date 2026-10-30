@@ -2,7 +2,11 @@ import { describe, it, expect } from 'vitest';
 import { diffRestartRequired } from '../../src/config/reload-diff.js';
 import type { AppConfig } from '../../src/config/schema.js';
 
-function baseConfig(overrides: Partial<AppConfig> = {}): AppConfig {
+// Fixtures name only the keys a case is about; the diff reads nothing else.
+// Partial all the way down, so a renamed key still fails tsc.
+type DeepPartial<T> = T extends object ? { [K in keyof T]?: DeepPartial<T[K]> } : T;
+
+function baseConfig(overrides: DeepPartial<AppConfig> = {}): AppConfig {
   return {
     version: 1,
     scale: { weight_unit: 'kg', height_unit: 'cm' },
@@ -189,6 +193,14 @@ describe('diffRestartRequired', () => {
     });
   });
 
+  it('flags runtime.watch_config, which only decides at start-up whether the watcher runs', () => {
+    const a = baseConfig({ runtime: { watch_config: true } } as Partial<AppConfig>);
+    const b = baseConfig({ runtime: { watch_config: false } } as Partial<AppConfig>);
+    expect(diffRestartRequired(a, b)).toEqual([
+      { key: 'runtime.watch_config', oldValue: 'true', newValue: 'false' },
+    ]);
+  });
+
   it('flags ble.adapter_privacy, which is read once at start-up (#417)', () => {
     const a = baseConfig({ ble: { handler: 'auto' } });
     const b = baseConfig({ ble: { handler: 'auto', adapter_privacy: true } });
@@ -200,6 +212,18 @@ describe('diffRestartRequired', () => {
   it('does NOT flag ble.preemptive_adapter_reset, which the poll source re-reads per cycle', () => {
     const a = baseConfig({ ble: { handler: 'auto', preemptive_adapter_reset: true } });
     const b = baseConfig({ ble: { handler: 'auto', preemptive_adapter_reset: false } });
+    expect(diffRestartRequired(a, b)).toEqual([]);
+  });
+
+  it('does NOT flag ble.pairing_retry_max_min, which the poll source re-reads per cycle (#471)', () => {
+    const a = baseConfig({ ble: { handler: 'auto', pairing_retry_max_min: 60 } });
+    const b = baseConfig({ ble: { handler: 'auto', pairing_retry_max_min: 0 } });
+    expect(diffRestartRequired(a, b)).toEqual([]);
+  });
+
+  it('does NOT flag runtime.no_reading_rescan_delay, which the poll source re-reads per cycle (#475)', () => {
+    const a = baseConfig({ runtime: { no_reading_rescan_delay: 0 } } as Partial<AppConfig>);
+    const b = baseConfig({ runtime: { no_reading_rescan_delay: 900 } } as Partial<AppConfig>);
     expect(diffRestartRequired(a, b)).toEqual([]);
   });
 

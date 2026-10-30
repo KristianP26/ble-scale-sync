@@ -210,9 +210,11 @@ export interface GarminEntryConfig {
   weight_only?: boolean;
   /**
    * Leave metabolic age unset in Garmin Connect and upload everything else.
-   * The estimate compares BMR with a reference BMR for the same weight and
-   * height. Unless `is_athlete` is set the two cancel and what is left depends
-   * on age alone; either way it carries no body composition.
+   * On most scales it is an estimate that compares BMR with a reference BMR
+   * for the same weight and height. Unless `is_athlete` is set the two cancel
+   * and what is left depends on age alone; either way it carries no body
+   * composition. The 19-byte QN scale's own body age, exported when its own
+   * composition is used (D078), is skipped the same way.
    */
   skip_metabolic_age?: boolean;
   /**
@@ -283,7 +285,7 @@ export const garminSchema: ExporterSchema = {
       required: false,
       default: false,
       description:
-        'Upload every metric except metabolic age, an estimate from BMR that carries no body composition',
+        'Upload every metric except metabolic age, on most scales an estimate from BMR that carries no body composition',
     },
   ],
   supportsGlobal: false,

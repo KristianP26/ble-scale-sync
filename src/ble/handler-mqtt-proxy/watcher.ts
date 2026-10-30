@@ -1,18 +1,19 @@
-import type {
-  BleDeviceInfo,
-  ScaleAdapter,
-  ScaleAuth,
-  SessionProfileSelector,
-  UserProfile,
-} from '../../interfaces/scale-adapter.js';
-import type { MqttProxyConfig, WeightUnit } from '../../config/schema.js';
+import type { ScaleAdapter, ScaleAuth, UserProfile } from '../../interfaces/scale-adapter.js';
+import type { MqttProxyConfig } from '../../config/schema.js';
 import type { RawReading } from '../shared.js';
-import { waitForRawReading, withAbandonmentCleanup } from '../shared.js';
-import { resolveAdapter, resolveAfterDiscovery } from '../../scales/resolve.js';
 import {
+  PROXY_WATCHER_CAP_MS,
+  proxyWatcherPolicy,
+  runGattSession,
+  selectSessionAdapter,
+} from '../session/runner.js';
+import { resolveAdapter } from '../../scales/resolve.js';
+import {
+  BoundedMap,
   evaluateAdvertisement,
   GraceTimers,
   DedupWindow,
+  PostReadingWindow,
   logAdvert,
   safeName,
   emitDeduped,
@@ -20,14 +21,7 @@ import {
 } from '../advertisement.js';
 import { currentProfile } from '../reading-source.js';
 import type { ProfileSource, Watcher, WatcherConfig } from '../reading-source.js';
-import {
-  bleLog,
-  withIdleTimeout,
-  withTimeout,
-  errMsg,
-  normalizeUuid,
-  IMPEDANCE_GRACE_MS,
-} from '../types.js';
+import { bleLog, errMsg, IMPEDANCE_GRACE_MS, POST_READING_RECONNECT_MS } from '../types.js';
 import { AsyncQueue } from '../async-queue.js';
 import { topics } from './topics.js';
 import {
@@ -35,6 +29,7 @@ import {
   closePersistentClient,
   getOrCreatePersistentClient,
   addDiscoveredMac,
+  hasDiscoveredMac,
   getDiscoveredMacs,
   getDisplayUsers,
   addPassiveMac,
@@ -51,16 +46,8 @@ import { registerScaleMac, publishConfig } from './display.js';
 import { type ScanResultEntry, toBleDeviceInfo } from './scan.js';
 
 const DEDUP_WINDOW_MS = 30_000;
-/** Milliseconds of scale silence that end a GATT reading session. */
-const GATT_READING_IDLE_MS = 60_000;
-/**
- * Absolute cap on one GATT session regardless of activity. A scale that keeps
- * streaming adapter-rejected frames restarts the idle timer forever, and while
- * the session is up the ESP32 holds its single connection and pauses scanning.
- * Kept at ReadingWatcher.GATT_STALE_MS so the stale reset's assumption that no
- * session outlives it stays true.
- */
-const GATT_SESSION_ABSOLUTE_MS = 90_000;
+
+type GattSlot = { startedAt: number; device?: MqttBleDevice };
 
 type LifecycleHandler =
   | { event: 'reconnect'; handler: () => void }
@@ -71,7 +58,9 @@ type LifecycleHandler =
 /**
  * Persistent event-driven scan watcher for continuous mode.
  * Subscribes once and keeps the message handler attached permanently,
- * queuing matched readings so none are missed during processing or cooldown.
+ * queuing matched readings so none are missed while the previous one is
+ * processed. There is no cooldown after a reading: the ESP32 reconnects to a
+ * scale still on by itself, see PostReadingWindow (#466).
  */
 export class ReadingWatcher implements Watcher {
   private queue = new AsyncQueue<RawReading>();
@@ -86,15 +75,15 @@ export class ReadingWatcher implements Watcher {
    * no PIN on this transport and asked for one that was already set (B-15).
    */
   private scaleAuth?: ScaleAuth;
-  /** `scale.weight_unit`, passed to every GATT read (see WatcherConfig). */
-  private weightUnit?: WeightUnit;
-  private selectProfile?: SessionProfileSelector;
-  private gattInProgress = false;
-  /** Monotonic id of the newest GATT session, so a superseded one cannot tear down its successor (#296). */
-  private gattSessionSeq = 0;
-  private currentDevice: MqttBleDevice | null = null;
-  private gattStartedAt = 0;
+  /**
+   * The one GATT session the ESP32 holds, null when none runs. A session ends
+   * it only while it is still this object, so a superseded or stale-reset one
+   * cannot tear down its successor (#296).
+   */
+  private gattSlot: GattSlot | null = null;
   private readonly dedup = new DedupWindow(DEDUP_WINDOW_MS);
+  /** When each scale last gave a reading, to tell its still-on reconnect from a failure (#466). */
+  private readonly postReading = new PostReadingWindow(POST_READING_RECONNECT_MS);
   /**
    * Last scan result seen per address, keyed lowercase.
    *
@@ -108,13 +97,13 @@ export class ReadingWatcher implements Watcher {
    * carry the name; keeping the last one makes the autonomous path resolve on
    * the same information as every other transport.
    */
-  private readonly lastScanEntry = new Map<string, ScanResultEntry>();
+  private readonly lastScanEntry = new BoundedMap<string, ScanResultEntry>(64, 'lru');
   /** Weight-only fallback timer per address; on elapse the held reading is queued. */
   private readonly grace = new GraceTimers(IMPEDANCE_GRACE_MS, (address, gr) => {
     bleLog.info(
       `Matched: ${gr.adapter.name} (${address}), weight only, no impedance within ${IMPEDANCE_GRACE_MS / 1000}s`,
     );
-    bleLog.info(`Reading: ${gr.reading.weight} kg`);
+    bleLog.info(`Reading: ${gr.reading.weight.toFixed(2)} kg`);
     registerScaleMac(this.config, address, gr.adapter).catch(() => {});
     this.queue.push(gr);
   });
@@ -135,16 +124,12 @@ export class ReadingWatcher implements Watcher {
     targetMac?: string,
     profile?: ProfileSource,
     scaleAuth?: ScaleAuth,
-    weightUnit?: WeightUnit,
-    selectProfile?: SessionProfileSelector,
   ) {
     this.config = config;
     this.adapters = adapters;
     this.targetMac = targetMac;
     this.profile = profile;
     this.scaleAuth = scaleAuth;
-    this.weightUnit = weightUnit;
-    this.selectProfile = selectProfile;
   }
 
   async start(): Promise<void> {
@@ -262,9 +247,10 @@ export class ReadingWatcher implements Watcher {
             bleLog.info(
               `Received autonomous connect from ESP32 for ${data.address} (${data.chars?.length ?? 0} chars)`,
             );
-            this.handleAutonomousConnect(data).catch((err) => {
-              bleLog.warn(`Autonomous GATT reading failed for ${data.address}: ${errMsg(err)}`);
-            });
+            const sinceReading = this.postReading.sinceReading(data.address);
+            this.handleAutonomousConnect(data).catch((err) =>
+              this.reportGattFailure('Autonomous GATT reading', data.address, err, sinceReading),
+            );
           }
         } catch {
           bleLog.debug('Connected payload was not JSON, ignoring');
@@ -285,13 +271,41 @@ export class ReadingWatcher implements Watcher {
           : results;
 
         for (const entry of candidates) {
-          this.rememberScanEntry(entry);
+          this.lastScanEntry.set(entry.address.toLowerCase(), entry);
           const info = toBleDeviceInfo(entry);
           logAdvert(entry.address, info);
           const adapter = resolveAdapter(info, this.adapters);
           if (!adapter) continue;
 
           const decision = evaluateAdvertisement(adapter, info);
+
+          // A known scale read from its advertisements is passive from its
+          // first frame, not only from its first complete reading. Seeded from
+          // ble.scale_mac without the flag, the ESP32 auto-connects to it on
+          // sight and pauses its scan for the attempt; a broadcast-only scale
+          // that refuses connections then never delivers the complete reading
+          // that used to be the only thing marking it passive. Limited to known
+          // MACs, the only ones the ESP32 connects to, so a neighbour's scale is
+          // not added to the ESP32's list before it produces a reading.
+          //
+          // Only on an advert that shows the scale is this adapter's. Before
+          // discovery Mi Scale 2 claims anything advertising 0x181B, and a
+          // standard BCS scale is read only through the connect that follows
+          // (see handleGattReading). Its bare advert decides 'gatt', and a 'wait'
+          // there only means some service data is present, so an adapter with a
+          // GATT path of its own counts only a frame it parsed.
+          const ownBroadcast =
+            decision.kind === 'complete' ||
+            decision.kind === 'partial' ||
+            (decision.kind === 'wait' && !adapter.charNotifyUuid);
+          if (
+            ownBroadcast &&
+            hasDiscoveredMac(entry.address) &&
+            readsFromAdvertisement(adapter) &&
+            !isPassiveMac(entry.address)
+          ) {
+            registerScaleMac(this.config, entry.address, adapter).catch(() => {});
+          }
 
           if (decision.kind === 'complete') {
             // Got the full reading; cancel any pending grace timer for this addr.
@@ -367,9 +381,10 @@ export class ReadingWatcher implements Watcher {
             // fall through to the host-initiated GATT path below
           }
 
-          this.handleGattReading(entry, adapter).catch((err) => {
-            bleLog.warn(`GATT reading failed for ${entry.address}: ${errMsg(err)}`);
-          });
+          const sinceReading = this.postReading.sinceReading(entry.address);
+          this.handleGattReading(entry, adapter).catch((err) =>
+            this.reportGattFailure('GATT reading', entry.address, err, sinceReading),
+          );
         }
         // No match this scan, keep listening
       } catch (err) {
@@ -482,23 +497,18 @@ export class ReadingWatcher implements Watcher {
   }
 
   /**
-   * Update matching config (e.g. after SIGHUP config reload). scaleAuth and
-   * weightUnit are taken as given, unset included, so removing a PIN takes
-   * effect too.
+   * Update matching config (e.g. after SIGHUP config reload). scaleAuth is
+   * taken as given, unset included, so removing a PIN takes effect too.
    */
   updateConfig(config: WatcherConfig): void {
     this.adapters = config.adapters;
     this.targetMac = config.targetMac;
     if (config.profile) this.profile = config.profile;
     this.scaleAuth = config.scaleAuth;
-    this.weightUnit = config.weightUnit;
-    this.selectProfile = config.selectProfile;
   }
 
-  private static readonly GATT_STALE_MS = 90_000;
-
-  /** Upper bound on remembered advertisements (see rememberScanEntry). */
-  private static readonly SCAN_CACHE_MAX = 64;
+  /** No session outlives its cap, so one still marked in progress past it is stale. */
+  private static readonly GATT_STALE_MS = PROXY_WATCHER_CAP_MS;
 
   /**
    * Number of consecutive auto_connect deferrals for one MAC before the watcher
@@ -507,47 +517,6 @@ export class ReadingWatcher implements Watcher {
    * never-firing autonomous path (auto-discovery / no scale_mac) reaches it.
    */
   private static readonly AUTO_CONNECT_FALLBACK_DEFERS = 3;
-
-  /**
-   * Remember the newest advertisement for an address, evicting the oldest entry
-   * past the cap. A busy room can put hundreds of devices through this handler
-   * every few seconds and the watcher runs for weeks at a time.
-   */
-  private rememberScanEntry(entry: ScanResultEntry): void {
-    const key = entry.address.toLowerCase();
-    this.lastScanEntry.delete(key);
-    this.lastScanEntry.set(key, entry);
-    while (this.lastScanEntry.size > ReadingWatcher.SCAN_CACHE_MAX) {
-      const oldest = this.lastScanEntry.keys().next().value;
-      if (oldest === undefined) break;
-      this.lastScanEntry.delete(oldest);
-    }
-  }
-
-  /**
-   * Pick the adapter that drives the read once the characteristics are known.
-   * Falls back to the pre-discovery choice when nothing matches.
-   *
-   * Adding characteristics can make MORE adapters match, which is what lets a
-   * structural matcher correct an advertisement-time guess. resolveAfterDiscovery
-   * bounds that the same way on every transport: a pick the advertised name made
-   * is not overturned by an adapter that claims on a characteristic alone.
-   */
-  private reresolveAfterDiscovery(
-    advertised: BleDeviceInfo,
-    characteristicUuids: string[],
-    fallback: ScaleAdapter,
-    address: string,
-  ): ScaleAdapter {
-    const resolved =
-      resolveAfterDiscovery(advertised, { characteristicUuids }, this.adapters) ?? fallback;
-    if (resolved.name !== fallback.name) {
-      bleLog.info(
-        `Re-resolved adapter after GATT discovery: ${fallback.name} -> ${resolved.name} (${address})`,
-      );
-    }
-    return resolved;
-  }
 
   /**
    * Log that a GATT session to an advertisement-read scale is being dropped.
@@ -569,18 +538,16 @@ export class ReadingWatcher implements Watcher {
   }
 
   private async handleGattReading(entry: ScanResultEntry, adapter: ScaleAdapter): Promise<void> {
-    if (this.gattInProgress) {
-      if (Date.now() - this.gattStartedAt > ReadingWatcher.GATT_STALE_MS) {
+    if (this.gattSlot) {
+      if (Date.now() - this.gattSlot.startedAt > ReadingWatcher.GATT_STALE_MS) {
         bleLog.warn('gattInProgress stuck for >90s, auto-resetting');
-        this.gattInProgress = false;
       } else {
         bleLog.info(`GATT connection already in progress, skipping ${entry.address}`);
         return;
       }
     }
-    this.gattInProgress = true;
-    this.gattStartedAt = Date.now();
-    const seq = ++this.gattSessionSeq;
+    const slot: GattSlot = { startedAt: Date.now() };
+    this.gattSlot = slot;
 
     const t = topics(this.config.topic_prefix, this.config.device_id);
     let client: MqttClient | undefined;
@@ -589,7 +556,7 @@ export class ReadingWatcher implements Watcher {
     // drove the read, which is the fact #317/#319 were both missing.
     let gattAdapter: ScaleAdapter = adapter;
     // Guard the whole connect+read sequence: if mqttGattConnect (or the client
-    // lookup) throws, the finally must still clear gattInProgress — otherwise a
+    // lookup) throws, the finally must still clear gattSlot — otherwise a
     // single failed connect blocks every later GATT retry until the 90s
     // stale-reset (#201).
     try {
@@ -612,7 +579,7 @@ export class ReadingWatcher implements Watcher {
       bleLog.info(`Connecting via GATT proxy to ${adapter.name} (${entry.address})...`);
       const connected = await mqttGattConnect(client, t, entry.address, entry.addr_type ?? 0);
       device = connected.device;
-      this.currentDevice = device;
+      slot.device = device;
       // Re-resolve char-aware now that GATT discovery is complete (#319). The
       // advertisement-time match sees a bare vendor service and can land on an
       // adapter wanting characteristics the device does not expose: a Eufy A1
@@ -624,12 +591,12 @@ export class ReadingWatcher implements Watcher {
       // The scan entry is spread in first: dropping name and services here
       // would strip every name-matched adapter of its match and collapse
       // resolution onto structural matchers only.
-      gattAdapter = this.reresolveAfterDiscovery(
+      gattAdapter = selectSessionAdapter(
         toBleDeviceInfo(entry),
-        [...connected.charMap.keys()],
-        adapter,
-        entry.address,
-      );
+        { characteristicUuids: [...connected.charMap.keys()] },
+        this.adapters,
+        { advertisedPick: adapter, address: entry.address },
+      )!;
       // Checked only now, against the char-aware adapter. Before discovery Mi
       // Scale 2 claims anything advertising the generic 0x181B service, and a
       // standard BCS scale reaches its own adapter only through this connect;
@@ -641,34 +608,21 @@ export class ReadingWatcher implements Watcher {
         return;
       }
       bleLog.debug(`GATT read driven by adapter: ${gattAdapter.name} (${entry.address})`);
-      // Through withAbandonmentCleanup, so a timeout still hands over the
-      // stored weigh-ins the session collected (#331).
-      const raw = await withAbandonmentCleanup(connected.device, () =>
-        withTimeout(
-          withIdleTimeout(
-            (onActivity) =>
-              waitForRawReading(
-                connected.charMap,
-                connected.device,
-                gattAdapter,
-                profile,
-                entry.address.replace(/[:-]/g, '').toUpperCase(),
-                this.weightUnit,
-                undefined,
-                this.scaleAuth,
-                onActivity,
-                entry.name,
-                toBleDeviceInfo(entry).manufacturerData,
-                this.selectProfile,
-              ),
-            GATT_READING_IDLE_MS,
-            `GATT reading timeout for ${entry.address}`,
-          ),
-          GATT_SESSION_ABSOLUTE_MS,
-          `GATT session cap exceeded for ${entry.address}`,
-        ),
+      const raw = await runGattSession(
+        {
+          charMap: connected.charMap,
+          device: connected.device,
+          adapter: gattAdapter,
+          profile,
+          address: entry.address.replace(/[:-]/g, '').toUpperCase(),
+          scaleAuth: this.scaleAuth,
+          deviceName: entry.name,
+          manufacturerData: toBleDeviceInfo(entry).manufacturerData,
+        },
+        proxyWatcherPolicy(entry.address),
       );
       registerScaleMac(this.config, entry.address, gattAdapter).catch(() => {});
+      this.postReading.noteReading(entry.address);
       this.queue.push(raw);
       this.deferCounts.delete(entry.address);
     } finally {
@@ -683,12 +637,36 @@ export class ReadingWatcher implements Watcher {
       device?.fireDisconnect();
       device?.cleanup();
       // A superseded session must not tear down the one that replaced it (#296).
-      if (seq === this.gattSessionSeq) {
-        this.gattInProgress = false;
-        this.currentDevice = null;
+      if (this.gattSlot === slot) {
+        this.gattSlot = null;
         if (client) await mqttGattDisconnect(client, t).catch(() => {});
       }
     }
+  }
+
+  /**
+   * Log a GATT session that ended without a reading. A session opened inside
+   * the post-reading window is the scale still on after its weigh-in, not a
+   * failure; any other one warns.
+   */
+  private reportGattFailure(
+    kind: string,
+    address: string,
+    err: unknown,
+    sinceReading: number | undefined,
+  ): void {
+    if (sinceReading !== undefined) {
+      // A reconnect to a scale still on after its reading (#466): by the ESP32
+      // itself, or by the host on the next scan batch.
+      this.postReading.reportNoWeighIn(
+        address,
+        `${kind} for ${address}`,
+        sinceReading,
+        errMsg(err),
+      );
+      return;
+    }
+    bleLog.warn(`${kind} failed for ${address}: ${errMsg(err)}`);
   }
 
   /**
@@ -702,7 +680,7 @@ export class ReadingWatcher implements Watcher {
     address: string;
     chars: Array<{ uuid: string; properties: string[] }>;
   }): Promise<void> {
-    if (this.gattInProgress) {
+    if (this.gattSlot) {
       // Never skip an autonomous connect. The ESP32 holds exactly one BLE
       // connection and disconnects before every auto-connect, so a newer
       // autonomous event means the older session is already dead on the proxy;
@@ -711,11 +689,10 @@ export class ReadingWatcher implements Watcher {
       bleLog.warn(
         `Newer autonomous connect for ${data.address} supersedes the in-flight GATT session`,
       );
-      this.currentDevice?.fireDisconnect();
+      this.gattSlot.device?.fireDisconnect();
     }
-    this.gattInProgress = true;
-    this.gattStartedAt = Date.now();
-    const seq = ++this.gattSessionSeq;
+    const slot: GattSlot = { startedAt: Date.now() };
+    this.gattSlot = slot;
 
     const t = topics(this.config.topic_prefix, this.config.device_id);
     let client: MqttClient | undefined;
@@ -742,22 +719,11 @@ export class ReadingWatcher implements Watcher {
           `Autonomous connect: using cached advertisement name "${safeName(cached.name)}"`,
         );
       }
-      let adapter = resolveAfterDiscovery(info, { characteristicUuids }, this.adapters);
-      if (!adapter) {
-        // No structural match: fall back to a priority-ordered notify-char scan
-        // so name/notify-only adapters still resolve when nothing matches by
-        // descriptor. A stable sort keeps input order for ties.
-        adapter = [...this.adapters]
-          .sort((a, b) => (b.match?.priority ?? 0) - (a.match?.priority ?? 0))
-          .find((a) => {
-            if (a.charNotifyUuid) {
-              // Normalize both sides (case + 16-bit vs 128-bit) to avoid silent mismatches.
-              const normalized = normalizeUuid(a.charNotifyUuid);
-              return data.chars.some((c) => normalizeUuid(c.uuid) === normalized);
-            }
-            return false;
-          });
-      }
+      // A structural match first; a device nothing matches by descriptor goes
+      // to the adapter whose notify characteristic it has.
+      const adapter = selectSessionAdapter(info, { characteristicUuids }, this.adapters, {
+        byNotifyChar: true,
+      });
 
       if (!adapter) {
         bleLog.warn(
@@ -797,39 +763,28 @@ export class ReadingWatcher implements Watcher {
       bleLog.info(`Autonomous GATT connect from ESP32: ${adapter.name} (${data.address})`);
       const { charMap, device: dev } = buildCharMapFromPayload(client, t, data.chars);
       device = dev;
-      this.currentDevice = device;
+      slot.device = device;
       bleLog.debug(
         `Autonomous connect: charMap built with ${charMap.size} chars, waiting for reading...`,
       );
 
-      const raw = await withAbandonmentCleanup(dev, () =>
-        withTimeout(
-          withIdleTimeout(
-            (onActivity) =>
-              waitForRawReading(
-                charMap,
-                dev,
-                adapter,
-                profile,
-                data.address.replace(/[:-]/g, '').toUpperCase(),
-                this.weightUnit,
-                undefined,
-                this.scaleAuth,
-                onActivity,
-                info.localName,
-                info.manufacturerData,
-                this.selectProfile,
-              ),
-            GATT_READING_IDLE_MS,
-            `GATT reading timeout for ${data.address} (autonomous)`,
-          ),
-          GATT_SESSION_ABSOLUTE_MS,
-          `GATT session cap exceeded for ${data.address} (autonomous)`,
-        ),
+      const raw = await runGattSession(
+        {
+          charMap,
+          device: dev,
+          adapter,
+          profile,
+          address: data.address.replace(/[:-]/g, '').toUpperCase(),
+          scaleAuth: this.scaleAuth,
+          deviceName: info.localName,
+          manufacturerData: info.manufacturerData,
+        },
+        proxyWatcherPolicy(`${data.address} (autonomous)`),
       );
       registerScaleMac(this.config, data.address, adapter).catch(() => {});
+      this.postReading.noteReading(data.address);
       bleLog.info(
-        `Autonomous GATT reading complete: ${raw.reading.weight} kg from ${data.address}`,
+        `Autonomous GATT reading complete: ${raw.reading.weight.toFixed(2)} kg from ${data.address}`,
       );
       this.queue.push(raw);
     } finally {
@@ -837,9 +792,8 @@ export class ReadingWatcher implements Watcher {
       // reading releases its notification listeners.
       device?.fireDisconnect();
       device?.cleanup();
-      if (seq === this.gattSessionSeq) {
-        this.gattInProgress = false;
-        this.currentDevice = null;
+      if (this.gattSlot === slot) {
+        this.gattSlot = null;
         if (client) await mqttGattDisconnect(client, t).catch(() => {});
       }
     }

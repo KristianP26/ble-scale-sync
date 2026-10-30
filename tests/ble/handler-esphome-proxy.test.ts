@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import type { MockInstance } from 'vitest';
 import { EventEmitter } from 'node:events';
 import type {
   ScaleAdapter,
@@ -7,6 +8,7 @@ import type {
   UserProfile,
   BleDeviceInfo,
 } from '../../src/interfaces/scale-adapter.js';
+import { makeBodyComposition } from '../helpers/scale-test-utils.js';
 import type { EsphomeProxyConfig } from '../../src/config/schema.js';
 
 // Suppress log output
@@ -80,10 +82,8 @@ function makeBroadcastAdapter(): ScaleAdapter {
       data.length >= 2 ? { weight: 75.5, impedance: 400 } : null,
     ) as ScaleAdapter['parseBroadcast'],
     isComplete: (r: ScaleReading): boolean => r.weight > 0,
-    computeMetrics: (r: ScaleReading): BodyComposition => ({
-      weight: r.weight,
-      impedance: r.impedance,
-    }),
+    computeMetrics: (r: ScaleReading): BodyComposition =>
+      makeBodyComposition({ weight: r.weight, impedance: r.impedance }),
     parseNotification: () => null,
     // broadcast-only scale: no GATT UUIDs
     charNotifyUuid: undefined as unknown as string,
@@ -122,10 +122,8 @@ function makePassiveAdapter(
       }
     }) as ScaleAdapter['parseServiceData'],
     isComplete: (r: ScaleReading): boolean => r.weight > 0 && r.impedance > 0,
-    computeMetrics: (r: ScaleReading): BodyComposition => ({
-      weight: r.weight,
-      impedance: r.impedance,
-    }),
+    computeMetrics: (r: ScaleReading): BodyComposition =>
+      makeBodyComposition({ weight: r.weight, impedance: r.impedance }),
     parseNotification: () => null,
     charNotifyUuid: undefined as unknown as string,
     charWriteUuid: undefined as unknown as string,
@@ -139,10 +137,8 @@ function makeGattOnlyAdapter(): ScaleAdapter {
     name: 'MockGattOnly',
     matches: vi.fn((info: BleDeviceInfo) => info.localName === 'GATT-scale'),
     isComplete: (r: ScaleReading): boolean => r.weight > 0,
-    computeMetrics: (r: ScaleReading): BodyComposition => ({
-      weight: r.weight,
-      impedance: r.impedance,
-    }),
+    computeMetrics: (r: ScaleReading): BodyComposition =>
+      makeBodyComposition({ weight: r.weight, impedance: r.impedance }),
     parseNotification: () => null,
     charNotifyUuid: '0000ffe1-0000-1000-8000-00805f9b34fb',
     charWriteUuid: '0000ffe2-0000-1000-8000-00805f9b34fb',
@@ -162,10 +158,8 @@ function makeDualModeAdapter(): ScaleAdapter {
     matches: vi.fn((info: BleDeviceInfo) => info.localName === 'DualMode-scale'),
     parseBroadcast: vi.fn((): ScaleReading | null => null) as ScaleAdapter['parseBroadcast'],
     isComplete: (r: ScaleReading): boolean => r.weight > 0,
-    computeMetrics: (r: ScaleReading): BodyComposition => ({
-      weight: r.weight,
-      impedance: r.impedance,
-    }),
+    computeMetrics: (r: ScaleReading): BodyComposition =>
+      makeBodyComposition({ weight: r.weight, impedance: r.impedance }),
     parseNotification: () => null,
     charNotifyUuid: '0000fff1-0000-1000-8000-00805f9b34fb',
     charWriteUuid: '0000fff2-0000-1000-8000-00805f9b34fb',
@@ -236,7 +230,7 @@ describe('transport capability summary (#116)', () => {
     vi.clearAllMocks();
   });
 
-  const summaryLines = (logSpy: ReturnType<typeof vi.spyOn>): string[] =>
+  const summaryLines = (logSpy: MockInstance<typeof console.log>): string[] =>
     logSpy.mock.calls
       .map((c) => String(c[0]))
       .filter((s) => /ESPHome proxy transport ready \(broadcast \+ GATT\)/.test(s));

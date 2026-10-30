@@ -100,6 +100,27 @@ function reclaimNobleDriver(): void {
   publishedNobleDriver = null;
 }
 
+/**
+ * Run a config load without changing the noble driver in use. noble_driver is
+ * restart-required, but src/ble/index.ts reads NOBLE_DRIVER again on every
+ * poll cycle, so a reload that re-published it loaded the other noble module
+ * next to the running one in the same process, both on the same HCI. The load
+ * still reclaims and publishes as usual, so env overrides are read against the
+ * real environment; afterwards the variable and the record of our own write
+ * go back to what they were, and the next load reclaims the startup value.
+ */
+export function keepNobleDriver<T>(load: () => T): T {
+  const env = process.env.NOBLE_DRIVER;
+  const published = publishedNobleDriver;
+  try {
+    return load();
+  } finally {
+    if (env === undefined) delete process.env.NOBLE_DRIVER;
+    else process.env.NOBLE_DRIVER = env;
+    publishedNobleDriver = published;
+  }
+}
+
 function publishNobleDriver(driver: string | undefined): void {
   // A NOBLE_DRIVER that only came from .env was not applied as an override
   // (G-03), so it must not pick the driver through process.env either. The

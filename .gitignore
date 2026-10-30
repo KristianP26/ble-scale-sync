@@ -64,6 +64,13 @@ strava-tokens/
 .scale-dedup-marks.json
 .scale-dedup-marks.json.tmp
 
+# Last live weigh-in per user for the replay check (runtime artifact, next to config.yaml)
+.last-live-weigh-ins.json
+.last-live-weigh-ins.json.tmp
+
 # VitePress
 docs/.vitepress/dist/
 docs/.vitepress/cache/
+
+# Local planning notes from agent tooling, not tracked
+docs/superpowers/

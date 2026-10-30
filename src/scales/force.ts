@@ -54,19 +54,29 @@ export function applyForcedAdapter(
   return [forceAdapter(found)];
 }
 
+const forced = new WeakSet<ScaleAdapter>();
+
+/**
+ * Whether this is the wrapper `applyForcedAdapter` made. Detection normally
+ * guarantees that an adapter was selected BY the advertisement in front of it;
+ * a forced one breaks that on purpose, so the places that lean on it ask.
+ */
+export function isForced(adapter: ScaleAdapter): boolean {
+  return forced.has(adapter);
+}
+
 /** Wrap an adapter so it claims every device it is offered. */
 function forceAdapter(adapter: ScaleAdapter): ScaleAdapter {
-  return new Proxy(adapter, {
+  const wrapper = new Proxy(adapter, {
     get(target, prop, _receiver) {
       if (prop === 'matches') {
         // Run the real matcher first, for its SIDE EFFECTS, then claim the
-        // device regardless of what it said. Two adapters record their protocol
-        // variant here off the advertised name (Beurer/Sanitas `isBf710Type`,
-        // Yunmai `isMini` plus its per-address record), and replacing the
-        // method outright left them on the default variant: a forced SBF70
-        // decoded every weigh-in as a constant 12.80 kg (#384). Throwing is
-        // contained, because failing to claim the device is not an option the
-        // override leaves open.
+        // device regardless of what it said. Beurer/Sanitas records its
+        // protocol variant here off the advertised name (`isBf710Type`), and
+        // replacing the method outright left it on the default variant: a
+        // forced SBF70 decoded every weigh-in as a constant 12.80 kg (#384).
+        // Throwing is contained, because failing to claim the device is not an
+        // option the override leaves open.
         return (device: BleDeviceInfo): boolean => {
           try {
             target.matches(device);
@@ -77,11 +87,6 @@ function forceAdapter(adapter: ScaleAdapter): ScaleAdapter {
           return true;
         };
       }
-      // Marks this adapter as one that did NOT earn its device by matching it.
-      // `hasParseableBroadcastSource` uses it to require a real parse before
-      // gating a dual-mode adapter into "wait for a broadcast", which would
-      // otherwise starve the GATT path forever.
-      if (prop === 'isForcedOverride') return true;
       // Bind to the real adapter, never to the proxy: adapters keep per-session
       // state in private fields and `this` must resolve to the instance holding
       // them.
@@ -91,4 +96,6 @@ function forceAdapter(adapter: ScaleAdapter): ScaleAdapter {
         : value;
     },
   });
+  forced.add(wrapper);
+  return wrapper;
 }

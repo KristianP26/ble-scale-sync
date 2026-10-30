@@ -36,7 +36,7 @@ const PASSWORD_FIELD_KEYS: ReadonlySet<string> = new Set(
  * bind key, the Beurer PIN and the Home Assistant token (ble.ha_bluetooth).
  * `topic` too: on a public ntfy server the topic name is the only thing
  * between a stranger and the measurements. It hides the MQTT topic as well,
- * the cheaper mistake.
+ * the cheaper mistake. The R-MSC04 profile byte too: it may carry sex and age.
  */
 const SECRET_KEYS: ReadonlySet<string> = new Set([
   'encryption_key',
@@ -44,6 +44,7 @@ const SECRET_KEYS: ReadonlySet<string> = new Set([
   'beurer_pin',
   'token',
   'topic',
+  'rmsc04_profile_byte',
 ]);
 
 /**

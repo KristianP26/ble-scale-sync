@@ -103,9 +103,7 @@ describe('stravaAuthStep', () => {
     expect(body).toMatchObject({ client_id: '42', client_secret: 'real-secret', code: 'the-code' });
     expect(out.join('\n')).toContain('client_id=42');
     // The config keeps the reference.
-    expect((ctx.config.users![0].exporters![0] as { client_secret: string }).client_secret).toBe(
-      '${BSS_TEST_STRAVA_SECRET}',
-    );
+    expect(ctx.config.users![0].exporters![0].client_secret).toBe('${BSS_TEST_STRAVA_SECRET}');
   });
 
   it('asks for a new code after a refused exchange', async () => {

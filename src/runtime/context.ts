@@ -8,6 +8,7 @@ import type {
 import type { BleHandlerName } from '../ble/types.js';
 import type { ConfigSource } from '../config/load.js';
 import { resolveExportQueuePath } from './export-queue.js';
+import { restoreReplayAnchors } from './replay-anchors.js';
 import type { ResolvedRuntimeConfig } from '../config/resolve.js';
 import type { EmbeddedBrokerHandle } from '../ble/embedded-broker.js';
 import type { Exporter } from '../interfaces/exporter.js';
@@ -28,6 +29,11 @@ export interface AppContext {
   readonly exportQueuePath: string | undefined;
   /** Whether a failed export is persisted for a later cycle (#412). */
   readonly retryFailedExports: boolean;
+  /**
+   * Where the last live weigh-in of each user is kept across a restart (D067),
+   * or undefined to keep none (.env mode, and every test that does not opt in).
+   */
+  readonly replayAnchorsPath: string | undefined;
   readonly bleHandler: BleHandlerName;
   readonly bleAdapter: string | undefined;
   /**
@@ -41,13 +47,26 @@ export interface AppContext {
   readonly exporterCache: Map<string, Exporter[]>;
 
   /**
-   * Per-user runtime anchor of the last successfully-exported weight, keyed by
-   * user slug. Single-user mode uses this (not config) as its #164 replay-dedup
-   * anchor, since it never writes last_known_weight. Survives config reload (it
-   * is process-lifetime dedup state, NOT a hot-swap field), so setConfig must
-   * not clear it.
+   * Per-user runtime anchor of the last exported LIVE weight, keyed by user
+   * slug. The #164 replay dedup uses it next to last_known_weight from config,
+   * in both modes: the file is rewritten only after a 0.5 kg change, so it can
+   * lag behind (E-09). Starts with the weigh-ins an earlier process saved
+   * (D067). Survives config reload (it is dedup state, NOT a hot-swap field),
+   * so setConfig must not clear it.
    */
   readonly lastExportedWeights: Map<string, number>;
+
+  /**
+   * When the weigh-in behind `lastExportedWeights` was taken, keyed by user
+   * slug: its own stamp when it carried one, else its receipt time. The replay
+   * dedup compares a stored record's own time with it (#475). Restored and
+   * kept across a reload like `lastExportedWeights`, and set with it, except
+   * for a time before 2024 (a host clock not set yet), which is dropped. A user
+   * without an entry has no known time, and the dedup then judges by weight
+   * alone (D067: the process start used to stand in, but it
+   * is the host's clock, not the scale's).
+   */
+  readonly lastExportedAt: Map<string, Date>;
 
   // Lifecycle handle (mqtt-proxy only; set after bootstrapMqttProxy)
   embeddedBroker: EmbeddedBrokerHandle | null;
@@ -72,11 +91,23 @@ export interface AppContextInit {
   resolved: ResolvedRuntimeConfig;
   configSource: ConfigSource;
   configPath: string | undefined;
+  /** The anchor file to restore from and save to (D067); omitted = keep none. */
+  replayAnchorsPath?: string;
   signal: AbortSignal;
   abortApp: (reason?: unknown) => void;
 }
 
 export function createAppContext(init: AppContextInit): AppContext {
+  const lastExportedWeights = new Map<string, number>();
+  const lastExportedAt = new Map<string, Date>();
+  if (init.replayAnchorsPath) {
+    restoreReplayAnchors(
+      init.replayAnchorsPath,
+      init.config.users,
+      lastExportedWeights,
+      lastExportedAt,
+    );
+  }
   const ctx: AppContext = {
     config: init.config,
     scaleMac: init.resolved.scaleMac,
@@ -93,6 +124,7 @@ export function createAppContext(init: AppContextInit): AppContext {
     exportQueuePath: init.resolved.retryFailedExports
       ? resolveExportQueuePath(init.configPath)
       : undefined,
+    replayAnchorsPath: init.replayAnchorsPath,
     bleHandler: init.resolved.bleHandler,
     bleAdapter: init.resolved.bleAdapter,
     adapterPrivacy: init.resolved.adapterPrivacy,
@@ -100,7 +132,8 @@ export function createAppContext(init: AppContextInit): AppContext {
     haBluetooth: init.resolved.haBluetooth,
     signal: init.signal,
     exporterCache: new Map(),
-    lastExportedWeights: new Map(),
+    lastExportedWeights,
+    lastExportedAt,
 
     embeddedBroker: null,
 

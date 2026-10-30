@@ -1,203 +1,143 @@
 ---
 title: FAQ
-description: Frequently asked questions about BLE Scale Sync. Supported scales, privacy, body composition accuracy, Garmin 2FA, deployment options, and updates.
+description: Short answers to common BLE Scale Sync questions, each linking to the page with the details.
 outline: deep
-head:
-  - - meta
-    - name: keywords
-      content: ble scale sync faq, smart scale garmin questions, bluetooth scale raspberry pi faq, body composition accuracy, garmin 2fa scale, home assistant smart scale faq, multi user scale, ble scale privacy
-  - - script
-    - type: application/ld+json
-    - |-
-      {"@context":"https://schema.org","@type":"FAQPage","mainEntity":[{"@type":"Question","name":"Do I need a smartphone?","acceptedAnswer":{"@type":"Answer","text":"No. BLE Scale Sync is designed to replace the vendor phone app. Reads happen entirely on your server (Raspberry Pi, NAS, PC, Home Assistant host, or Docker host). Once the service runs, stepping on the scale is the only user action."}},{"@type":"Question","name":"Do I need Home Assistant?","acceptedAnswer":{"@type":"Answer","text":"No. The Home Assistant Add-on is one deployment target out of several. You can run the app on plain Docker, bare Node.js, or as the HA add-on. All three speak MQTT auto-discovery so the data can still appear in HA either way."}},{"@type":"Question","name":"Does it work offline without WiFi?","acceptedAnswer":{"@type":"Answer","text":"BLE read and body composition calculation are fully offline. Local exporters (File CSV/JSONL, a local MQTT broker, a local InfluxDB) work without internet. Cloud exporters (Garmin Connect, Strava, public Ntfy) need internet at the moment of export. A failed export to a target that can record a past reading (Garmin, InfluxDB, file, Intervals, Runalyze, wger, HealthLog, Dreeve) is kept and retried on a later cycle for up to 72 hours; for the other targets a failure is final."}},{"@type":"Question","name":"Is my scale supported?","acceptedAnswer":{"@type":"Answer","text":"There are 42 scale adapters covering Xiaomi, Renpho, QN Scale, Eufy, Yunmai, Beurer, Sanitas, Medisana, Soehnle, and many unbranded Asian scales that reuse Renpho or QN protocols. Check the supported scales page for the full list. Auto-detect covers most cases."}},{"@type":"Question","name":"What does the update check send?","acceptedAnswer":{"@type":"Answer","text":"One GET request per 24 hours to api.blescalesync.dev/version after a successful measurement. Only the app version, OS, and CPU architecture are sent via the User-Agent header. No readings, no MAC address, no user data. The date of the last check is stored locally in .update-check-state.json next to your config file, so restarting does not send another check. The check is disabled automatically when CI=true, and can be turned off with update_check: false in config.yaml."}},{"@type":"Question","name":"Why are my body fat numbers different from the manufacturer app?","acceptedAnswer":{"@type":"Answer","text":"Scale vendors keep their BIA formulas closed and tune them for their own hardware. This project uses openScale-derived formulas, plus the Deurenberg fallback when impedance is not available. Absolute numbers will differ by a few percent from the vendor app, which is normal for any consumer BIA device. Use the trend, not the absolute value, for tracking."}},{"@type":"Question","name":"Does Garmin Connect 2FA / MFA work?","acceptedAnswer":{"@type":"Answer","text":"Yes. The setup wizard prompts for the 2FA code during the first login. Tokens are cached and reused for roughly twelve months, so the code is only needed once per cycle. Headless servers authenticate interactively during setup-garmin."}},{"@type":"Question","name":"Can I use multiple scales at once?","acceptedAnswer":{"@type":"Answer","text":"Not yet in a single instance. A workaround is to run two independent services with separate config files. Full multi-scale aggregation is tracked in GitHub issue 124."}}]}
 ---
 
 # Frequently Asked Questions
 
-Short answers to the questions that come up most often. For step-by-step setup, start with the [Getting Started](/guide/getting-started) guide. For scale-specific or connection issues, see [Troubleshooting](/troubleshooting).
+For a specific error, see [Troubleshooting](/troubleshooting).
 
-> [!TIP]
-> Every question on this page is listed in the **On this page** sidebar on the right. Press `/` to search across all docs at once. Most answers link to the longer reference page if you need more detail.
-
-## Getting started
+## Getting Started
 
 ### Do I need a smartphone?
 
-No. The whole point of BLE Scale Sync is going phone-free. Measurements happen entirely on your server (Raspberry Pi, NAS, PC, Home Assistant host, or Docker host). Once the service is running, stepping on the scale is the only user action involved.
+No. The app reads the scale over Bluetooth on your server (a Raspberry Pi, NAS, PC or Home Assistant host), so stepping on the scale is all you do once it runs. See [Getting Started](/guide/getting-started).
 
 ### Do I need Home Assistant?
 
-No. The [Home Assistant Add-on](/guide/home-assistant-addon) is one deployment target out of several. You can also run on plain [Docker](/guide/getting-started#docker), as a [standalone Node.js process](/guide/getting-started#standalone), or behind an [ESP32 proxy](/guide/esp32-proxy). Any of those three speak MQTT auto-discovery, so the sensors can still appear in HA if you want them to.
+No. The app runs on Docker, as a Node.js process or as a Home Assistant add-on, and each of them can publish to Home Assistant over MQTT if you want the sensors there. See [Getting Started](/guide/getting-started) and [MQTT](/exporters#mqtt).
 
-### Does it work offline, without WiFi?
+### Does it work offline, without Wi-Fi? {#does-it-work-offline-without-wifi}
 
-BLE read and body composition calculation are fully offline. Local exporters (File CSV/JSONL, a local MQTT broker, a local InfluxDB) work with no internet at all. Cloud exporters (Garmin Connect, Strava, public Ntfy) need internet only at the moment of export.
-
-Since v1.29 there **is** a retry queue, for the targets that can accept a past reading: a failed Garmin, InfluxDB, file, Intervals, Runalyze, wger, HealthLog or Dreeve export is kept and retried for up to 72 hours, at roughly 15 minutes, 1 hour, 6 hours, 24 hours and 71 hours after the failure. MQTT, webhook, ntfy, Strava and Telegram cannot record a past measurement, so a failure there is still final. Other exporters in the same fan-out run independently, so a File or local MQTT export still succeeds regardless.
-
-Each export is attempted **three times** before it is given up on, waiting 1 s and then 2 s between them. A 5xx, a 408 or a 429 from the server is retried; any other 4xx is not, because a rejected token or a malformed request fails the same way every time. So a momentary blip is usually absorbed by an HTTP exporter, and a rejected token fails on the first attempt rather than three times. The Garmin exporter is the exception: it talks to a Python uploader rather than an HTTP endpoint, so it cannot tell those apart and retries either way.
+Reading the scale and calculating body composition work offline, and so do local targets such as a file or a local MQTT broker. Cloud targets such as Garmin Connect need internet at the moment of export. A failed export to a target that can record a past measurement is retried later; see [historical readings](/exporters#historical-readings).
 
 ### What hardware do I need?
 
-Any device with a BLE radio running Node.js 22+ or Docker. Recommended: [Raspberry Pi Zero 2W](/guide/getting-started#recommended-hardware) for about 15 euros, with built-in Bluetooth and roughly 0.4 W idle power draw. The original Pi Zero W (first-gen, ARMv6) is [not supported](/troubleshooting#install-fails-on-raspberry-pi-zero-w-first-gen).
+A host with Bluetooth that runs Docker or a supported Node.js version, or a Bluetooth proxy near the scale. A Raspberry Pi Zero 2 W is enough; the first Pi Zero W is [not supported](/troubleshooting#install-fails-on-raspberry-pi-zero-w-first-gen). See [recommended hardware](/guide/getting-started#recommended-hardware).
 
----
-
-## Privacy and data
+## Privacy and Data
 
 ### Where does my data go?
 
-> [!IMPORTANT]
-> Only to the exporters you configure in `config.yaml`. Enable Garmin and readings go to Garmin Connect; enable only File and data stays on disk. There is no vendor cloud in the middle, no account, and no telemetry beyond the optional anonymous update check.
+Only to the exporters you configure. There is no vendor cloud and no account; the one other request the app makes is the optional update check below. See [Exporters](/exporters).
 
 ### What does the update check send?
 
-One `GET api.blescalesync.dev/version` request per 24 hours after a successful reading. Only the app version, OS, and CPU architecture travel in the `User-Agent` header. No readings, no MAC, no user data. Aggregated stats are visible at [stats.blescalesync.dev](https://stats.blescalesync.dev).
-
-The date of the last check is stored locally in `.update-check-state.json` next to your config file (`/data` on the Home Assistant add-on, `/app` inside the container on Docker, because the usual `-v ./config.yaml:/app/config.yaml` mounts the file and not the directory), so a restart does not trigger another check. Nothing from that file is ever sent.
+At most one `GET https://api.blescalesync.dev/version` per UTC day, after a measurement. It carries only the app version, the OS and the CPU architecture in the `User-Agent` header: no readings, no MAC address, no user data. The date of the last check is kept locally in `.update-check-state.json` and never sent; aggregated stats are public at [stats.blescalesync.dev](https://stats.blescalesync.dev). See [Update check](/guide/configuration#update-check).
 
 ### Can I disable the update check?
 
-Yes. Set `update_check: false` in `config.yaml` (in the Home Assistant add-on, turn off the `update_check` option), or run with `CI=true` in the environment. See the [Configuration reference](/guide/configuration#update-check).
-
----
+Yes. Set `update_check: false` in `config.yaml` (in the add-on, turn off the `update_check` option), or run with `CI=true`. See [Update check](/guide/configuration#update-check).
 
 ## Scales and BLE
 
 ### Is my scale supported?
 
-Check the [supported scales](/guide/supported-scales) page for the full list of 42 adapters. Coverage includes Xiaomi, Renpho (Elis 1, FITINDEX, Sencor, QN Scale), Eufy, Yunmai, Beurer (incl. BF720 / BF105 / BF500 / BF788 / BF950), Sanitas, Medisana, Soehnle, and many unbranded Asian scales that reuse the Renpho or QN protocol. Auto-detect matches most devices without any MAC pinning.
+Check the [supported scales](/guide/supported-scales) page for the full list of 42 adapters. Most scales are detected automatically, without a MAC address; set `ble.scale_mac` afterwards so the app reads only yours.
 
 ### My scale is not listed. Can I add it?
 
-Yes, and community adapter contributions are welcome. Open a [GitHub issue](https://github.com/KristianP26/ble-scale-sync/issues/new/choose) with the scan output, a diagnose dump, and an HCI snoop log from the vendor app (three things the issue template asks for). Most new protocols land in 50 to 150 lines once the captures are in hand.
+Yes. Open a [GitHub issue](https://github.com/KristianP26/ble-scale-sync/issues/new/choose) with the scan output, a `ble-scale-sync diagnose` dump and, if you can, a [raw capture](/troubleshooting#capturing-every-frame-for-a-scale-that-is-not-decoded-correctly). [Report an issue](/troubleshooting#report-an-issue) lists what else to attach.
 
-### Can I use multiple scales with one user?
+### Can I use several scales with one user? {#can-i-use-multiple-scales-with-one-user}
 
-Not yet in a single instance. As a workaround, run two independent services with separate config files. First-class multi-scale aggregation (merge, priority fallback, per-user pinning) is tracked in [issue 124](https://github.com/KristianP26/ble-scale-sync/issues/124).
+One instance reads one scale at a time; with `ble.scale_mac` unset it reads whichever supported scale it finds first. To use two scales side by side, run one instance per scale, each with its own config file and `ble.scale_mac`. See [Configuration](/guide/configuration#ble).
 
 ### How do I find my scale's MAC address?
 
-```bash
-# Docker
-docker run --rm --network host --cap-add NET_ADMIN --cap-add NET_RAW \
-  --group-add "$(getent group bluetooth | cut -d: -f3)" -v /var/run/dbus:/var/run/dbus:ro \
-  ghcr.io/kristianp26/ble-scale-sync:latest scan
-
-# Node.js (npm install or npx)
-ble-scale-sync scan
-
-# Node.js (from a clone)
-npm run scan
-```
-
-Step on the scale during the scan so it starts advertising.
+Run `ble-scale-sync scan` (`npm run scan` from a clone, or the Docker `scan` command) and step on the scale while it runs. See [Getting Started](/guide/getting-started#docker).
 
 ### I set an option from the documentation and it does nothing. Why?
 
-Two causes, and the log tells them apart.
+If the log says `Unknown config key '...'`, your build is older than the option: update the app. Otherwise the option was read, and the `Version` line at the top of the log names the exact build to put in an issue. In the add-on, installing the repository with `#dev` changes the options UI but not the app, see [testing a development build](/guide/home-assistant-addon#testing-a-development-build).
 
-If the log says `Unknown config key '...' in config.yaml`, the option is real but your build is older than it. Options are documented as soon as they land on `dev`; update to a release that contains it.
+### My scale is discovered but the connection fails. What do I try first? {#my-scale-is-discovered-but-connection-fails-what-do-i-try-first}
 
-If there is no such warning, the option was understood and something else is going on. The `Version` line at the top of the log names the exact build, including the image channel and commit when running a container, which is worth pasting into any issue.
+On Linux, run `sudo systemctl restart bluetooth` and step on the scale again. Then follow [Connection Fails or Ends](/troubleshooting#connection-fails-or-ends).
 
-Home Assistant add-on users: installing the repository with `#dev` updates the options UI but **not** the application image. See [Testing a development build](/guide/home-assistant-addon#testing-a-development-build).
+### My Raspberry Pi stops finding the scale after a few hours. How do I fix it? {#my-raspberry-pi-works-for-a-few-hours-then-stops-finding-the-scale-until-i-reboot-how-do-i-fix-this}
 
-### My scale is discovered but connection fails. What do I try first?
+That is the BlueZ stuck state of the on-board Broadcom chip. The app restarts discovery and resets the adapter on its own; if it keeps coming back, a Bluetooth proxy avoids it. See [BlueZ stuck state](/troubleshooting#ble-discovery-stops-working-after-hours-bluez-stuck-state).
 
-On Linux, `sudo systemctl restart bluetooth` fixes roughly 80% of transient GATT issues. If failures persist, flip `ble.noble_driver` between `abandonware` and `stoprocent` in `config.yaml`. The full decision tree lives in [Troubleshooting](/troubleshooting).
+## Body Composition
 
-### My Raspberry Pi works for a few hours then stops finding the scale until I reboot. How do I fix this?
+### Why are my body fat numbers different from the manufacturer's app?
 
-This is the BlueZ "stuck discovery" state, a known kernel/firmware-level issue on Pi 3 / 4 / Zero 2W with the on-board Broadcom Bluetooth chip. BLE Scale Sync's recovery tiers (D-Bus stop, btmgmt power-cycle, rfkill, `systemctl restart bluetoothd`) clear it on most setups but sometimes don't on Pi Broadcom firmware. Home Assistant has the [same problem](https://github.com/home-assistant/operating-system/issues/4022) and recommends the same fix: an [ESP32](/guide/esp32-proxy) or [ESPHome](/guide/esphome-proxy) Bluetooth proxy that runs the BLE work outside the Pi. If you want to stick with the on-board chip, the built-in [watchdog](/troubleshooting#ble-discovery-stops-working-after-hours-bluez-stuck-state) auto-restarts the container after 10 consecutive scan failures so Docker can recover automatically.
-
----
-
-## Body composition
-
-### Why are my body-fat numbers different from the manufacturer's app?
-
-Scale vendors keep their BIA formulas closed and tune them for their own electrode geometry. BLE Scale Sync uses [openScale-derived formulas](/body-composition), with the Deurenberg equation as a weight-only fallback for scales that do not report impedance. Absolute numbers will drift a few percent away from the vendor app, which is normal for any consumer BIA device. Track the trend, not the absolute value.
+Vendors keep their formulas closed and tune them for their own hardware, while this app uses published BIA formulas (and, for Xiaomi and Yunmai scales, formulas ported from openScale), or a BMI-based estimate when the scale reports no impedance. Expect a difference of a few percent and follow the trend. See [Body Composition](/body-composition).
 
 ### Is BIA accurate?
 
-BIA is a population-level estimator. Any consumer scale, vendor app or this tool, has roughly three to five percent absolute error on body fat. It is useful as a weekly or monthly trend signal, not as a clinical number. For clinical-grade accuracy you want DEXA or a hydrostatic weighing, not a 30-euro bathroom scale.
+Consumer BIA, from any scale or app, is an estimate that fits a trend over weeks better than a single reading. For a clinical measurement you need a method such as DEXA. See [Body Composition](/body-composition).
 
 ### What does athlete mode change?
 
-It lowers the body fat estimate for users with high muscle mass. Trained athletes hold more water in lean tissue, and standard BIA formulas overestimate their fat percentage as a result. Toggle per user via `is_athlete: true`. Formula details at [Body Composition](/body-composition#athlete-mode).
-
----
+It lowers the body fat estimate for users with high muscle mass, for whom standard BIA formulas read too high. Set `is_athlete: true` for that user. See [athlete mode](/body-composition#athlete-mode).
 
 ## Exporters
 
-### Does Garmin Connect 2FA or MFA work?
+### Does Garmin Connect work with 2FA or MFA? {#does-garmin-connect-2fa-or-mfa-work}
 
-Yes. During the first login, `setup-garmin` prompts for the 2FA code. Tokens are cached and reused for around twelve months, so the code is only needed once per cycle. On headless servers, run the setup step interactively and copy the token directory to the target. See the [Garmin exporter guide](/exporters#garmin).
+Yes. `ble-scale-sync setup-garmin` asks for the MFA code at the first login and saves tokens that later uploads reuse. The Home Assistant add-on cannot ask for a code; see [the MFA workaround](/guide/home-assistant-addon#mfa-workaround) and [Garmin Connect](/exporters#garmin).
 
 ### Can each household member sync to a different Garmin account?
 
-Yes. Define `exporters` at the user level. They are added to `global_exporters` for that user, and a user's own Garmin replaces a global Garmin for them. Each user can have their own Garmin, Strava, MQTT, and File exporters independently. See [Per-user exporters](/multi-user#per-user-exporters).
+Yes. Exporters set under a user apply to that user together with `global_exporters`, and a user's own exporter replaces a global one of the same type, Garmin included. See [per-user exporters](/multi-user#per-user-exporters).
 
-### Does it work with Apple Health, Google Fit, or Fitbit?
+### Does it work with Apple Health, Google Fit or Fitbit?
 
-Not directly. A native exporter for these is on the roadmap. In the meantime, the [Webhook exporter](/exporters#webhook) plus a bridge (iOS Shortcuts posting into HealthKit, a small script posting to the Fitbit API, Google Fit REST API via a custom endpoint) covers most cases.
+Not directly. The [webhook exporter](/exporters#webhook) can post each reading to a bridge you run, such as a script that writes it to that service's API.
 
 ### How do I run custom logic on each reading?
 
-Use the [Webhook exporter](/exporters#webhook) to POST a JSON body with all computed metrics to any HTTP endpoint. From there you can forward to n8n, Make, Zapier, Node-RED, or a custom script. Home Assistant users can also build automations on top of the MQTT sensors.
-
----
+Use the [webhook exporter](/exporters#webhook): it posts every reading as JSON to any HTTP endpoint, such as n8n, Node-RED or your own script. In Home Assistant you can also automate on the MQTT sensors.
 
 ## Deployment
 
 ### Which Raspberry Pi should I use?
 
-Pi Zero 2W is the sweet spot: ARMv7, built-in Bluetooth, roughly 15 euros, about 0.4 W idle. Pi 3, 4, and 5 all work fine as well. The original Pi Zero W is not supported because `esbuild` has no ARMv6 binaries and `npm install` fails with a `SIGILL` error.
+A Pi Zero 2 W, or a Pi 3, 4 or 5. The first Pi Zero W (ARMv6) does not work. See [recommended hardware](/guide/getting-started#recommended-hardware).
 
 ### Can I run this in Kubernetes?
 
-Yes, but BLE is the tricky part. Two paths work:
-
-- A `DaemonSet` pinned to a node that has a Bluetooth radio, with `NET_ADMIN` and `NET_RAW` capabilities and the host D-Bus socket mounted in.
-- Any plain `Deployment` combined with an [ESP32 proxy](/guide/esp32-proxy) or [ESPHome proxy](/guide/esphome-proxy) so the cluster needs no radio at all.
-
-The proxy approach is simpler to operate and is the recommended route for clusters.
+Yes. Either pin a pod to a node with a Bluetooth radio, with `NET_ADMIN` and `NET_RAW` and the host D-Bus socket mounted, or run a plain Deployment with an [ESP32 proxy](/guide/esp32-proxy) or [ESPHome proxy](/guide/esphome-proxy), so the cluster needs no radio. The proxy is the simpler one to run.
 
 ### Docker on macOS or Windows?
 
-Docker Desktop on those platforms runs Linux inside a VM with no BLE bridge to the host radio. Use the [standalone Node.js install](/guide/getting-started#standalone) on macOS and Windows instead, or offload the Bluetooth work to an [ESP32 proxy](/guide/esp32-proxy) and run the app in Docker on another machine.
+Docker Desktop runs containers in a VM with no access to the host's Bluetooth. Use the [standalone install](/guide/getting-started#standalone) there, or a Bluetooth proxy with Docker on another machine. See [choose a transport](/guide/transports#choose-a-transport).
 
-### HA Add-on vs Docker?
+### HA add-on or Docker? {#ha-add-on-vs-docker}
 
-If you run Home Assistant OS or Supervised, the [add-on](/guide/home-assistant-addon) is the easiest path: UI config, MQTT auto-detection, and one-click updates. On Home Assistant Container, HA Core, or a non-HA host, use [Docker](/guide/getting-started#docker). Both routes feed HA via MQTT auto-discovery with identical sensor layout, so the choice is about ergonomics, not features.
+On Home Assistant OS or Supervised, use the [add-on](/guide/home-assistant-addon). On Home Assistant Container, Core or a host without Home Assistant, use [Docker](/guide/getting-started#docker).
 
----
-
-## Updates and maintenance
+## Updates and Maintenance
 
 ### How do I update?
 
-It depends on the deployment target. The [Auto Updates guide](/guide/auto-update) has full recipes for the HA Add-on Supervisor toggle, Watchtower on Docker, and a systemd timer for Raspberry Pi source deploys.
+[Auto Updates](/guide/auto-update) covers each kind of install: the add-on, Docker Compose, npm and a clone.
 
 ### What happens to my config and tokens on update?
 
-`config.yaml`, Garmin tokens, Strava tokens, and the `last_known_weight` field survive container rebuilds as long as you mount them as volumes (Docker) or keep the `/data` directory intact (HA Add-on). Version bumps never rewrite these files, with one exception: `last_known_weight` is updated in-place after each measurement, with write locking and atomic replacement to avoid torn writes.
+They stay as long as they live in mounted volumes (Docker) or in `/data` (add-on). An update does not rewrite them; only `last_known_weight` in `config.yaml` changes, after each measurement. See [what a re-created container loses](/guide/getting-started#_2-run).
 
 ### How do I back up?
 
-Copy these off-device:
-
-- `config.yaml` (the source of truth for users, exporters, and settings)
-- `garmin-tokens/` and `strava-tokens/` (so you do not need to re-authenticate)
-- The HA Add-on `/data/` directory or Docker named volumes, depending on your setup
-
-On Home Assistant, the Supervisor **Full Backup** covers everything in `/data` automatically. See the safety checklist in [Auto Updates](/guide/auto-update#safety-checklist-before-enabling-unattended-updates).
+Copy the directory that holds `config.yaml` and `.env`. With the wizard's default `token_dir` it also holds the `garmin-tokens` and `strava-tokens` directories; copy any other `token_dir` too. On Home Assistant, a full backup includes the add-on's `/data`. See [Auto Updates](/guide/auto-update#safety-checklist-before-enabling-unattended-updates).
 
 ### Where are the logs?
 
-- **HA Add-on**: Supervisor > Add-on > Log tab.
-- **Docker**: `docker logs ble-scale-sync` or `docker compose logs -f ble-scale-sync`.
-- **Systemd source deploy**: `journalctl -u ble-scale.service -f`.
+- Home Assistant add-on: the add-on's **Log** tab.
+- Docker: `docker logs ble-scale-sync` or `docker compose logs -f ble-scale-sync`.
+- systemd: `journalctl -u ble-scale.service -f`.
 
-Enable `runtime.debug: true` in `config.yaml` for verbose BLE diagnostics when reporting an issue.
+For an issue, turn on [debug mode](/troubleshooting#debug-mode) first.

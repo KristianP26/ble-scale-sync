@@ -1,0 +1,73 @@
+{
+  "adverts": [
+    {
+      "atMs": 0,
+      "data": "0000181b00001000800000805f9b34fb 0322ea0701010c0000f4019740",
+      "decision": "complete",
+      "reading": {
+        "weight": 75.0014372,
+        "impedance": 500
+      },
+      "sink": "queued"
+    },
+    {
+      "atMs": 1000,
+      "data": "0000181b00001000800000805f9b34fb 0262ea0701010c0000f401b036",
+      "decision": "complete",
+      "reading": {
+        "weight": 70,
+        "impedance": 500
+      },
+      "sink": "queued"
+    },
+    {
+      "atMs": 2000,
+      "data": "0000181b00001000800000805f9b34fb 0200ea0701010c00000000343a",
+      "decision": "wait"
+    }
+  ],
+  "exports": [
+    {
+      "atMs": 0,
+      "by": "advert",
+      "reading": {
+        "weight": 75.0014372,
+        "impedance": 500
+      },
+      "payload": {
+        "weight": 75,
+        "impedance": 500,
+        "bmi": 22.4,
+        "bodyFatPercent": 19.02,
+        "waterPercent": 55.55,
+        "boneMass": 3.09,
+        "muscleMass": 57.64,
+        "visceralFat": 10,
+        "physiqueRating": 5,
+        "bmr": 1748,
+        "metabolicAge": 31
+      }
+    },
+    {
+      "atMs": 1000,
+      "by": "advert",
+      "reading": {
+        "weight": 70,
+        "impedance": 500
+      },
+      "payload": {
+        "weight": 70,
+        "impedance": 500,
+        "bmi": 20.9,
+        "bodyFatPercent": 15.52,
+        "waterPercent": 57.95,
+        "boneMass": 3.01,
+        "muscleMass": 56.12,
+        "visceralFat": 7,
+        "physiqueRating": 9,
+        "bmr": 1698,
+        "metabolicAge": 31
+      }
+    }
+  ]
+}

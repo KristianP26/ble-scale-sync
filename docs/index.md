@@ -1,14 +1,11 @@
 ---
 layout: home
-head:
-  - - meta
-    - name: keywords
-      content: ble scale sync, smart scale garmin connect, bluetooth scale raspberry pi, body composition sync, renpho garmin, xiaomi scale garmin, strava weight sync, mqtt smart scale, home assistant scale, self hosted weight tracker, esp32 ble proxy, docker smart scale
+description: BLE Scale Sync reads weight and body composition from Bluetooth smart scales and sends them to Garmin Connect, Home Assistant and other targets, without the vendor app.
 
 hero:
   name: BLE Scale Sync
   text: Automatic body composition sync
-  tagline: Cross-platform CLI for Linux, macOS & Windows. Read weight & impedance from 25+ BLE smart scales and export to Garmin Connect, Strava, Home Assistant, Wger, HealthLog, Dreeve, InfluxDB, Webhooks, Ntfy & local files. No phone app needed.
+  tagline: Reads weight and impedance from Bluetooth smart scales and sends them to Garmin Connect, Strava, Home Assistant and more, without the vendor's phone app. Runs on Linux, macOS and Windows.
   image:
     src: /logo.svg
     alt: BLE Scale Sync
@@ -22,146 +19,51 @@ hero:
 
 features:
   - icon: "\u2696\uFE0F"
-    title: 25+ Smart Scales
-    details: Xiaomi, Renpho, Eufy, Yunmai, Beurer, Sanitas, Medisana, and more. Auto-detection out of the box.
+    title: Smart Scales
+    details: Xiaomi, Renpho, Eufy, Yunmai, Beurer, Sanitas, Medisana and more, detected automatically.
     link: /guide/supported-scales
     linkText: See all scales
   - icon: "\uD83D\uDCE4"
     title: 13 Export Targets
-    details: Garmin Connect &bull; Strava &bull; Intervals.icu &bull; Runalyze &bull; Wger &bull; HealthLog &bull; Dreeve &bull; MQTT (Home Assistant) &bull; InfluxDB &bull; Webhook &bull; Ntfy &bull; Telegram &bull; File (CSV/JSONL)
+    details: Garmin Connect, Strava, MQTT for Home Assistant, InfluxDB, webhooks, notifications and files, each with its own settings per user.
     link: /exporters
     linkText: Configure exporters
   - icon: "\uD83E\uDDE0"
-    title: 10 Body Metrics
-    details: BIA-based body composition from weight + impedance.
+    title: Body Composition
+    details: Body fat, muscle, water, bone and more from weight and impedance.
     link: /body-composition
     linkText: See formulas
   - icon: "\uD83D\uDC65"
     title: Multi-User
-    details: Automatic weight-based identification with per-user exporters.
+    details: Identifies who stepped on the scale by weight, with exporters per user.
     link: /multi-user
     linkText: Learn more
   - icon: "\uD83D\uDCBB"
     title: Cross-Platform
-    details: Runs natively on Linux, macOS & Windows. Docker images available for Linux.
+    details: Runs natively on Linux, macOS and Windows, or as a Docker image on Linux.
     link: /guide/getting-started
     linkText: Install guide
   - icon: "\uD83C\uDFE0"
     title: Home Assistant Add-on
-    details: Two-click install in HA OS / Supervised. UI-driven config, Mosquitto auto-detection for HA auto-discovery, and Garmin token bootstrap on first start.
+    details: Installs on Home Assistant OS or Supervised, configured in the UI, with Mosquitto detected for MQTT discovery.
     link: /guide/home-assistant-addon
     linkText: Add-on guide
   - icon: "\uD83D\uDCE1"
-    title: ESP32 BLE Proxy
-    details: Use a cheap ESP32 as a remote Bluetooth radio over MQTT. No BLE adapter needed on the server. Optional display board for live status.
-    link: /guide/esp32-proxy
-    linkText: Proxy setup guide
+    title: Bluetooth Proxies
+    details: Read the scale through an ESP32, an ESPHome proxy or Home Assistant's Bluetooth, so the server needs no adapter of its own.
+    link: /guide/transports
+    linkText: Choose a transport
   - icon: "\uD83D\uDD12"
-    title: Private & Self-Hosted
-    details: Your data stays on your device. No vendor cloud, no account, no tracking. Fully open source.
+    title: Self-Hosted and Open Source
+    details: Measurements go only to the targets you configure, with no vendor account. The daily update check sends only the app version, OS and CPU type, and can be turned off.
     link: /alternatives
     linkText: Compare alternatives
 ---
 
-## Quick Start
+## Install {#quick-start}
 
-### Option 1: Docker (Linux)
+- [Docker](/guide/getting-started#docker): Linux, including Raspberry Pi and NAS.
+- [Home Assistant add-on](/guide/home-assistant-addon): Home Assistant OS or Supervised.
+- [Node.js](/guide/getting-started#standalone): Linux, macOS and Windows.
 
-```bash
-# Configure
-docker run --rm -it --network host --cap-add NET_ADMIN --cap-add NET_RAW \
-  --group-add "$(getent group bluetooth | cut -d: -f3)" -v /var/run/dbus:/var/run/dbus:ro \
-  -v ./config.yaml:/app/config.yaml \
-  -v ./garmin-tokens:/app/garmin-tokens \
-  ghcr.io/kristianp26/ble-scale-sync:latest setup
-
-# Run (continuous mode, auto-restart)
-docker run -d --restart unless-stopped --network host \
-  --cap-add NET_ADMIN --cap-add NET_RAW \
-  --group-add "$(getent group bluetooth | cut -d: -f3)" --device /dev/rfkill \
-  -v /var/run/dbus:/var/run/dbus:ro \
-  -v ./config.yaml:/app/config.yaml:ro \
-  -v ./garmin-tokens:/app/garmin-tokens \
-  -e CONTINUOUS_MODE=true \
-  ghcr.io/kristianp26/ble-scale-sync:latest
-```
-
-Ideal for Raspberry Pi, NAS, and headless servers. Works alongside any Home Assistant install (Container, Core, OS) via MQTT auto-discovery. Your data never leaves your network.
-
-### Option 2: Home Assistant Add-on
-
-Running Home Assistant **OS** or **Supervised**? One click and skip the CLI entirely.
-
-[![Add BLE Scale Sync repository to your Home Assistant](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2FKristianP26%2Fble-scale-sync)
-
-The badge opens your Home Assistant instance, confirms the repository, and lands you on the Add-on Store with **BLE Scale Sync** ready to install.
-
-The add-on handles config through the UI, including the Bluetooth transport (the host adapter, Home Assistant Bluetooth, or an ESPHome or ESP32 proxy), auto-detects the Mosquitto broker for Home Assistant auto-discovery, and bootstraps Garmin tokens on first start. See the [Home Assistant Add-on guide](/guide/home-assistant-addon) for the full option reference, MFA workaround, and custom config mode.
-
-::: warning
-Add-ons are not available on **HA Container** or **HA Core** installs (no Supervisor). Use Option 1 instead.
-:::
-
-### Option 3: Standalone (Node.js, Linux/macOS/Windows)
-
-Runs natively on all major desktop and server operating systems. No containers, no Supervisor required.
-
-Zero clone, if you already have Node.js v22+:
-
-```bash
-npx ble-scale-sync setup                 # interactive wizard, writes ./config.yaml
-CONTINUOUS_MODE=true npx ble-scale-sync  # always-on, listens for scale indefinitely
-```
-
-`config.yaml` and `.env` are read from the directory you run the command in. Requires Node.js v22+ and a BLE adapter.
-
-Prefer a permanent install, a git clone, or the full command list? See the [Standalone install guide](/guide/getting-started#standalone).
-
-For always-on deployments, create a systemd service:
-
-::: details Example: /etc/systemd/system/ble-scale.service
-
-```ini
-[Unit]
-Description=BLE Scale Sync
-After=network.target bluetooth.target
-
-[Service]
-Type=simple
-User=pi
-WorkingDirectory=/home/pi/ble-scale-sync
-EnvironmentFile=/home/pi/ble-scale-sync/.env
-Environment="CONTINUOUS_MODE=true"
-Environment="PATH=/home/pi/ble-scale-sync/venv/bin:/usr/local/bin:/usr/bin:/bin"
-ExecStart=/usr/bin/node dist/index.js
-Restart=always
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-```
-
-```bash
-npm run build                # compile to dist/ (the service runs plain node)
-sudo systemctl enable --now ble-scale.service
-```
-
-The unit runs `node dist/index.js` rather than `npm start`, so the host needs no TypeScript runner at runtime. Run `npm run build` after every `git pull`.
-
-:::
-
-::: tip Raspberry Pi Zero 2W
-The ideal setup: a [~15€ single-board computer](https://www.raspberrypi.com/products/raspberry-pi-zero-2-w/) with built-in BLE, always on, always listening. Step on the scale and your data appears in Garmin Connect within seconds. No phone needed. Note: the original Pi Zero W (ARMv6) is [not supported](/troubleshooting#install-fails-on-raspberry-pi-zero-w-first-gen).
-:::
-
-::: tip Two ways to connect your scale
-**Local BLE** (any of the options above): the server has a Bluetooth adapter and talks to the scale directly. Needs BlueZ/D-Bus on Linux, or native BLE on macOS/Windows.
-
-**Remote BLE via ESP32**: a cheap ~8€ ESP32 board sits near the scale and relays BLE data over WiFi/MQTT. The server needs no Bluetooth at all, which makes Docker deployment much simpler (no `NET_ADMIN`, no D-Bus mounts). See the [ESP32 BLE Proxy guide](/guide/esp32-proxy).
-:::
-
-<div style="text-align: center; margin-top: 2rem;">
-
-[Full Getting Started Guide &rarr;](/guide/getting-started)
-
-</div>
+The [Getting Started guide](/guide/getting-started) walks through each one, and [Supported Scales](/guide/supported-scales) shows how to find your scale.

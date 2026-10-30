@@ -3,8 +3,10 @@
  *
  * Most consumer scales provide body-fat / water / muscle / bone directly
  * in their BLE frames.  The helpers here fill in the remaining BodyComposition
- * fields (BMI, BMR, metabolic age, physique rating) that are always
- * calculated from the user profile rather than measured by the scale.
+ * fields (BMI, BMR, metabolic age, physique rating) from the user profile.
+ * BMI and the physique rating are always calculated; BMR and metabolic age are
+ * too, unless the adapter passes the scale's own (ScaleBodyComp.bmr and
+ * .metabolicAge, D078) with an accepted body fat value and inside their bands.
  */
 
 import type { UserProfile, BodyComposition, ScaleReading } from '../interfaces/scale-adapter.js';
@@ -19,6 +21,81 @@ export interface ScaleBodyComp {
   muscle?: number; // %
   bone?: number; // kg
   visceralFat?: number;
+  /** The scale's own BMR, kcal (D078). Used only with an accepted body fat value. */
+  bmr?: number;
+  /** The scale's own body age, years, exported as metabolic age (D078). Same rule. */
+  metabolicAge?: number;
+  /**
+   * The scale's own skeletal muscle, % (#497). Same rule as `bmr`, but never
+   * calculated: without an accepted body fat, or outside its band, the payload
+   * has no skeletal muscle at all.
+   */
+  skeletalMuscle?: number;
+  /**
+   * The scale's segment impedances (#497). Raw measurements, not composition:
+   * exported whether or not the rest of the set is accepted, each value on its
+   * own, and never estimated.
+   */
+  segmentImpedance?: SegmentImpedance;
+}
+
+/** One body segment's impedance at the two frequencies, in ohm (#497). */
+export interface SegmentPair {
+  at20kHz: number;
+  at100kHz: number;
+}
+
+/**
+ * The five segments an eight-electrode scale measures (#497). For the QN
+ * channels: LH -> leftArm, RH -> rightArm, LF -> leftLeg, RF -> rightLeg,
+ * T -> trunk.
+ */
+export interface SegmentImpedance {
+  trunk: SegmentPair;
+  leftArm: SegmentPair;
+  rightArm: SegmentPair;
+  leftLeg: SegmentPair;
+  rightLeg: SegmentPair;
+}
+
+/** The payload key of each segment at each frequency. */
+const SEGMENT_KEYS = {
+  trunk: ['impedanceTrunk20kHz', 'impedanceTrunk100kHz'],
+  leftArm: ['impedanceLeftArm20kHz', 'impedanceLeftArm100kHz'],
+  rightArm: ['impedanceRightArm20kHz', 'impedanceRightArm100kHz'],
+  leftLeg: ['impedanceLeftLeg20kHz', 'impedanceLeftLeg100kHz'],
+  rightLeg: ['impedanceRightLeg20kHz', 'impedanceRightLeg100kHz'],
+} as const satisfies Record<keyof SegmentImpedance, readonly [string, string]>;
+
+type SegmentImpedanceKey = (typeof SEGMENT_KEYS)[keyof SegmentImpedance][number];
+
+/**
+ * Exclusive upper bound on a segment impedance (#497): 0xFFFF read in 0.1 ohm,
+ * the sentinel of a 16-bit field that measured nothing. No band beyond that:
+ * a segment's impedance depends on the electrode path, and the QN channels
+ * read higher at 100 kHz than at 20 kHz on the trunk where R-MSC04 reads lower.
+ */
+export const SEGMENT_IMPEDANCE_SENTINEL_OHM = 6553.5;
+
+/** The segment impedances as flat payload keys, each kept only when it is a measurement. */
+function segmentImpedanceKeys(
+  seg: SegmentImpedance | undefined,
+): Partial<Record<SegmentImpedanceKey, number>> {
+  const out: Partial<Record<SegmentImpedanceKey, number>> = {};
+  if (!seg) return out;
+  for (const segment of Object.keys(SEGMENT_KEYS) as Array<keyof SegmentImpedance>) {
+    const [k20, k100] = SEGMENT_KEYS[segment];
+    const pair = seg[segment];
+    for (const [key, ohm] of [
+      [k20, pair?.at20kHz],
+      [k100, pair?.at100kHz],
+    ] as const) {
+      if (typeof ohm === 'number' && ohm > 0 && ohm < SEGMENT_IMPEDANCE_SENTINEL_OHM) {
+        out[key] = r2(ohm);
+      }
+    }
+  }
+  return out;
 }
 
 /**
@@ -131,6 +208,10 @@ const MAX_PLAUSIBLE_MUSCLE_PCT = 100;
  * A composition is fat plus, optionally, water, bone and muscle. Water, bone
  * or muscle without fat is rejected for the same reason. `visceralFat` is not
  * part of it: it is a 1 to 59 index that is clamped, not a share of the body.
+ * Neither are `bmr` and `metabolicAge` (D078): each is checked on its own band
+ * (isPlausibleBmr, isPlausibleMetabolicAge), but buildPayload takes them only
+ * next to a body fat value this function accepted, because the scale derives
+ * them from the same measurement.
  */
 export function compositionRejection(comp: ScaleBodyComp): string | null {
   const { fat, water, bone, muscle } = comp;
@@ -149,6 +230,58 @@ export function compositionRejection(comp: ScaleBodyComp): string | null {
     return `muscle ${muscle} % is outside 0-${MAX_PLAUSIBLE_MUSCLE_PCT} %`;
   }
   return null;
+}
+
+/**
+ * Bands a scale-reported BMR and body age have to fall in before they replace
+ * the formulas (D078). Judgements, not measurements: far from any real body
+ * and far from what a broken field gives (0, a 0xFFFF or 0xFF sentinel, a
+ * value off by a factor of 10). The age floor is the 12 the metabolic age
+ * formula in buildPayload clamps to.
+ */
+export const BMR_MIN_KCAL = 500;
+export const BMR_MAX_KCAL = 5000;
+export const METABOLIC_AGE_MIN = 12;
+export const METABOLIC_AGE_MAX = 120;
+
+/** Whether a scale-reported BMR (kcal) may be exported as is (D078). */
+export function isPlausibleBmr(kcal: number): boolean {
+  return Number.isFinite(kcal) && kcal >= BMR_MIN_KCAL && kcal <= BMR_MAX_KCAL;
+}
+
+/** Whether a scale-reported body age (years) may be exported as the metabolic age (D078). */
+export function isPlausibleMetabolicAge(years: number): boolean {
+  return Number.isFinite(years) && years >= METABOLIC_AGE_MIN && years <= METABOLIC_AGE_MAX;
+}
+
+/**
+ * Band a scale-reported skeletal muscle percentage has to fall in before it is
+ * exported (#497). A judgement like the D078 bands: far from any real body and
+ * far from a broken field (0, a 0xFFFF sentinel read as 6553.5, a value off by
+ * a factor of 10).
+ */
+export const SKELETAL_MUSCLE_MIN_PCT = 10;
+export const SKELETAL_MUSCLE_MAX_PCT = 90;
+
+/** Whether a scale-reported skeletal muscle percentage may be exported (#497). */
+export function isPlausibleSkeletalMusclePercent(pct: number): boolean {
+  return Number.isFinite(pct) && pct >= SKELETAL_MUSCLE_MIN_PCT && pct <= SKELETAL_MUSCLE_MAX_PCT;
+}
+
+/**
+ * A scale-reported value as an integer, or undefined (and a debug line) when
+ * it is outside its band, so the caller falls back to its formula.
+ */
+function scaleValueIfPlausible(
+  value: number | undefined,
+  plausible: (v: number) => boolean,
+  what: string,
+  band: string,
+): number | undefined {
+  if (value == null) return undefined;
+  if (plausible(value)) return Math.trunc(value);
+  biaLog.debug(`Scale-reported ${what} ${value} is outside ${band}; calculating it instead.`);
+  return undefined;
 }
 
 /**
@@ -174,14 +307,45 @@ export function biaFatIfPlausible(
 ): number | undefined {
   if (!(impedance > 0)) return undefined;
   if (!isPlausibleImpedance(impedance)) {
+    const instead =
+      p.estimateBodyComposition === false
+        ? 'is not computed from it, and with estimate_body_composition off none is estimated'
+        : 'falls back to the BMI estimate rather than being computed from it';
     biaLog.debug(
       `Impedance ${impedance} ohm is outside ${IMPEDANCE_MIN_OHM}-${IMPEDANCE_MAX_OHM}, ` +
-        `so body composition falls back to the BMI estimate rather than being computed ` +
-        `from it (#386).`,
+        `so body composition ${instead} (#386).`,
     );
     return undefined;
   }
   return computeBiaFat(weight, impedance, p);
+}
+
+/**
+ * The words an adapter puts where its log line would say it uses the estimate,
+ * when the user turned the estimate off (#497), or null when the estimate is
+ * on and the line stays as it was.
+ */
+export function noEstimateNote(p: UserProfile): string | null {
+  return p.estimateBodyComposition === false
+    ? 'exporting no body composition (estimate_body_composition is off)'
+    : null;
+}
+
+/** Mifflin-St Jeor BMR and the metabolic age derived from it: weight, height, age and sex only. */
+function formulaMetabolism(weight: number, p: UserProfile): { bmr: number; metabolicAge: number } {
+  const sexConstant = p.gender === 'male' ? 5 : -161;
+  const baseBmr = 10 * weight + 6.25 * p.height - 5 * p.age;
+  let bmr = baseBmr + sexConstant;
+  if (p.isAthlete) bmr *= 1.05;
+
+  // The reference is the same Mifflin-St Jeor BMR at age 25, so it has to use
+  // the same sex constant. It used to hardcode the male +5, which read the
+  // 166 kcal gap as ~11 extra years for every female user (#433).
+  const idealBmr = 10 * weight + 6.25 * p.height - 5 * 25 + sexConstant;
+  let metabolicAge = p.age + Math.trunc((idealBmr - bmr) / 15);
+  if (metabolicAge < METABOLIC_AGE_MIN) metabolicAge = METABOLIC_AGE_MIN;
+  if (p.isAthlete && metabolicAge > p.age) metabolicAge = p.age - 5;
+  return { bmr: Math.trunc(bmr), metabolicAge };
 }
 
 /** Build a full BodyComposition from scale-provided body-comp values + user profile. */
@@ -207,13 +371,39 @@ export function buildPayload(
   // have: BIA when the impedance is usable, the BMI estimate otherwise.
   const rejection = compositionRejection(comp);
   if (rejection) {
-    biaLog.debug(`Scale-reported composition discarded (${rejection}); estimating instead.`);
+    biaLog.debug(
+      `Scale-reported composition discarded (${rejection}); ` +
+        (p.estimateBodyComposition === false
+          ? 'using the impedance if it is usable, and no estimate (estimate_body_composition is off).'
+          : 'estimating instead.'),
+    );
   }
   const measured: ScaleBodyComp = rejection ? {} : comp;
-  const bodyFatPercent =
-    measured.fat ??
-    (rejection ? biaFatIfPlausible(weight, impedance, p) : undefined) ??
-    estimateBodyFat(bmi, p);
+  const measuredFat =
+    measured.fat ?? (rejection ? biaFatIfPlausible(weight, impedance, p) : undefined);
+
+  // Nothing measured and the user turned the BMI estimate off (#497): the six
+  // values that would come from the estimated body fat are withheld, null,
+  // and the rest is what the weight, the height and the profile give.
+  // Withheld as a whole, a scale's visceral fat included, so a weigh-in never
+  // mixes measured and missing composition. Segment impedances are raw
+  // measurements and stay.
+  if (measuredFat === undefined && p.estimateBodyComposition === false) {
+    return {
+      weight: r2(weight),
+      impedance: r2(impedance),
+      bmi: r2(bmi),
+      bodyFatPercent: null,
+      waterPercent: null,
+      boneMass: null,
+      muscleMass: null,
+      visceralFat: null,
+      physiqueRating: null,
+      ...formulaMetabolism(weight, p),
+      ...segmentImpedanceKeys(comp.segmentImpedance),
+    };
+  }
+  const bodyFatPercent = measuredFat ?? estimateBodyFat(bmi, p);
   const lbm = weight * (1 - bodyFatPercent / 100);
 
   const waterPercent = measured.water ?? ((lbm * (p.isAthlete ? 0.74 : 0.73)) / weight) * 100;
@@ -253,18 +443,33 @@ export function buildPayload(
   // below 18 % fat and at 6 between 18 and 25 %, whatever the body.
   const physiqueRating = computePhysiqueRating(bodyFatPercent, skeletalMuscleEstimate, weight);
 
-  const sexConstant = p.gender === 'male' ? 5 : -161;
-  const baseBmr = 10 * weight + 6.25 * p.height - 5 * p.age;
-  let bmr = baseBmr + sexConstant;
-  if (p.isAthlete) bmr *= 1.05;
+  const { bmr, metabolicAge } = formulaMetabolism(weight, p);
 
-  // The reference is the same Mifflin-St Jeor BMR at age 25, so it has to use
-  // the same sex constant. It used to hardcode the male +5, which read the
-  // 166 kcal gap as ~11 extra years for every female user (#433).
-  const idealBmr = 10 * weight + 6.25 * p.height - 5 * 25 + sexConstant;
-  let metabolicAge = p.age + Math.trunc((idealBmr - bmr) / 15);
-  if (metabolicAge < 12) metabolicAge = 12;
-  if (p.isAthlete && metabolicAge > p.age) metabolicAge = p.age - 5;
+  // The scale's own BMR and body age replace the two formulas only here, at
+  // the end (D078). The formula metabolic age above has to come from the
+  // formula BMR: fed the scale's BMR, it would compare the scale's figure with
+  // a formula reference. Taken from `measured` and only next to a measured
+  // body fat, so a rejected composition, or none, takes them with it. As sent
+  // (truncated to whole numbers): the athlete factor and the age clamps are
+  // the formulas' own.
+  const withFat = measured.fat != null;
+  const scaleBmr = scaleValueIfPlausible(
+    withFat ? measured.bmr : undefined,
+    isPlausibleBmr,
+    'BMR',
+    `${BMR_MIN_KCAL}-${BMR_MAX_KCAL} kcal`,
+  );
+  const scaleAge = scaleValueIfPlausible(
+    withFat ? measured.metabolicAge : undefined,
+    isPlausibleMetabolicAge,
+    'metabolic age',
+    `${METABOLIC_AGE_MIN}-${METABOLIC_AGE_MAX} years`,
+  );
+
+  // The scale's own skeletal muscle percentage goes by the same rule, but has
+  // no formula to fall back to: out of its band, or without a measured body
+  // fat, the key is left out rather than estimated (#497).
+  const skeletalMusclePercent = scaleSkeletalMuscle(withFat ? measured.skeletalMuscle : undefined);
 
   return {
     weight: r2(weight),
@@ -276,9 +481,30 @@ export function buildPayload(
     muscleMass: r2(muscleMass),
     visceralFat,
     physiqueRating,
-    bmr: Math.trunc(bmr),
-    metabolicAge,
+    bmr: scaleBmr ?? bmr,
+    metabolicAge: scaleAge ?? metabolicAge,
+    ...(skeletalMusclePercent !== undefined && { skeletalMusclePercent }),
+    // From `comp`, not `measured`: raw measurements, not part of the
+    // composition a rejection discards (#497).
+    ...segmentImpedanceKeys(comp.segmentImpedance),
   };
+}
+
+/** The scale's skeletal muscle percentage to 0.01, or undefined (and a debug line) out of band. */
+function scaleSkeletalMuscle(pct: number | undefined): number | undefined {
+  if (pct == null) return undefined;
+  if (isPlausibleSkeletalMusclePercent(pct)) return r2(pct);
+  biaLog.debug(
+    `Scale-reported skeletal muscle ${pct} % is outside ` +
+      `${SKELETAL_MUSCLE_MIN_PCT}-${SKELETAL_MUSCLE_MAX_PCT} %; not exported.`,
+  );
+  return undefined;
+}
+
+/** Body fat from a plausible impedance through BIA, the BMI estimate otherwise (#386). */
+export function biaPayload(reading: ScaleReading, profile: UserProfile): BodyComposition {
+  const fat = biaFatIfPlausible(reading.weight, reading.impedance, profile);
+  return buildPayload(reading.weight, reading.impedance, { fat }, profile);
 }
 
 /**
@@ -359,53 +585,4 @@ export function xorChecksum(buf: Buffer | number[], start: number, end: number):
   let xor = 0;
   for (let i = start; i < end; i++) xor ^= buf[i] & 0xff;
   return xor & 0xff;
-}
-
-/**
- * Composition pinned to the reading it was measured with (#394).
- *
- * Adapters are shared singletons and `computeMetrics()` runs LATER than the
- * parse that produced the reading. On the watcher transports (mqtt-proxy,
- * esphome-proxy) the watcher does not pause while the loop processes a
- * reading: `loop.ts` awaits `processReading()`, network exports included, and
- * the watcher can open the NEXT session - and therefore fire
- * `onSessionStart()` - in the meantime. An adapter that reads its live cache
- * in `computeMetrics()` then hands the completed reading a cache belonging to
- * somebody else, or one that was just cleared.
- *
- * So: `pin()` at emit time, `of()` in `computeMetrics()`. The map is weak, so
- * a reading the processor drops frees its entry.
- *
- * This exists to stop the rule from being re-derived per adapter. It was
- * hand-rolled six times before, each copy carrying its own version of the
- * paragraph above, and the copies had already drifted in type.
- */
-export class ReadingComposition<T> {
-  private readonly byReading = new WeakMap<ScaleReading, T>();
-
-  /**
-   * Record the composition as it stood when `reading` was emitted.
-   *
-   * Stores the REFERENCE. The value must not be mutated afterwards, or the
-   * snapshot follows the live state and the pin buys nothing. Adapters that
-   * rebuild their cache object per frame can pass it directly; ones that mutate
-   * a long-lived object in place (beurer-bf720 fills fields across several
-   * 0x2A9C notifications, and beurer-sanitas and medisana-bs44x do the same)
-   * must pass a copy, which is why their hand-rolled predecessors all spread.
-   */
-  pin(reading: ScaleReading, value: T): void {
-    this.byReading.set(reading, value);
-  }
-
-  /**
-   * The composition pinned to `reading`, or `live` when nothing was pinned.
-   *
-   * The fallback covers a reading built by hand (broadcast paths, tests) - see
-   * the class comment for why the live cache cannot be trusted otherwise. A
-   * pinned value is returned even when it is null or undefined, so an adapter
-   * whose "no composition" state is itself a value stays correct.
-   */
-  of(reading: ScaleReading, live: T): T {
-    return this.byReading.has(reading) ? (this.byReading.get(reading) as T) : live;
-  }
 }

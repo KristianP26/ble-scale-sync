@@ -28,7 +28,9 @@
  *    2026-09-21 11:00 UTC).
  */
 
-export const hex = (h: string): Buffer => Buffer.from(h.replace(/ /g, ''), 'hex');
+import { hex, timed, type SnoopLine, type TimedFrame } from './replay/trace.js';
+
+export { hex, timed, type SnoopLine, type TimedFrame };
 
 /** One `<date time>;<hex>` line per notification, as posted in #458. */
 export interface DumpFrame {
@@ -46,25 +48,6 @@ export function parseDump(text: string): DumpFrame[] {
   const at = (l: string): number => Date.parse(l.slice(0, 19).replace(' ', 'T') + 'Z') / 1000;
   const t0 = at(lines[0]);
   return lines.map((l) => ({ atS: at(l) - t0, frame: hex(l.slice(20)) }));
-}
-
-/** `[hh:mm:ss.mmm, direction, hex]` as decoded from a capture or a log. */
-export type SnoopLine = readonly [string, 'rx' | 'tx', string];
-
-export interface TimedFrame {
-  /** Milliseconds since the first line of the excerpt. */
-  atMs: number;
-  dir: 'rx' | 'tx';
-  frame: Buffer;
-}
-
-export function timed(lines: readonly SnoopLine[]): TimedFrame[] {
-  const ms = (t: string): number => {
-    const [h, m, s] = t.split(':');
-    return Math.round(((Number(h) * 60 + Number(m)) * 60 + Number(s)) * 1000);
-  };
-  const t0 = ms(lines[0][0]);
-  return lines.map(([t, dir, h]) => ({ atMs: ms(t) - t0, dir, frame: hex(h) }));
 }
 
 /** The notifications of an excerpt, without the phone's writes. */

@@ -4,6 +4,16 @@ import type { IntervalsConfig } from '../../src/exporters/config.js';
 import type { BodyComposition } from '../../src/interfaces/scale-adapter.js';
 import type { ExportContext } from '../../src/interfaces/exporter.js';
 
+/** The six values a user can withhold with estimate_body_composition (#497). */
+const WITHHELD = {
+  bodyFatPercent: null,
+  waterPercent: null,
+  boneMass: null,
+  muscleMass: null,
+  visceralFat: null,
+  physiqueRating: null,
+};
+
 const samplePayload: BodyComposition = {
   weight: 80,
   impedance: 500,
@@ -99,6 +109,14 @@ describe('IntervalsExporter', () => {
     const body = lastBody();
     expect(body.weight).toBe(80);
     expect(body.bodyFat).toBe(18.5);
+  });
+
+  // #497: a withheld body fat is left out, not sent as null or 0.
+  it('sends the weight alone when the body fat was withheld', async () => {
+    const exporter = new IntervalsExporter(defaultConfig);
+    await exporter.export({ ...samplePayload, ...WITHHELD });
+
+    expect(lastBody()).toEqual({ weight: 80 });
   });
 
   it('returns failure on a non-2xx response', async () => {

@@ -1,17 +1,14 @@
 {
-  // Type-contract tests only (`*.test-d.ts`), not the whole test tree.
+  // The whole test tree, not only the type-contract tests (`*.test-d.ts`).
   //
-  // `tsc --noEmit` covers `src` alone, so a type assertion living under
-  // `tests/` was never checked by CI at all - a @ts-expect-error there could
-  // go stale in silence, which is precisely the kind of check-that-does-not-
-  // check these files exist to prevent. Pointing this at all of `tests/` is
-  // not an option today: it surfaces 132 pre-existing errors in ordinary test
-  // files (loose vi.fn() generics, deliberately partial fixtures). Recorded in
-  // .claude/docs/BACKLOG.md.
+  // `tsc --noEmit` covers `src` alone, and Vitest only strips types, so a test
+  // that reads a renamed contract member gets `undefined` and can stay green.
+  // vitest.config.ts runs tsc with this file on every `npm test` and fails the
+  // run on any error here, the ordinary test files included.
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "rootDir": ".",
     "noEmit": true
   },
-  "include": ["src", "tests/**/*.test-d.ts"]
+  "include": ["src", "tests"]
 }

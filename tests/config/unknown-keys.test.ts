@@ -41,12 +41,16 @@ describe('collectUnknownKeys', () => {
         qn_report_byte: 252,
         qn_weight_ack: true,
         qn_user_key: 1000,
+        qn_user_slot: 2,
         qn_a4_prelude: true,
         qn_time_sync_long: true,
         qn_config_long: true,
+        qn_result_ack: true,
+        rmsc04_profile_byte: '9e',
         auto_clear_stale_bond: true,
         preemptive_adapter_reset: false,
         adapter_privacy: true,
+        pairing_retry_max_min: 15,
         proxy_liveness_timeout_min: 45,
         // One handler at a time; every section run.sh can write is here, with
         // every key it writes into it.
@@ -65,12 +69,19 @@ describe('collectUnknownKeys', () => {
       scale: { weight_unit: 'kg', height_unit: 'cm', display_unit: 'weight_unit' },
       unknown_user: 'nearest',
       out_of_range: 'skip',
-      users: [{ ...USER, exporters: [{ type: 'mqtt', broker_url: 'mqtt://h:1883' }] }],
+      users: [
+        {
+          ...USER,
+          estimate_body_composition: false,
+          exporters: [{ type: 'mqtt', broker_url: 'mqtt://h:1883' }],
+        },
+      ],
       global_exporters: [{ type: 'mqtt', broker_url: 'mqtt://h:1883', qos: 0, retain: true }],
       runtime: {
         continuous_mode: true,
         scan_cooldown: 30,
         idle_rescan_delay: 5,
+        no_reading_rescan_delay: 0,
         retry_failed_exports: true,
         dry_run: false,
         debug: false,
@@ -78,6 +89,15 @@ describe('collectUnknownKeys', () => {
       update_check: true,
     };
     expect(collectUnknownKeys(generated)).toEqual([]);
+  });
+
+  it('knows runtime.no_reading_rescan_delay (#475)', () => {
+    expect(
+      collectUnknownKeys({
+        ...BASE,
+        runtime: { continuous_mode: true, no_reading_rescan_delay: 900 },
+      }),
+    ).toEqual([]);
   });
 
   it('reports a misspelled key under ble', () => {

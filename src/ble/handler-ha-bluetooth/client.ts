@@ -2,6 +2,7 @@ import type { BleDeviceInfo } from '../../interfaces/scale-adapter.js';
 import type { HaBluetoothConfig } from '../../config/schema.js';
 import { bleLog, errMsg } from '../types.js';
 import { toBleDeviceInfo, type HaAdvertisement } from './advert.js';
+import { BoundedSet } from '../advertisement.js';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -163,7 +164,7 @@ export class HaBluetoothClient {
   /** Set on the first successful subscription; see the subscribe-result branch. */
   private subscribedOnce = false;
   /** Addresses already reported by noteUndatable. */
-  private readonly undatableLogged = new Set<string>();
+  private readonly undatableLogged = new BoundedSet<string>(UNDATABLE_LOG_MAX);
 
   constructor(
     private readonly config: HaBluetoothConfig,
@@ -463,10 +464,6 @@ export class HaBluetoothClient {
   private noteUndatable(address: string): void {
     const key = address.toUpperCase();
     if (this.undatableLogged.has(key)) return;
-    if (this.undatableLogged.size >= UNDATABLE_LOG_MAX) {
-      const oldest = this.undatableLogged.values().next().value;
-      if (oldest !== undefined) this.undatableLogged.delete(oldest);
-    }
     this.undatableLogged.add(key);
     // A raw packet without manufacturer data (a scan response) ends here too,
     // hence "most likely".

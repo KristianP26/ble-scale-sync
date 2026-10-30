@@ -1,0 +1,82 @@
+{
+  "config": {
+    "version": 1,
+    "ble": {
+      "handler": "auto"
+    },
+    "scale": {
+      "weight_unit": "kg",
+      "height_unit": "cm",
+      "display_unit": "weight_unit"
+    },
+    "unknown_user": "nearest",
+    "out_of_range": "warn",
+    "users": [
+      {
+        "name": "Dad",
+        "slug": "dad",
+        "height": 183,
+        "birth_date": "1990-06-15",
+        "gender": "male",
+        "is_athlete": false,
+        "weight_range": {
+          "min": 75,
+          "max": 95
+        },
+        "last_known_weight": null
+      }
+    ],
+    "global_exporters": [
+      {
+        "type": "webhook",
+        "url": "https://hooks.example/one"
+      }
+    ],
+    "update_check": true,
+    "runtime": {
+      "continuous_mode": false,
+      "scan_cooldown": 30,
+      "dry_run": false,
+      "debug": false,
+      "watchdog_max_consecutive_failures": 10,
+      "watch_config": true,
+      "idle_rescan_delay": 5,
+      "no_reading_rescan_delay": 0,
+      "retry_failed_exports": true
+    }
+  },
+  "runtime": {
+    "profile": {
+      "height": 183,
+      "age": 36,
+      "gender": "male",
+      "isAthlete": false,
+      "birthDate": "1990-06-15",
+      "lastKnownWeight": 85
+    },
+    "weightUnit": "kg",
+    "dryRun": false,
+    "continuousMode": false,
+    "scanCooldownSec": 30,
+    "retryFailedExports": true,
+    "watchdogMaxFailures": 10,
+    "watchConfig": true,
+    "bleHandler": "auto",
+    "adapterPrivacy": false
+  },
+  "adapterRuntime": {
+    "displayUnit": "kg",
+    "userWeights": "config.users"
+  },
+  "exporterSlots": {
+    "dad": [
+      "global:0:webhook"
+    ]
+  },
+  "log": [
+    "[Config] Unknown config key 'mystery' in <configDir>/config.yaml. It is ignored. If you copied it from the documentation, this build is older than that key: update the app.",
+    "[Config] Unknown config key 'ble.qn_future_knob' in <configDir>/config.yaml. It is ignored. If you copied it from the documentation, this build is older than that key: update the app.",
+    "[Config] Unknown config key 'users.0.favourite_colour' in <configDir>/config.yaml. It is ignored. If you copied it from the documentation, this build is older than that key: update the app.",
+    "[Config] Unknown exporter type 'carrier-pigeon' in config.yaml — skipping"
+  ]
+}

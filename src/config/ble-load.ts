@@ -11,8 +11,8 @@ import type {
 import type { BleHandlerName } from '../ble/types.js';
 import { defaultConfigPath, defaultEnvPath, envPathFor } from './paths.js';
 import { detectConfigSource } from './source-detect.js';
-import { isFromEnvFile, loadEnvFile, resolveEnvReferencesTracked } from './env-refs.js';
-import { safeParseResolved } from './env-coerce.js';
+import { isFromEnvFile, loadEnvFile } from './env-refs.js';
+import { safeParseWithEnvRefs } from './env-coerce.js';
 import { applyBleEnvOverrides, parseBleAdapterEnv } from './env-overrides.js';
 import { parseConfigYaml } from './yaml-parse.js';
 
@@ -87,8 +87,7 @@ function loadYamlBleSection(yamlPath: string): BleConfig {
 
   // Wrapped in `ble` so a ${VAR} conversion and an error path read
   // `ble.mqtt_proxy...`, exactly as they do for the whole config.
-  const { value, wholeRefs } = resolveEnvReferencesTracked({ ble });
-  const result = safeParseResolved(BleSectionSchema, value, wholeRefs);
+  const result = safeParseWithEnvRefs(BleSectionSchema, { ble });
   if (!result.success) throw new Error(formatConfigError(result.error));
 
   const effective = applyBleEnvOverrides(result.data.ble);

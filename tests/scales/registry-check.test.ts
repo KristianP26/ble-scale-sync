@@ -3,6 +3,7 @@ import { adapters } from '../../src/scales/index.js';
 import {
   checkRegistryIntegrity,
   assertRegistryIntegrity,
+  ORDERING_INVARIANTS,
 } from '../../src/scales/registry-check.js';
 import { StandardGattScaleAdapter } from '../../src/scales/standard-gatt.js';
 import { QnScaleAdapter } from '../../src/scales/qn-scale/index.js';
@@ -14,6 +15,13 @@ describe('registry-check structural guard (#182)', () => {
     expect(errors).toEqual([]);
     expect(warnings).toEqual([]);
     expect(assertRegistryIntegrity(adapters)).toEqual([]);
+  });
+
+  // The check skips a pair it cannot find, so a renamed adapter would turn its
+  // invariant off without a word (K-07).
+  it('names only registered adapters in its ordering invariants', () => {
+    const registered = new Set(adapters.map((a) => a.name));
+    expect(ORDERING_INVARIANTS.flat().filter((n) => !registered.has(n))).toEqual([]);
   });
 
   it('flags duplicate adapter names', () => {
@@ -130,6 +138,25 @@ describe('registry-check structural guard (#182)', () => {
     ).toBe(true);
   });
 
+  // #507: the nameless A-R003 has 0xFFF2 and no 0xFFF4, Inlife's
+  // characteristic claim, so Inlife above Renpho would take it after discovery.
+  it('flags Inlife outranking Renpho ES-WBE28', () => {
+    const reg = [
+      fake('Inlife', 245, { custom: true }),
+      fake('Renpho ES-WBE28', 240, { custom: true }),
+      new StandardGattScaleAdapter(),
+    ];
+    const { errors } = checkRegistryIntegrity(reg);
+    expect(
+      errors.some(
+        (e) =>
+          e.includes('Ordering invariant violated') &&
+          e.includes('"Renpho ES-WBE28"') &&
+          e.includes('"Inlife"'),
+      ),
+    ).toBe(true);
+  });
+
   it('flags a registered adapter that lacks a match descriptor', () => {
     const reg = [{ name: 'NoMatch' } as unknown as ScaleAdapter, new StandardGattScaleAdapter()];
     const { errors } = checkRegistryIntegrity(reg);
@@ -144,6 +171,21 @@ describe('registry-check structural guard (#182)', () => {
     ];
     const { errors } = checkRegistryIntegrity(reg);
     expect(errors.some((e) => e.includes('claim the same name/service'))).toBe(true);
+  });
+
+  // #474: a product id names one product, so two plain claims on it shadow.
+  it('flags two non-custom adapters claiming the same MiBeacon product id', () => {
+    const reg = [
+      fake('A', 100, { miBeaconProductIds: [0x018d] }),
+      fake('B', 90, { miBeaconProductIds: [0x018d] }),
+      new StandardGattScaleAdapter(),
+    ];
+    const { errors } = checkRegistryIntegrity(reg);
+    expect(
+      errors.some(
+        (e) => e.includes('"A" and "B"') && e.includes('claim the same name/service/product id'),
+      ),
+    ).toBe(true);
   });
 
   // #408: a deferred binding is enabled only by the adapter's own onConnected.

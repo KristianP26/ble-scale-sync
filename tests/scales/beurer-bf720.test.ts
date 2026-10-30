@@ -338,8 +338,7 @@ describe('BeurerBf720Adapter', () => {
       });
     });
 
-    // lb frames: normalizesWeight = true tells the shared layer this adapter
-    // already returns kg, so it skips its own conversion.
+    // lb frames: nothing after the decoder converts, so it returns kg itself.
     it('converts an lb-unit weight frame to kg', () => {
       const a = makeAdapter();
       const lb = Buffer.alloc(3);
@@ -1206,5 +1205,60 @@ describe('BeurerBf720Adapter', () => {
       // A weight-only frame in the next session must not resolve on its own.
       expect(a.parseCharNotification(BODYCOMP, BCS_FRAME)).toBeNull();
     });
+  });
+});
+
+/**
+ * Whether a waiting weigh-in shows in the advertisement (#471, D063). The two
+ * payloads are the ones #418 logged on a BF915, verbatim:
+ *   serviceData={0000181d-0000-1000-8000-00805f9b34fb: 01}    reading waiting
+ *   serviceData={0000181d-0000-1000-8000-00805f9b34fb: }      nothing waiting
+ * `00` never occurred there; it is the `01` frame with its one byte changed.
+ */
+describe('BeurerBf720Adapter.advertisesPendingReading (#471)', () => {
+  const adapter = new BeurerBf720Adapter();
+  const LOGGED_UUID = '0000181d-0000-1000-8000-00805f9b34fb';
+  const withServiceData = (uuid: string, data: Buffer): BleDeviceInfo => ({
+    localName: 'BF915',
+    serviceUuids: [],
+    serviceData: [{ uuid, data }],
+  });
+
+  it('says true for 01 and false for the empty payload, as #418 logged them', () => {
+    expect(
+      adapter.advertisesPendingReading(withServiceData(LOGGED_UUID, Buffer.from([0x01]))),
+    ).toBe(true);
+    expect(adapter.advertisesPendingReading(withServiceData(LOGGED_UUID, Buffer.alloc(0)))).toBe(
+      false,
+    );
+  });
+
+  it('says nothing without a 0x181D entry', () => {
+    expect(adapter.advertisesPendingReading({ localName: 'BF915', serviceUuids: [] })).toBe(
+      undefined,
+    );
+    expect(
+      adapter.advertisesPendingReading(
+        withServiceData('0000181b-0000-1000-8000-00805f9b34fb', Buffer.from([0x01])),
+      ),
+    ).toBe(undefined);
+  });
+
+  it('says nothing for 00, the #418 frame with its byte changed', () => {
+    expect(
+      adapter.advertisesPendingReading(withServiceData(LOGGED_UUID, Buffer.from([0x00]))),
+    ).toBe(undefined);
+    expect(
+      adapter.advertisesPendingReading(withServiceData(LOGGED_UUID, Buffer.from([0x01, 0x00]))),
+    ).toBe(undefined);
+  });
+
+  it('takes the 16-bit and the undashed 128-bit form of the UUID', () => {
+    expect(adapter.advertisesPendingReading(withServiceData('181d', Buffer.from([0x01])))).toBe(
+      true,
+    );
+    expect(adapter.advertisesPendingReading(withServiceData(uuid16(0x181d), Buffer.alloc(0)))).toBe(
+      false,
+    );
   });
 });

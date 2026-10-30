@@ -84,8 +84,6 @@ export class AndUc352bleAdapter
     { uuid: CHR_WEIGHT_MEASUREMENT, type: 'notify', deferred: true },
     { uuid: CHR_DATE_TIME, type: 'write', optional: true },
   ];
-  /** sig-wss.ts converts a pounds frame to kilograms. */
-  readonly normalizesWeight = true;
   readonly requiresBonding = true;
   readonly singleBond = true;
   readonly completionHoldMs = HOLD_MS;

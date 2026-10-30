@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { TelegramExporter } from '../../src/exporters/telegram.js';
 import type { TelegramConfig } from '../../src/exporters/config.js';
 import type { BodyComposition } from '../../src/interfaces/scale-adapter.js';
-import type { ExportContext } from '../../src/interfaces/exporter.js';
+import type { ExportContext, Exporter } from '../../src/interfaces/exporter.js';
 
 const samplePayload: BodyComposition = {
   weight: 80,
@@ -45,7 +45,7 @@ describe('TelegramExporter', () => {
   });
 
   it('does not support back-dating', () => {
-    const exporter = new TelegramExporter(defaultConfig);
+    const exporter: Exporter = new TelegramExporter(defaultConfig);
     expect(exporter.supportsBackdate).toBeUndefined();
   });
 
@@ -86,6 +86,42 @@ describe('TelegramExporter', () => {
     expect(text).toContain('Bone 3.10 kg');
     expect(text).toContain('BMR 1750 kcal');
     expect(text).toContain('Physique 5');
+  });
+
+  // #497: only a scale that measured it sends a skeletal muscle percentage.
+  it('adds the skeletal muscle percentage to the body fat line when the payload has one', async () => {
+    const exporter = new TelegramExporter(defaultConfig);
+    await exporter.export({ ...samplePayload, skeletalMusclePercent: 47.8 });
+
+    const text = lastBody().text as string;
+    expect(text).toContain('🏋️ Body Fat 18.5% | Muscle 62.40 kg | Skeletal 47.8%\n');
+  });
+
+  it('says nothing about skeletal muscle when the payload has none', async () => {
+    const exporter = new TelegramExporter(defaultConfig);
+    await exporter.export(samplePayload);
+
+    const text = lastBody().text as string;
+    expect(text).toContain('🏋️ Body Fat 18.5% | Muscle 62.40 kg\n');
+    expect(text).not.toContain('Skeletal');
+  });
+
+  // #497: a withheld value is left out, and a line with nothing left goes.
+  it('leaves withheld values out of the message', async () => {
+    const exporter = new TelegramExporter({ ...defaultConfig, title: 'My Scale' });
+    await exporter.export({
+      ...samplePayload,
+      bodyFatPercent: null,
+      waterPercent: null,
+      boneMass: null,
+      muscleMass: null,
+      visceralFat: null,
+      physiqueRating: null,
+    });
+
+    expect(lastBody().text).toBe(
+      'My Scale\n⚖️ 80.00 kg | BMI 23.9\n🫀 BMR 1750 kcal\n📅 Metabolic Age 30 yr',
+    );
   });
 
   it('exposes reportsExports from the config', () => {

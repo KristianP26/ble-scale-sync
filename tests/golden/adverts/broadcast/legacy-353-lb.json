@@ -1,0 +1,49 @@
+{
+  "adverts": [
+    {
+      "atMs": 0,
+      "data": "0x0157 020000000001, 181d 238e4eea070818103913",
+      "decision": "complete",
+      "reading": {
+        "weight": 91.217425607,
+        "impedance": 0
+      },
+      "sink": "queued"
+    },
+    {
+      "atMs": 500,
+      "data": "0x0157 020000000001, 181d 238e4eea070818103913",
+      "decision": "complete",
+      "reading": {
+        "weight": 91.217425607,
+        "impedance": 0
+      },
+      "sink": "dedup",
+      "untilMs": 1500,
+      "count": 3
+    }
+  ],
+  "exports": [
+    {
+      "atMs": 0,
+      "by": "advert",
+      "reading": {
+        "weight": 91.217425607,
+        "impedance": 0
+      },
+      "payload": {
+        "weight": 91.22,
+        "impedance": 0,
+        "bmi": 27.24,
+        "bodyFatPercent": 23.39,
+        "waterPercent": 55.93,
+        "boneMass": 2.94,
+        "muscleMass": 66.95,
+        "visceralFat": 11,
+        "physiqueRating": 5,
+        "bmr": 1910,
+        "metabolicAge": 31
+      }
+    }
+  ]
+}

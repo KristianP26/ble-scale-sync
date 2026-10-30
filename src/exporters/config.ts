@@ -3,30 +3,7 @@ import { describeInvalidHeader, parseHeaderString } from './headers.js';
 
 const log = createLogger('ExporterConfig');
 
-export type ExporterName =
-  | 'garmin'
-  | 'mqtt'
-  | 'webhook'
-  | 'influxdb'
-  | 'ntfy'
-  | 'file'
-  | 'strava'
-  | 'telegram'
-  | 'intervals'
-  | 'runalyze'
-  | 'wger'
-  | 'healthlog'
-  | 'dreeve';
-
-/**
- * Runtime twin of `ExporterName`, for validating `EXPORTERS=...`.
- *
- * Hand-maintained, like the union above, and `tests/exporters/registry.test.ts`
- * asserts it equals the set derived from the registry. Without that assertion a
- * twelfth exporter added per the documented steps but missed here passes lint,
- * typecheck and the whole suite, then rejects its own name at startup (#406).
- */
-const KNOWN_EXPORTERS = new Set<ExporterName>([
+const EXPORTER_NAMES = [
   'garmin',
   'mqtt',
   'webhook',
@@ -40,7 +17,19 @@ const KNOWN_EXPORTERS = new Set<ExporterName>([
   'wger',
   'healthlog',
   'dreeve',
-]);
+] as const;
+
+export type ExporterName = (typeof EXPORTER_NAMES)[number];
+
+/**
+ * Runtime twin of `ExporterName`, for validating `EXPORTERS=...`.
+ *
+ * Hand-maintained, and `tests/exporters/registry.test.ts` asserts it equals the
+ * set derived from the registry. Without that assertion a twelfth exporter
+ * added per the documented steps but missed here passes lint, typecheck and
+ * the whole suite, then rejects its own name at startup (#406).
+ */
+const KNOWN_EXPORTERS = new Set<ExporterName>(EXPORTER_NAMES);
 
 /** @internal Exported for the registry-agreement test only. */
 export const _knownExporterNamesForTest: ReadonlySet<ExporterName> = KNOWN_EXPORTERS;

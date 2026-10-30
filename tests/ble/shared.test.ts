@@ -1,23 +1,25 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import type { Mock } from 'vitest';
+import { waitForRawReading, withAbandonmentCleanup } from '../../src/ble/shared.js';
+import { getRawCaptureConfig, toHex } from '../../src/ble/session/capture.js';
 import {
-  waitForReading,
-  waitForRawReading,
-  withAbandonmentCleanup,
   findMissingCharacteristics,
   resolveWriteChar,
-  getRawCaptureConfig,
-  toHex,
   stopDeferredNotifications,
-} from '../../src/ble/shared.js';
-import { untilAborted, withIdleTimeout } from '../../src/ble/types.js';
-import type { BleChar, BleDevice } from '../../src/ble/shared.js';
+} from '../../src/ble/session/wiring.js';
+import { untilAborted, withIdleTimeout, SessionTimeoutError } from '../../src/ble/types.js';
+import type { RawReading, SessionRequest } from '../../src/ble/shared.js';
+import type { BleChar, BleDevice } from '../../src/ble/session/ports.js';
 import { normalizeUuid, bleLog } from '../../src/ble/types.js';
 import { KoogeekS1Adapter } from '../../src/scales/koogeek-s1.js';
 import { RenphoMsc04Adapter } from '../../src/scales/renpho-msc04.js';
 import { BeurerSanitasScaleAdapter } from '../../src/scales/beurer-sanitas.js';
 import { EsCs20mAdapter, buildGuestProfileFrame } from '../../src/scales/es-cs20m.js';
 import { QnScaleAdapter } from '../../src/scales/qn-scale/index.js';
+import { YunmaiScaleAdapter } from '../../src/scales/yunmai.js';
+import { applyForcedAdapter } from '../../src/scales/force.js';
 import { mockPeripheral } from '../helpers/scale-test-utils.js';
+import { M1690_LIVE_80KG, M1690_PROTOCOL_VERSION_REPLY } from '../helpers/yunmai-m1690.js';
 import { uuid16, xorChecksum, buildPayload } from '../../src/scales/body-comp-helpers.js';
 import type {
   ScaleAdapter,
@@ -63,6 +65,7 @@ const NOTIFY_UUID = '0000fff100001000800000805f9b34fb';
 const WRITE_UUID = '0000fff200001000800000805f9b34fb';
 
 interface MockBleChar extends BleChar {
+  write: Mock<BleChar['write']>;
   triggerData(data: Buffer): void;
   subscribeCalled: boolean;
   writtenData: Buffer[];
@@ -126,20 +129,57 @@ function createCharMap(entries: [string, MockBleChar][]): {
  * Create a minimal legacy-mode adapter (no onConnected, no characteristics).
  * Uses charNotifyUuid + charWriteUuid + unlockCommand.
  */
-function createLegacyAdapter(overrides: Partial<ScaleAdapter> = {}): ScaleAdapter {
+// A passive (preferPassive: true) override would need parseBroadcast or
+// parseServiceData too; a legacy GATT adapter never is one.
+type LegacyOverrides = Partial<ScaleAdapter> & { preferPassive?: false };
+
+function createLegacyAdapter(overrides: LegacyOverrides = {}): ScaleAdapter {
   return {
     name: 'TestScale',
     charNotifyUuid: NOTIFY_UUID,
     charWriteUuid: WRITE_UUID,
     unlockCommand: [0x13, 0x09],
     unlockIntervalMs: 2000,
-    normalizesWeight: true,
     matches: (_info: BleDeviceInfo) => true,
     parseNotification: vi.fn((_data: Buffer): ScaleReading | null => null),
     isComplete: vi.fn((reading: ScaleReading) => reading.weight > 10 && reading.impedance > 200),
     computeMetrics: vi.fn((_reading: ScaleReading, _profile: UserProfile) => SAMPLE_BODY_COMP),
     ...overrides,
   };
+}
+
+/** A SessionRequest from what every session here sets, the rest by name. */
+function req(
+  charMap: Map<string, BleChar>,
+  device: BleDevice,
+  adapter: ScaleAdapter,
+  profile: UserProfile,
+  address: string,
+  rest: Partial<SessionRequest> = {},
+): SessionRequest {
+  return {
+    charMap,
+    device,
+    adapter,
+    profile,
+    address,
+    scaleAuth: undefined,
+    ...rest,
+  };
+}
+
+/** One session, then computeMetrics on its reading, as the processor does. */
+function waitForReading(
+  charMap: Map<string, BleChar>,
+  device: BleDevice,
+  adapter: ScaleAdapter,
+  profile: UserProfile,
+  address: string,
+  onLiveData?: (reading: ScaleReading) => void,
+): Promise<BodyComposition> {
+  return waitForRawReading(req(charMap, device, adapter, profile, address, { onLiveData })).then(
+    ({ reading, adapter: matched }) => matched.computeMetrics(reading, profile),
+  );
 }
 
 // ─── Legacy mode tests ──────────────────────────────────────────────────────
@@ -280,7 +320,7 @@ describe('waitForReading() — legacy mode', () => {
       }),
     });
 
-    const promise = waitForReading(charMap, device, adapter, PROFILE, '', undefined, onLiveData);
+    const promise = waitForReading(charMap, device, adapter, PROFILE, '', onLiveData);
     await vi.waitFor(() => expect(notifyChar.subscribeCalled).toBe(true));
 
     notifyChar.triggerData(Buffer.from([0x01])); // incomplete
@@ -468,16 +508,7 @@ describe('waitForReading() — onConnected mode', () => {
     });
 
     const promise = waitForRawReading(
-      charMap,
-      device,
-      adapter,
-      PROFILE,
-      '',
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      '013197A1',
+      req(charMap, device, adapter, PROFILE, '', { deviceName: '013197A1' }),
     );
     await vi.waitFor(() => expect(seen).toHaveLength(1));
     notifyChar.triggerData(Buffer.from([0x01]));
@@ -486,9 +517,10 @@ describe('waitForReading() — onConnected mode', () => {
   });
 
   // #461: the advertisement the transport matched on, for adapters that read
-  // per-unit flags from it. The bytes are the #461 Physiq advertisement.
+  // per-unit flags from it. The bytes are the #461 Physiq advertisement, its
+  // MAC at [5..10] rewritten to the fake 02:00:00:00:00:01.
   it('hands the advertised manufacturer data to onConnected as ConnectionContext.manufacturerData', async () => {
-    const mfg = { id: 0xffff, data: Buffer.from('081401000025e0160005ff6108010015', 'hex') };
+    const mfg = { id: 0xffff, data: Buffer.from('08140100000100000000026108010015', 'hex') };
     const run = async (manufacturerData?: {
       id: number;
       data: Buffer;
@@ -504,17 +536,10 @@ describe('waitForReading() — onConnected mode', () => {
         parseNotification: vi.fn(() => ({ weight: 75, impedance: 500 })),
       });
       const promise = waitForRawReading(
-        charMap,
-        createMockDevice(),
-        adapter,
-        PROFILE,
-        '',
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        'QN-Scale',
-        manufacturerData,
+        req(charMap, createMockDevice(), adapter, PROFILE, '', {
+          deviceName: 'QN-Scale',
+          manufacturerData,
+        }),
       );
       await vi.waitFor(() => expect(seen).toHaveLength(1));
       notifyChar.triggerData(Buffer.from([0x01]));
@@ -754,7 +779,7 @@ describe('waitForRawReading()', () => {
       parseNotification: vi.fn(() => ({ weight: 75.5, impedance: 500 })),
     });
 
-    const promise = waitForRawReading(charMap, device, adapter, PROFILE, '');
+    const promise = waitForRawReading(req(charMap, device, adapter, PROFILE, ''));
     await vi.waitFor(() => expect(notifyChar.subscribeCalled).toBe(true));
 
     notifyChar.triggerData(Buffer.from([0x01]));
@@ -762,30 +787,6 @@ describe('waitForRawReading()', () => {
     const result = await promise;
     expect(result.reading).toEqual({ weight: 75.5, impedance: 500 });
     expect(result.adapter).toBe(adapter);
-    expect(adapter.computeMetrics).not.toHaveBeenCalled();
-  });
-
-  it('applies lbs-to-kg conversion on raw reading', async () => {
-    const notifyChar = createMockChar();
-    const writeChar = createMockChar();
-    const device = createMockDevice();
-    const { charMap } = createCharMap([
-      [NOTIFY_UUID, notifyChar],
-      [WRITE_UUID, writeChar],
-    ]);
-
-    const adapter = createLegacyAdapter({
-      normalizesWeight: false,
-      parseNotification: vi.fn(() => ({ weight: 166.45, impedance: 500 })),
-    });
-
-    const promise = waitForRawReading(charMap, device, adapter, PROFILE, '', 'lbs');
-    await vi.waitFor(() => expect(notifyChar.subscribeCalled).toBe(true));
-
-    notifyChar.triggerData(Buffer.from([0x01]));
-
-    const result = await promise;
-    expect(result.reading.weight).toBeCloseTo(166.45 * 0.453592, 2);
     expect(adapter.computeMetrics).not.toHaveBeenCalled();
   });
 
@@ -800,7 +801,7 @@ describe('waitForRawReading()', () => {
 
     const adapter = createLegacyAdapter();
 
-    const promise = waitForRawReading(charMap, device, adapter, PROFILE, '');
+    const promise = waitForRawReading(req(charMap, device, adapter, PROFILE, ''));
     await vi.waitFor(() => expect(notifyChar.subscribeCalled).toBe(true));
 
     device.triggerDisconnect();
@@ -851,7 +852,7 @@ describe('waitForRawReading()', () => {
       }),
     });
 
-    const promise = waitForRawReading(charMap, device, adapter, PROFILE, '', undefined, onLiveData);
+    const promise = waitForRawReading(req(charMap, device, adapter, PROFILE, '', { onLiveData }));
     await vi.waitFor(() => expect(notifyChar.subscribeCalled).toBe(true));
 
     notifyChar.triggerData(Buffer.from([0x01])); // incomplete
@@ -893,7 +894,7 @@ describe('waitForRawReading() — raw capture mode', () => {
     ]);
     const adapter = captureAdapter();
 
-    const promise = waitForRawReading(charMap, device, adapter, PROFILE, '');
+    const promise = waitForRawReading(req(charMap, device, adapter, PROFILE, ''));
     await vi.waitFor(() => expect(notifyChar.subscribeCalled).toBe(true));
 
     notifyChar.triggerData(Buffer.from([0x58, 0x01, 0x0a, 0x0b])); // complete -> starts hold
@@ -919,7 +920,7 @@ describe('waitForRawReading() — raw capture mode', () => {
     ]);
     const adapter = captureAdapter();
 
-    const promise = waitForRawReading(charMap, device, adapter, PROFILE, '');
+    const promise = waitForRawReading(req(charMap, device, adapter, PROFILE, ''));
     await vi.waitFor(() => expect(notifyChar.subscribeCalled).toBe(true));
 
     notifyChar.triggerData(Buffer.from([0x58, 0x01])); // complete, but capture holds
@@ -949,7 +950,7 @@ describe('waitForRawReading() — raw capture mode', () => {
       ]);
       const adapter = captureAdapter();
 
-      const promise = waitForRawReading(charMap, device, adapter, PROFILE, '');
+      const promise = waitForRawReading(req(charMap, device, adapter, PROFILE, ''));
       await vi.advanceTimersByTimeAsync(0); // flush async subscribe
       expect(notifyChar.subscribeCalled).toBe(true);
 
@@ -974,7 +975,7 @@ describe('waitForRawReading() — raw capture mode', () => {
     ]);
     const adapter = captureAdapter();
 
-    const promise = waitForRawReading(charMap, device, adapter, PROFILE, '');
+    const promise = waitForRawReading(req(charMap, device, adapter, PROFILE, ''));
     await vi.waitFor(() => expect(notifyChar.subscribeCalled).toBe(true));
 
     notifyChar.triggerData(Buffer.from([0x58, 0x01]));
@@ -1006,7 +1007,7 @@ describe('waitForRawReading() history collection', () => {
         .mockReturnValueOnce({ weight: 82, impedance: 500 }),
     });
 
-    const promise = waitForRawReading(charMap, device, adapter, PROFILE, '');
+    const promise = waitForRawReading(req(charMap, device, adapter, PROFILE, ''));
     await vi.waitFor(() => expect(notifyChar.subscribeCalled).toBe(true));
 
     notifyChar.triggerData(Buffer.from([0x01]));
@@ -1041,7 +1042,7 @@ describe('waitForRawReading() history collection', () => {
         .mockReturnValueOnce({ weight: 71, impedance: 490, timestamp: t2 }),
     });
 
-    const promise = waitForRawReading(charMap, device, adapter, PROFILE, '');
+    const promise = waitForRawReading(req(charMap, device, adapter, PROFILE, ''));
     await vi.waitFor(() => expect(notifyChar.subscribeCalled).toBe(true));
 
     notifyChar.triggerData(Buffer.from([0x01]));
@@ -1068,7 +1069,7 @@ describe('waitForRawReading() history collection', () => {
       parseNotification: vi.fn(() => null),
     });
 
-    const promise = waitForRawReading(charMap, device, adapter, PROFILE, '');
+    const promise = waitForRawReading(req(charMap, device, adapter, PROFILE, ''));
     await vi.waitFor(() => expect(notifyChar.subscribeCalled).toBe(true));
 
     device.triggerDisconnect();
@@ -1095,7 +1096,7 @@ describe('waitForRawReading() history collection', () => {
         .mockReturnValueOnce({ weight: 82, impedance: 500, timestamp: stamped }),
     });
 
-    const promise = waitForRawReading(charMap, device, adapter, PROFILE, '');
+    const promise = waitForRawReading(req(charMap, device, adapter, PROFILE, ''));
     await vi.waitFor(() => expect(notifyChar.subscribeCalled).toBe(true));
 
     notifyChar.triggerData(Buffer.from([0x01]));
@@ -1129,7 +1130,7 @@ describe('waitForRawReading() history collection', () => {
         .mockReturnValueOnce({ weight: 82, impedance: 500 }),
     });
 
-    const promise = waitForRawReading(charMap, device, adapter, PROFILE, '');
+    const promise = waitForRawReading(req(charMap, device, adapter, PROFILE, ''));
     await vi.waitFor(() => expect(notifyChar.subscribeCalled).toBe(true));
 
     notifyChar.triggerData(Buffer.from([0x01]));
@@ -1168,7 +1169,7 @@ describe('waitForRawReading() history collection', () => {
 
     const adapter = createLegacyAdapter({ parseNotification: parse });
 
-    const promise = waitForRawReading(charMap, device, adapter, PROFILE, '');
+    const promise = waitForRawReading(req(charMap, device, adapter, PROFILE, ''));
     await vi.waitFor(() => expect(notifyChar.subscribeCalled).toBe(true));
 
     for (let i = 0; i < readings.length; i++) {
@@ -1207,7 +1208,7 @@ describe('waitForRawReading() — per-frame ACK + completion hold', () => {
       ...(ackWithResponse === undefined ? {} : { ackWithResponse }),
     });
 
-    void waitForRawReading(charMap, device, adapter, PROFILE, '');
+    void waitForRawReading(req(charMap, device, adapter, PROFILE, ''));
     await vi.waitFor(() => expect(notifyChar.subscribeCalled).toBe(true));
     notifyChar.triggerData(Buffer.from([0xe7]));
     await vi.waitFor(() => expect(writeChar.write).toHaveBeenCalled());
@@ -1238,7 +1239,7 @@ describe('waitForRawReading() — per-frame ACK + completion hold', () => {
       ),
     });
 
-    const promise = waitForRawReading(charMap, device, adapter, PROFILE, '');
+    const promise = waitForRawReading(req(charMap, device, adapter, PROFILE, ''));
     await vi.waitFor(() => expect(notifyChar.subscribeCalled).toBe(true));
 
     // A frame that parseNotification drops must still be ACKed.
@@ -1271,7 +1272,7 @@ describe('waitForRawReading() — per-frame ACK + completion hold', () => {
       ),
     });
 
-    const promise = waitForRawReading(charMap, device, adapter, PROFILE, '');
+    const promise = waitForRawReading(req(charMap, device, adapter, PROFILE, ''));
     await vi.waitFor(() => expect(notifyChar.subscribeCalled).toBe(true));
 
     // Weight-only complete reading: must NOT resolve yet (link held).
@@ -1306,7 +1307,7 @@ describe('waitForRawReading() — per-frame ACK + completion hold', () => {
         parseNotification: vi.fn(() => ({ weight: 83.4, impedance: 0 })),
       });
 
-      const promise = waitForRawReading(charMap, device, adapter, PROFILE, '');
+      const promise = waitForRawReading(req(charMap, device, adapter, PROFILE, ''));
       // Flush the fire-and-forget subscribe microtask under fake timers
       // (vi.waitFor would not advance the faked clock — known footgun; the
       // documented fix is advanceTimersByTimeAsync, which flushes async timers).
@@ -1354,7 +1355,7 @@ describe('waitForRawReading() — per-frame ACK + completion hold', () => {
         }),
       });
 
-      const promise = waitForRawReading(charMap, device, adapter, PROFILE, '');
+      const promise = waitForRawReading(req(charMap, device, adapter, PROFILE, ''));
       await vi.advanceTimersByTimeAsync(1);
       expect(notifyChar.subscribeCalled).toBe(true);
 
@@ -1387,7 +1388,7 @@ describe('waitForRawReading() — per-frame ACK + completion hold', () => {
       parseNotification: vi.fn(() => ({ weight: 83.4, impedance: 0 })),
     });
 
-    const promise = waitForRawReading(charMap, device, adapter, PROFILE, '');
+    const promise = waitForRawReading(req(charMap, device, adapter, PROFILE, ''));
     await vi.waitFor(() => expect(notifyChar.subscribeCalled).toBe(true));
 
     notifyChar.triggerData(Buffer.from([0x01]));
@@ -1421,7 +1422,7 @@ describe('waitForRawReading() — per-frame ACK + completion hold', () => {
       ),
     });
 
-    const promise = waitForRawReading(charMap, device, adapter, PROFILE, '');
+    const promise = waitForRawReading(req(charMap, device, adapter, PROFILE, ''));
     await vi.waitFor(() => expect(notifyChar.subscribeCalled).toBe(true));
 
     notifyChar.triggerData(Buffer.from([0x01])); // stored record, an hour old
@@ -1456,7 +1457,7 @@ describe('waitForRawReading() — per-frame ACK + completion hold', () => {
       ),
     });
 
-    const promise = waitForRawReading(charMap, device, adapter, PROFILE, '');
+    const promise = waitForRawReading(req(charMap, device, adapter, PROFILE, ''));
     await vi.waitFor(() => expect(notifyChar.subscribeCalled).toBe(true));
 
     notifyChar.triggerData(Buffer.from([0x01]));
@@ -1466,83 +1467,6 @@ describe('waitForRawReading() — per-frame ACK + completion hold', () => {
 
     notifyChar.triggerData(Buffer.from([0x99]));
     await promise;
-  });
-});
-
-// ─── Weight normalization tests ─────────────────────────────────────────────
-
-describe('waitForReading() — weight normalization', () => {
-  it('converts lbs to kg when normalizesWeight is false', async () => {
-    const notifyChar = createMockChar();
-    const writeChar = createMockChar();
-    const device = createMockDevice();
-    const { charMap } = createCharMap([
-      [NOTIFY_UUID, notifyChar],
-      [WRITE_UUID, writeChar],
-    ]);
-
-    const adapter = createLegacyAdapter({
-      normalizesWeight: false,
-      parseNotification: vi.fn(() => ({ weight: 166.45, impedance: 500 })),
-    });
-
-    const promise = waitForReading(charMap, device, adapter, PROFILE, '', 'lbs');
-    await vi.waitFor(() => expect(notifyChar.subscribeCalled).toBe(true));
-
-    notifyChar.triggerData(Buffer.from([0x01]));
-
-    await promise;
-    // Weight should be converted: 166.45 * 0.453592 ≈ 75.50
-    const call = vi.mocked(adapter.computeMetrics).mock.calls[0];
-    expect(call[0].weight).toBeCloseTo(166.45 * 0.453592, 2);
-  });
-
-  it('does NOT convert when normalizesWeight is true', async () => {
-    const notifyChar = createMockChar();
-    const writeChar = createMockChar();
-    const device = createMockDevice();
-    const { charMap } = createCharMap([
-      [NOTIFY_UUID, notifyChar],
-      [WRITE_UUID, writeChar],
-    ]);
-
-    const adapter = createLegacyAdapter({
-      normalizesWeight: true,
-      parseNotification: vi.fn(() => ({ weight: 75.5, impedance: 500 })),
-    });
-
-    const promise = waitForReading(charMap, device, adapter, PROFILE, '', 'lbs');
-    await vi.waitFor(() => expect(notifyChar.subscribeCalled).toBe(true));
-
-    notifyChar.triggerData(Buffer.from([0x01]));
-
-    await promise;
-    const call = vi.mocked(adapter.computeMetrics).mock.calls[0];
-    expect(call[0].weight).toBe(75.5); // unchanged
-  });
-
-  it('does NOT convert when weightUnit is kg', async () => {
-    const notifyChar = createMockChar();
-    const writeChar = createMockChar();
-    const device = createMockDevice();
-    const { charMap } = createCharMap([
-      [NOTIFY_UUID, notifyChar],
-      [WRITE_UUID, writeChar],
-    ]);
-
-    const adapter = createLegacyAdapter({
-      normalizesWeight: false,
-      parseNotification: vi.fn(() => ({ weight: 75.5, impedance: 500 })),
-    });
-
-    const promise = waitForReading(charMap, device, adapter, PROFILE, '', 'kg');
-    await vi.waitFor(() => expect(notifyChar.subscribeCalled).toBe(true));
-
-    notifyChar.triggerData(Buffer.from([0x01]));
-
-    await promise;
-    const call = vi.mocked(adapter.computeMetrics).mock.calls[0];
-    expect(call[0].weight).toBe(75.5); // unchanged
   });
 });
 
@@ -1823,7 +1747,7 @@ describe('waitForRawReading() with the real KoogeekS1Adapter (#270)', () => {
 
   it('answers the init frame on fff3 without a response, and never resolves on it', async () => {
     const { notifyChar, writeChar, device, charMap, adapter } = koogeekHarness();
-    const promise = waitForRawReading(charMap, device, adapter, PROFILE, '');
+    const promise = waitForRawReading(req(charMap, device, adapter, PROFILE, ''));
     await vi.waitFor(() => expect(notifyChar.subscribeCalled).toBe(true));
 
     notifyChar.triggerData(Buffer.from('55aa55aa010d010101162601735500000000001a', 'hex'));
@@ -1845,7 +1769,7 @@ describe('waitForRawReading() with the real KoogeekS1Adapter (#270)', () => {
 
   it('resolves immediately on a stable frame carrying impedance', async () => {
     const { notifyChar, device, charMap, adapter } = koogeekHarness();
-    const promise = waitForRawReading(charMap, device, adapter, PROFILE, '');
+    const promise = waitForRawReading(req(charMap, device, adapter, PROFILE, ''));
     await vi.waitFor(() => expect(notifyChar.subscribeCalled).toBe(true));
 
     notifyChar.triggerData(stableFrame(783, 470));
@@ -1856,7 +1780,7 @@ describe('waitForRawReading() with the real KoogeekS1Adapter (#270)', () => {
     vi.useFakeTimers();
     try {
       const { notifyChar, device, charMap, adapter } = koogeekHarness();
-      const promise = waitForRawReading(charMap, device, adapter, PROFILE, '');
+      const promise = waitForRawReading(req(charMap, device, adapter, PROFILE, ''));
       await vi.advanceTimersByTimeAsync(1);
       expect(notifyChar.subscribeCalled).toBe(true);
 
@@ -1872,12 +1796,136 @@ describe('waitForRawReading() with the real KoogeekS1Adapter (#270)', () => {
 
   it('prefers a later impedance-bearing stable frame inside the hold window', async () => {
     const { notifyChar, device, charMap, adapter } = koogeekHarness();
-    const promise = waitForRawReading(charMap, device, adapter, PROFILE, '');
+    const promise = waitForRawReading(req(charMap, device, adapter, PROFILE, ''));
     await vi.waitFor(() => expect(notifyChar.subscribeCalled).toBe(true));
 
     notifyChar.triggerData(stableFrame(800, 0));
     notifyChar.triggerData(stableFrame(783, 470));
     expect((await promise).reading).toEqual({ weight: 78.3, impedance: 470 });
+  });
+});
+
+// ─── Yunmai end to end through the real adapter (#474) ──────────────────────
+
+// The real adapter through the real session (#474). The hold is decided by the
+// frame just parsed, which works only because the session reads
+// completionHoldMs when the hold arms, right after that parse (#406).
+describe('waitForRawReading() with a forced, nameless Yunmai (#474)', () => {
+  const frame = (s: string): Buffer => Buffer.from(s.replace(/\s+/g, ''), 'hex');
+  // The derived #474 frames from tests/scales/yunmai.test.ts (user id, weight,
+  // resistance and body fat replaced, XOR recomputed; the second also has its
+  // resistance field zeroed).
+  const FINAL = frame('0d 1f 14 02 00 00 0c 51 ef 00 00 12 34 1f 40 01 d6 09 f6 ea');
+  const NO_RESISTANCE = frame('0d 1f 14 02 00 00 0c 51 ef 00 00 12 34 1f 40 00 00 09 f6 3d');
+
+  it('holds after a frame whose resistance field is 0 and settles on the one that has it', async () => {
+    vi.useFakeTimers();
+    try {
+      const notifyChar = createMockChar();
+      const writeChar = createMockChar();
+      const device = createMockDevice();
+      const { charMap } = createCharMap([
+        [uuid16(0xffe4), notifyChar],
+        [uuid16(0xffe9), writeChar],
+      ]);
+      const adapter = applyForcedAdapter([new YunmaiScaleAdapter()], 'Yunmai')[0];
+      adapter.matches({ localName: '', serviceUuids: [] });
+      const promise = waitForRawReading(req(charMap, device, adapter, PROFILE, ''));
+      await vi.advanceTimersByTimeAsync(1);
+      expect(notifyChar.subscribeCalled).toBe(true);
+
+      notifyChar.triggerData(NO_RESISTANCE);
+      let settled = false;
+      void promise.then(() => {
+        settled = true;
+      });
+      await vi.advanceTimersByTimeAsync(3000);
+      expect(settled, 'a frame with an empty resistance field must not end the session').toBe(
+        false,
+      );
+
+      notifyChar.triggerData(FINAL);
+      expect((await promise).reading).toEqual({
+        weight: 80,
+        impedance: 470,
+        scaleComposition: 25.5,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  /** The ESPHome watcher bound: 60 s without activity, 90 s in all. */
+  function runProxyBound(answerUnlock: boolean) {
+    const notifyChar = createMockChar();
+    const writeChar = createMockChar();
+    if (answerUnlock) {
+      // The Mini 2 answers each GET_PROTOCOL_VERSION 72-109 ms after the write.
+      writeChar.write = vi.fn(async (data: Buffer) => {
+        writeChar.writtenData.push(data);
+        setTimeout(() => notifyChar.triggerData(M1690_PROTOCOL_VERSION_REPLY), 80);
+      });
+    }
+    const device = createMockDevice();
+    const { charMap } = createCharMap([
+      [uuid16(0xffe4), notifyChar],
+      [uuid16(0xffe9), writeChar],
+    ]);
+    const adapter = applyForcedAdapter([new YunmaiScaleAdapter()], 'Yunmai')[0];
+    adapter.matches({ localName: '', serviceUuids: [] });
+    const promise = withAbandonmentCleanup(device, () =>
+      withIdleTimeout(
+        (onActivity) =>
+          waitForRawReading(req(charMap, device, adapter, PROFILE, '', { onActivity })),
+        60_000,
+        'GATT reading timeout',
+        { ms: 90_000, message: 'GATT session cap exceeded' },
+      ),
+    );
+    return { notifyChar, writeChar, promise };
+  }
+
+  it('ends a session in which the scale only answers the unlock on the idle timeout', async () => {
+    vi.useFakeTimers();
+    try {
+      const { writeChar, promise } = runProxyBound(true);
+      let failure: unknown = null;
+      promise.catch((e: unknown) => {
+        failure = e;
+      });
+      await vi.advanceTimersByTimeAsync(60_100);
+      expect(writeChar.writtenData.length).toBeGreaterThanOrEqual(12);
+      expect(failure).toBeInstanceOf(SessionTimeoutError);
+      expect((failure as SessionTimeoutError).reason).toBe('idle');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps the session open while live frames stream and settles on the final frame', async () => {
+    vi.useFakeTimers();
+    try {
+      // No reply to the unlock, so only the live frames can keep it open.
+      const { notifyChar, promise } = runProxyBound(false);
+      let failure: unknown = null;
+      promise.catch((e: unknown) => {
+        failure = e;
+      });
+      await vi.advanceTimersByTimeAsync(1);
+      for (let t = 0; t < 70_000; t += 200) {
+        notifyChar.triggerData(M1690_LIVE_80KG);
+        await vi.advanceTimersByTimeAsync(200);
+      }
+      expect(failure).toBeNull();
+      notifyChar.triggerData(FINAL);
+      expect((await promise).reading).toEqual({
+        weight: 80,
+        impedance: 470,
+        scaleComposition: 25.5,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -1915,7 +1963,7 @@ describe('waitForRawReading() — notification teardown', () => {
       }),
     });
 
-    const promise = waitForRawReading(charMap, device, adapter, PROFILE, '');
+    const promise = waitForRawReading(req(charMap, device, adapter, PROFILE, ''));
     await expect(promise).rejects.toThrow('handshake failed');
 
     // The session is already torn down while the subscribe is still in flight.
@@ -1946,7 +1994,7 @@ describe('waitForRawReading() — notification teardown', () => {
       ),
     });
 
-    const promise = waitForRawReading(charMap, device, adapter, PROFILE, '');
+    const promise = waitForRawReading(req(charMap, device, adapter, PROFILE, ''));
     await vi.waitFor(() => expect(notifyChar.subscribeCalled).toBe(true));
     notifyChar.triggerData(Buffer.from([0x10]));
 
@@ -1970,18 +2018,7 @@ describe('waitForRawReading() under the native idle deadline', () => {
       [WRITE_UUID, createMockChar()],
     ]);
     return withIdleTimeout(
-      (onActivity) =>
-        waitForRawReading(
-          charMap,
-          device,
-          adapter,
-          PROFILE,
-          '',
-          undefined,
-          undefined,
-          undefined,
-          onActivity,
-        ),
+      (onActivity) => waitForRawReading(req(charMap, device, adapter, PROFILE, '', { onActivity })),
       IDLE_MS,
       'Timed out waiting for a complete scale reading',
     );
@@ -2074,6 +2111,168 @@ describe('waitForRawReading() under the native idle deadline', () => {
   });
 });
 
+// ─── status frames do not restart the idle timeout (#474, D070) ─────────────
+
+describe('waitForRawReading() with status frames (#474, D070)', () => {
+  const IDLE_MS = 60_000;
+  const CAP_MS = 90_000;
+  // The Yunmai unlock, GET_PROTOCOL_VERSION, written every 5 s.
+  const UNLOCK = [0x0d, 0x05, 0x13, 0x00, 0x16];
+
+  function statusAdapter(overrides: LegacyOverrides = {}): ScaleAdapter {
+    return createLegacyAdapter({
+      unlockCommand: UNLOCK,
+      unlockIntervalMs: 5000,
+      parseNotification: vi.fn((): ScaleReading | null => null),
+      isStatusFrame: (_c: string, d: Buffer) => d[3] === 0x05,
+      ...overrides,
+    });
+  }
+
+  /** A write char that answers every write 80 ms later, as the Mini 2 does. */
+  function answeringChars(answer: Buffer | null): {
+    notifyChar: MockBleChar;
+    writeChar: MockBleChar;
+    charMap: Map<string, BleChar>;
+    answered: () => number;
+  } {
+    const notifyChar = createMockChar();
+    const writeChar = createMockChar();
+    let answered = 0;
+    writeChar.write = vi.fn(async (data: Buffer) => {
+      writeChar.writtenData.push(data);
+      if (!answer) return;
+      setTimeout(() => {
+        answered++;
+        notifyChar.triggerData(answer);
+      }, 80);
+    });
+    const { charMap } = createCharMap([
+      [NOTIFY_UUID, notifyChar],
+      [WRITE_UUID, writeChar],
+    ]);
+    return { notifyChar, writeChar, charMap, answered: () => answered };
+  }
+
+  function run(
+    adapter: ScaleAdapter,
+    charMap: Map<string, BleChar>,
+    device: BleDevice,
+    onFrame?: () => void,
+  ): Promise<RawReading> {
+    return withAbandonmentCleanup(device, () =>
+      withIdleTimeout(
+        (onActivity) =>
+          waitForRawReading(req(charMap, device, adapter, PROFILE, '', { onActivity, onFrame })),
+        IDLE_MS,
+        'GATT reading timeout',
+        { ms: CAP_MS, message: 'GATT session cap exceeded' },
+      ),
+    );
+  }
+
+  it('ends a session in which the scale only answers our unlock on the idle timeout, not the cap', async () => {
+    vi.useFakeTimers();
+    try {
+      const { writeChar, charMap, answered } = answeringChars(M1690_PROTOCOL_VERSION_REPLY);
+      let failure: unknown = null;
+      run(statusAdapter(), charMap, createMockDevice()).catch((e: unknown) => {
+        failure = e;
+      });
+
+      await vi.advanceTimersByTimeAsync(IDLE_MS + 100);
+      expect(answered()).toBeGreaterThanOrEqual(12);
+      expect(writeChar.writtenData.length).toBeGreaterThanOrEqual(12);
+      expect(failure, 'the replies to the unlock must not hold the session open').toBeInstanceOf(
+        SessionTimeoutError,
+      );
+      expect((failure as SessionTimeoutError).reason).toBe('idle');
+      expect((failure as Error).message).toBe('GATT reading timeout');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('calls onFrame for a status frame although it does not restart the idle timeout', async () => {
+    vi.useFakeTimers();
+    try {
+      const { charMap, answered } = answeringChars(M1690_PROTOCOL_VERSION_REPLY);
+      const onFrame = vi.fn();
+      run(statusAdapter(), charMap, createMockDevice(), onFrame).catch(() => {});
+
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(answered()).toBeGreaterThan(0);
+      expect(onFrame).toHaveBeenCalledTimes(answered());
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('still counts a frame that is not a status frame, even when the parser rejects it', async () => {
+    vi.useFakeTimers();
+    try {
+      const { notifyChar, charMap } = answeringChars(null);
+      let failure: unknown = null;
+      run(statusAdapter(), charMap, createMockDevice()).catch((e: unknown) => {
+        failure = e;
+      });
+      await vi.advanceTimersByTimeAsync(1);
+
+      for (let t = 0; t < 65_000; t += 5000) {
+        notifyChar.triggerData(M1690_LIVE_80KG);
+        await vi.advanceTimersByTimeAsync(5000);
+      }
+      expect(failure, 'a rejected live frame is a weigh-in in progress').toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('says once per session that a status frame does not keep the session open', async () => {
+    const debug = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+    const said = (): number =>
+      debug.mock.calls.filter((c) => String(c[0]).includes('is a status frame')).length;
+
+    for (const session of [1, 2]) {
+      const { notifyChar, charMap } = answeringChars(null);
+      const device = createMockDevice();
+      const adapter = statusAdapter({ unlockCommand: undefined, unlockIntervalMs: undefined });
+      const promise = waitForRawReading(req(charMap, device, adapter, PROFILE, ''));
+      promise.catch(() => {});
+      await vi.waitFor(() => expect(notifyChar.subscribeCalled).toBe(true));
+
+      for (let i = 0; i < 3; i++) notifyChar.triggerData(M1690_PROTOCOL_VERSION_REPLY);
+      device.triggerDisconnect();
+      await expect(promise).rejects.toThrow();
+      expect(said(), `session ${session}`).toBe(session);
+    }
+  });
+
+  it('still acknowledges and parses a status frame', async () => {
+    const { notifyChar, writeChar, charMap } = answeringChars(null);
+    const buildAck = vi.fn((): number[] | null => [0x01]);
+    const parseNotification = vi.fn((): ScaleReading | null => null);
+    const adapter = statusAdapter({
+      unlockCommand: undefined,
+      unlockIntervalMs: undefined,
+      buildAck,
+      parseNotification,
+      isStatusFrame: () => true,
+    });
+    const device = createMockDevice();
+    const promise = waitForRawReading(req(charMap, device, adapter, PROFILE, ''));
+    promise.catch(() => {});
+    await vi.waitFor(() => expect(notifyChar.subscribeCalled).toBe(true));
+
+    notifyChar.triggerData(M1690_PROTOCOL_VERSION_REPLY);
+    expect(buildAck).toHaveBeenCalledTimes(1);
+    expect(parseNotification).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(writeChar.writtenData.map((b) => toHex(b))).toContain('01'));
+    device.triggerDisconnect();
+    await expect(promise).rejects.toThrow();
+  });
+});
+
 // ─── getRawCaptureConfig + toHex ─────────────────────────────────────────────
 
 describe('toHex()', () => {
@@ -2147,7 +2346,7 @@ describe('completionHoldMs through waitForRawReading', () => {
         isFinal: () => final,
       });
 
-      const promise = waitForRawReading(charMap, device, adapter, PROFILE, '');
+      const promise = waitForRawReading(req(charMap, device, adapter, PROFILE, ''));
       await vi.waitFor(() => expect(notifyChar.subscribeCalled).toBe(true));
 
       // A complete but not-final frame must NOT settle the session.
@@ -2194,7 +2393,7 @@ describe('completionHoldMs through waitForRawReading', () => {
         isFinal: () => true,
       });
 
-      const promise = waitForRawReading(charMap, device, adapter, PROFILE, '');
+      const promise = waitForRawReading(req(charMap, device, adapter, PROFILE, ''));
       await vi.waitFor(() => expect(notifyChar.subscribeCalled).toBe(true));
       notifyChar.triggerData(Buffer.from([0x01]));
 
@@ -2215,6 +2414,17 @@ describe('completionHoldMs through waitForRawReading', () => {
 describe('R-MSC04 composition hold through waitForRawReading (#434)', () => {
   const hex = (h: string): Buffer => Buffer.from(h, 'hex');
   const PROFILE_187: UserProfile = { height: 187, age: 30, gender: 'male', isAthlete: false };
+  // The #117 record's segment impedances, exported whatever happens to its body
+  // fat (#497).
+  const SEGMENTS = {
+    segmentImpedance: {
+      trunk: { at20kHz: 22.2, at100kHz: 17.4 },
+      leftArm: { at20kHz: 310.4, at100kHz: 275.3 },
+      rightArm: { at20kHz: 305.5, at100kHz: 270.4 },
+      leftLeg: { at20kHz: 227.6, at100kHz: 201.7 },
+      rightLeg: { at20kHz: 234.6, at100kHz: 208.5 },
+    },
+  };
   /** The clock of the #117 capture's b3 (Unix 0x6a478eb1, UTC+10). */
   const captureClock = (): Date => {
     const d = new Date(0x6a478eb1 * 1000);
@@ -2233,7 +2443,7 @@ describe('R-MSC04 composition hold through waitForRawReading (#434)', () => {
       [uuid16(0x2a12), indicate],
     ]);
     const adapter = new RenphoMsc04Adapter(captureClock);
-    const promise = waitForRawReading(charMap, device, adapter, PROFILE, 'AABBCCDDEEFF');
+    const promise = waitForRawReading(req(charMap, device, adapter, PROFILE, 'AABBCCDDEEFF'));
     let settled = false;
     void promise.then(
       () => (settled = true),
@@ -2269,13 +2479,17 @@ describe('R-MSC04 composition hold through waitForRawReading (#434)', () => {
 
       s.indicate.triggerData(hex('af0400ed011101b70008ea'));
       const raw = await s.promise;
-      expect(raw.reading).toEqual({ weight: 95.55, impedance: 0 });
+      expect(raw.reading).toEqual({
+        weight: 95.55,
+        impedance: 0,
+        scaleComposition: expect.any(Object),
+      });
       expect(s.adapter.isFinal(raw.reading)).toBe(true);
       // The record was computed for the guest b2 we wrote, so its body fat is
       // not exported (D038): the estimate, although PROFILE_187 passes the
-      // D022 height gate.
+      // D022 height gate. Its segment impedances go out all the same.
       expect(s.adapter.computeMetrics(raw.reading, PROFILE_187)).toEqual(
-        buildPayload(95.55, 0, {}, PROFILE_187),
+        buildPayload(95.55, 0, SEGMENTS, PROFILE_187),
       );
 
       // The guest b2 (PROFILE: 180.0 cm, no last weight -> 70.00 kg) and the
@@ -2364,6 +2578,67 @@ describe('R-MSC04 composition hold through waitForRawReading (#434)', () => {
       vi.useRealTimers();
     }
   });
+
+  it('settles on the record in a session that starts at weight locked (D057)', async () => {
+    vi.useFakeTimers();
+    try {
+      const s = await startSession();
+      // #117 capture, second connection, from weight locked on (20:28:20.418 ..
+      // 30.363): what a session made after the 0x24 sees.
+      s.indicate.triggerData(hex('55aa200005020901005080')); // weight locked, 0 stored
+      await vi.advanceTimersByTimeAsync(9630);
+      s.indicate.triggerData(hex('55aa200005031101005089')); // complete
+      await vi.advanceTimersByTimeAsync(135);
+      s.indicate.triggerData(hex('ad040255aa2500240411000025530a00de0c200b'));
+      await vi.advanceTimersByTimeAsync(91);
+      s.indicate.triggerData(hex('ae0401ef08e4092a00ae0ac10a9007e108250100'));
+      await vi.advanceTimersByTimeAsync(89);
+      s.indicate.triggerData(hex('af0400ed011101b70008ea'));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(s.isSettled(), 'the record must end the session').toBe(true);
+
+      const raw = await s.promise;
+      expect(raw.reading).toEqual({
+        weight: 95.55,
+        impedance: 0,
+        scaleComposition: expect.any(Object),
+      });
+      expect(s.adapter.isFinal(raw.reading)).toBe(true);
+      // Our guest b2 went out, so the estimate (D038), with the segment
+      // impedances (#497).
+      expect(s.adapter.computeMetrics(raw.reading, PROFILE_187)).toEqual(
+        buildPayload(95.55, 0, SEGMENTS, PROFILE_187),
+      );
+      expect(s.write.writtenData.map((b) => Buffer.from(b).toString('hex'))).toEqual([
+        '55aab20009000907081b58a9ff02ef',
+        '55aab3000b010701016a478eb102580011',
+        '55aab000020201b4',
+        '55aab000020301b5',
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('gets no weight when the record of such a session is ignored, so the disconnect rejects', async () => {
+    vi.useFakeTimers();
+    try {
+      const s = await startSession();
+      // First status from vossitch's #434 log (0x09, 1 stored record), the
+      // rest from the #117 capture.
+      s.indicate.triggerData(hex('55aa200005010901014676'));
+      s.indicate.triggerData(hex('55aa200005031101005089'));
+      s.indicate.triggerData(hex('ad040255aa2500240411000025530a00de0c200b'));
+      s.indicate.triggerData(hex('ae0401ef08e4092a00ae0ac10a9007e108250100'));
+      s.indicate.triggerData(hex('af0400ed011101b70008ea'));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(s.isSettled()).toBe(false);
+      s.device.triggerDisconnect();
+      await expect(s.promise).rejects.toThrow(/Scale disconnected before reading completed/);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 // ─── QN 19-byte dialect weigh-in, end to end (#331, D037) ───────────────────
@@ -2428,15 +2703,9 @@ describe('QN 19-byte dialect hold through waitForRawReading (#331)', () => {
     adapter.configure({ qnWeightAck: true });
     const wait = (onActivity?: (minIdleMs?: number) => void) =>
       waitForRawReading(
-        charMap,
-        device,
-        adapter,
-        { ...PROFILE, lastKnownWeight: 76 },
-        'AABBCCDDEEFF',
-        undefined,
-        undefined,
-        undefined,
-        onActivity,
+        req(charMap, device, adapter, { ...PROFILE, lastKnownWeight: 76 }, 'AABBCCDDEEFF', {
+          onActivity,
+        }),
       );
     const promise =
       idleTimeoutMs === undefined
@@ -2574,7 +2843,11 @@ describe('QN 19-byte dialect hold through waitForRawReading (#331)', () => {
       await vi.advanceTimersByTimeAsync(0);
       expect(s.isSettled()).toBe(true);
       const raw = await s.promise;
-      expect(raw.reading).toEqual({ weight: 76.55, impedance: 0 });
+      expect(raw.reading).toEqual({
+        weight: 76.55,
+        impedance: 0,
+        scaleComposition: expect.any(Object),
+      });
       expect(s.adapter.isFinal(raw.reading)).toBe(true);
       expect(raw.history ?? []).toEqual([]);
     } finally {
@@ -2683,6 +2956,615 @@ describe('QN 19-byte dialect hold through waitForRawReading (#331)', () => {
   });
 });
 
+// ─── A reading from memory whose time cannot be read (D065) ─────────────────
+
+// The contract says an adapter must not flag a reading `fromMemory` without a
+// trusted stamp; if one does anyway, the reading goes the history way dated by
+// its receipt. An unreadable Date used to throw out of the notification
+// handler instead, on node-ble straight out of the characteristic's emitter.
+describe('waitForRawReading: a reading from memory with an unreadable stamp (D065)', () => {
+  it('buffers it as history without throwing and hands it over on the disconnect', async () => {
+    const debug = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+    try {
+      const notify = createMockChar();
+      const write = createMockChar();
+      const device = createMockDevice();
+      const { charMap } = createCharMap([
+        [NOTIFY_UUID, notify],
+        [WRITE_UUID, write],
+      ]);
+      const adapter = createLegacyAdapter({
+        parseNotification: () => ({
+          weight: 70,
+          impedance: 500,
+          timestamp: new Date(NaN),
+          fromMemory: true,
+        }),
+      });
+      const promise = waitForRawReading(req(charMap, device, adapter, PROFILE, 'AABBCCDDEEFF'));
+      await vi.waitFor(() => expect(notify.subscribeCalled).toBe(true));
+
+      expect(() => notify.triggerData(Buffer.from([0x01]))).not.toThrow();
+      device.triggerDisconnect();
+      const raw = await promise;
+      expect(raw.reading.fromMemory).toBe(true);
+      expect(raw.reading.weight).toBe(70);
+      const lines = debug.mock.calls.map((c) => String(c[0]));
+      expect(
+        lines.some((l) => l.includes('Historical reading buffered') && l.includes('receipt time')),
+      ).toBe(true);
+    } finally {
+      debug.mockRestore();
+    }
+  });
+});
+
+// ─── QN 18-byte stored weigh-in through waitForRawReading (#463, D065) ──────
+
+// The real adapter through the real session, frames and their spacing from the
+// public #463 DEBUG log of the first connection after step 3 (2026-10-13
+// 18:03:57). Where a frame carries the scale's own body fat (0x23 [16..17],
+// live 0x10 [11..12]) those bytes are zeroed and the checksum recomputed;
+// nothing here reads them. The 0x24/0x25 composition frames of the record are
+// left out: the adapter ignores them on this dialect.
+describe('QN 18-byte stored weigh-in through waitForRawReading (#463)', () => {
+  const hex = (h: string): Buffer => Buffer.from(h.replace(/ /g, ''), 'hex');
+  const INFO = hex('12 12 ff 01 00 00 00 00 02 13 07 16 00 01 05 9f 32 2d');
+  const READY = hex('14 0b ff 01 00 01 09 03 00 00 2c');
+  const CONFIG_REQ = hex('21 05 ff 01 26');
+  const VISIT_OK = hex('a1 06 02 01 01 ab');
+  const MEASURING = hex('10 0f ff 01 01 1b f8 00 00 00 00 00 00 00 33');
+  const RECORD = hex('23 14 ff 01 01 01 0a 2e 61 32 1b f3 10 d9 10 fe 00 00 00 09');
+  const LIVE = hex('10 0f ff 01 02 1b f8 10 fb 10 f9 00 00 00 48');
+  const ADVERT = {
+    id: 0xffff,
+    data: hex('08 14 01 00 01 01 00 00 00 00 02 61 08 01 00 15'),
+  };
+  /** The fake MAC the frames echo in place of the Physiq's (0x12 [3..8] with its sum recomputed, advertisement [5..10]). */
+  const ADDRESS = '020000000001';
+  /** The record, 71.55 kg at 17:59:38Z in user slot 1, as the reading it becomes. */
+  const STORED = {
+    weight: 71.55,
+    impedance: 497,
+    timestamp: new Date('2026-10-13T17:59:38.000Z'),
+    fromMemory: true,
+  };
+
+  async function startSession() {
+    const notify = createMockChar();
+    const write = createMockChar();
+    const device = createMockDevice();
+    const { charMap } = createCharMap([
+      [NOTIFY_UUID, notify],
+      [WRITE_UUID, write],
+    ]);
+    const adapter = new QnScaleAdapter();
+    adapter.configure({ qnUserKey: 1000 });
+    const promise = waitForRawReading(
+      req(charMap, device, adapter, PROFILE, ADDRESS, { manufacturerData: ADVERT }),
+    );
+    let settled = false;
+    void promise.then(
+      () => (settled = true),
+      () => (settled = true),
+    );
+    await vi.waitFor(() => expect(notify.subscribeCalled).toBe(true));
+    await vi.advanceTimersByTimeAsync(0);
+    return { notify, device, promise, isSettled: () => settled };
+  }
+
+  /** The session of the log up to and including the stored record. */
+  async function upToTheRecord(s: Awaited<ReturnType<typeof startSession>>) {
+    const steps: [number, Buffer][] = [
+      [132, INFO],
+      [732, READY],
+      [246, CONFIG_REQ],
+      [290, VISIT_OK],
+      [341, MEASURING],
+      [781, RECORD],
+    ];
+    for (const [gapMs, frame] of steps) {
+      await vi.advanceTimersByTimeAsync(gapMs);
+      s.notify.triggerData(frame);
+    }
+  }
+
+  it.each([
+    ['from minutes before the session (start chosen at 18:09:00)', '2026-10-13T18:09:00Z'],
+    ['259 s before the session, as in the log', '2026-10-13T18:03:57.411Z'],
+  ])(
+    'hands a stored weigh-in %s over as history next to the live one',
+    async (_label, startedAt) => {
+      vi.useFakeTimers();
+      try {
+        vi.setSystemTime(new Date(startedAt));
+        const s = await startSession();
+        await upToTheRecord(s);
+        await vi.advanceTimersByTimeAsync(974);
+        expect(s.isSettled(), 'a stored weigh-in does not end the session').toBe(false);
+        s.notify.triggerData(LIVE);
+        await vi.advanceTimersByTimeAsync(0);
+        const raw = await s.promise;
+        expect(raw.reading).toEqual({ weight: 71.6, impedance: 507 });
+        expect(raw.history).toEqual([STORED]);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it('hands it over on the disconnect when no live weigh-in follows', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-10-13T18:09:00Z'));
+      const s = await startSession();
+      await upToTheRecord(s);
+      await vi.advanceTimersByTimeAsync(500);
+      s.device.triggerDisconnect();
+      const raw = await s.promise;
+      expect(raw.reading).toEqual(STORED);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+// ─── QN 18-byte stored weigh-in kept for no user (#463, D072) ──────────────
+
+// The real adapter through the real session. Frames and their spacing are
+// from the public #463 DEBUG log of 2026-10-20 19:39 (image dev @ b958c53),
+// byte for byte, except the final live frame, whose body fat [11..12] is
+// zeroed and checksum recomputed. The repeated 0x12 (50.698, 50.844, 51.283)
+// and the AE02 challenge and echo (51.477, 51.574) are left out, so a gap
+// spans them. That session had no advertisement; the unit's advertisement of
+// 17:57:58 that day is passed, so the impedance does not depend on how a
+// session without one is read.
+describe('QN 18-byte stored weigh-in with no user through waitForRawReading (#463)', () => {
+  const hex = (h: string): Buffer => Buffer.from(h.replace(/ /g, ''), 'hex');
+  const INFO = hex('12 12 ff 01 00 00 00 00 02 13 07 16 00 04 05 9f 32 30');
+  const READY = hex('14 0b ff 01 00 01 09 03 00 00 2c');
+  const CONFIG_REQ = hex('21 05 ff 01 26');
+  const VISIT_OK = hex('a1 06 02 01 01 ab');
+  const MEASURING = hex('10 0f ff 01 01 1c 57 00 00 00 00 00 00 00 93');
+  const RECORD = hex('23 14 ff 01 01 f0 50 7d 6a 32 1c 5c 10 cf 10 cd 00 00 00 c5');
+  const EMPTY_24 = hex('24 10 ff' + ' 00'.repeat(12) + ' 33');
+  const EMPTY_25 = hex('25 0f ff' + ' 00'.repeat(12) + ' 33');
+  const FINAL = hex('10 0f ff 01 02 1c 57 10 dd 10 db 00 00 00 6c');
+  const ADVERT = { id: 0xffff, data: hex('08 14 01 00 03 01 00 00 00 00 02 61 08 02 00 15') };
+  /** The fake MAC the frames echo in place of the Physiq's (0x12 [3..8] with its sum recomputed, advertisement [5..10]). */
+  const ADDRESS = '020000000001';
+  /** onConnected in the log. */
+  const START = '2026-10-20T19:39:50.232Z';
+  /** The record, 72.60 kg at 19:28:16Z kept for no user, as history. */
+  const NO_USER = {
+    weight: 72.6,
+    impedance: 502,
+    timestamp: new Date('2026-10-20T19:28:16.000Z'),
+    fromMemory: true,
+  };
+
+  async function startSession() {
+    const notify = createMockChar();
+    const write = createMockChar();
+    const device = createMockDevice();
+    const { charMap } = createCharMap([
+      [NOTIFY_UUID, notify],
+      [WRITE_UUID, write],
+    ]);
+    const adapter = new QnScaleAdapter();
+    adapter.configure({ qnUserKey: 1000 });
+    const promise = waitForRawReading(
+      req(charMap, device, adapter, PROFILE, ADDRESS, { manufacturerData: ADVERT }),
+    );
+    let settled = false;
+    void promise.then(
+      () => (settled = true),
+      () => (settled = true),
+    );
+    await vi.waitFor(() => expect(notify.subscribeCalled).toBe(true));
+    await vi.advanceTimersByTimeAsync(0);
+    return { notify, device, promise, isSettled: () => settled };
+  }
+
+  /** The log up to the 0x25 after the record. */
+  async function upToTheAnswer(s: Awaited<ReturnType<typeof startSession>>) {
+    const steps: [number, Buffer][] = [
+      [157, INFO],
+      [990, READY],
+      [244, CONFIG_REQ],
+      [293, VISIT_OK],
+      [341, MEASURING],
+      [391, RECORD],
+      [147, EMPTY_24],
+      [146, EMPTY_25],
+    ];
+    for (const [gapMs, frame] of steps) {
+      await vi.advanceTimersByTimeAsync(gapMs);
+      s.notify.triggerData(frame);
+    }
+  }
+
+  it('hands it over as history next to the live weigh-in', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date(START));
+      const s = await startSession();
+      await upToTheAnswer(s);
+      await vi.advanceTimersByTimeAsync(244);
+      s.notify.triggerData(MEASURING);
+      await vi.advanceTimersByTimeAsync(877);
+      expect(s.isSettled(), 'a stored weigh-in does not end the session').toBe(false);
+      s.notify.triggerData(FINAL);
+      await vi.advanceTimersByTimeAsync(0);
+      const raw = await s.promise;
+      expect(raw.reading).toEqual({ weight: 72.55, impedance: 501 });
+      expect(raw.history).toEqual([NO_USER]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('hands it over on the disconnect when no live weigh-in follows', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date(START));
+      const s = await startSession();
+      await upToTheAnswer(s);
+      await vi.advanceTimersByTimeAsync(200);
+      s.device.triggerDisconnect();
+      await expect(s.promise).resolves.toMatchObject({ reading: NO_USER });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+// ─── QN 18-byte weigh-in before the stored-record answer (#463, D065) ──────
+
+// The real adapter through the real session. Frames and their spacing up to
+// the final live frame are from the public #463 DEBUG log of 2026-10-19 16:38:
+// the scale accepted the profile and sent its final 49 ms later, and the
+// session used to end on it before our 0x22 went out. The answers after it
+// are real frames in orders and at times no log shows: the #463 record of
+// 2026-10-13 (body fat zeroed, checksum recomputed) or the #461 "no stored
+// weigh-ins" frames, at the 0x23 -> 0x24 -> 0x25 spacing of the 10-13 log.
+// No 18-byte log has a batch of two records, so `ofTwo` derives one.
+describe('QN 18-byte weigh-in before the stored-record answer through waitForRawReading (#463)', () => {
+  const hex = (h: string): Buffer => Buffer.from(h.replace(/ /g, ''), 'hex');
+  const INFO = hex('12 12 ff 01 00 00 00 00 02 13 07 16 00 03 05 9f 32 2f');
+  const READY = hex('14 0b ff 01 00 01 09 03 00 00 2c');
+  const CONFIG_REQ = hex('21 05 ff 01 26');
+  const VISIT_OK = hex('a1 06 02 01 01 ab');
+  const FINAL = hex('10 0f ff 01 02 1b cb 10 db 10 d9 00 00 00 db');
+  const RECORD = hex('23 14 ff 01 01 01 0a 2e 61 32 1b f3 10 d9 10 fe 00 00 00 09');
+  const NO_RECORDS = hex('23 14 ff' + ' 00'.repeat(16) + ' 36');
+  const EMPTY_24 = hex('24 10 ff' + ' 00'.repeat(12) + ' 33');
+  const EMPTY_25 = hex('25 0f ff' + ' 00'.repeat(12) + ' 33');
+  const ADVERT = { id: 0xffff, data: hex('08 14 01 00 03 01 00 00 00 00 02 61 08 02 00 15') };
+  /** The fake MAC the frames echo in place of the Physiq's (0x12 [3..8] with its sum recomputed, advertisement [5..10]). */
+  const ADDRESS = '020000000001';
+  const QUERY = hex('22 06 00 00 03 2b');
+  const ACK = hex('1f 05 00 10 34');
+  const WEIGH_IN = { weight: 71.15, impedance: 499 };
+  /** The record, 71.55 kg at 2026-10-13T17:59:38Z in user slot 1, as history. */
+  const STORED = {
+    weight: 71.55,
+    impedance: 497,
+    timestamp: new Date('2026-10-13T17:59:38.000Z'),
+    fromMemory: true,
+  };
+  /** RECORD as record `index` of two, `later` s after its time: [3], [4], [6..9], [19]. */
+  const ofTwo = (index: number, later: number): Buffer => {
+    const f = Buffer.from(RECORD);
+    f[3] = 2;
+    f[4] = index;
+    f.writeUInt32LE(RECORD.readUInt32LE(6) + later, 6);
+    f[19] = [...f.subarray(0, 19)].reduce((a, b) => a + b, 0) & 0xff;
+    return f;
+  };
+
+  async function startSession(
+    opts: { key?: boolean; idleTimeoutMs?: number; abortSignal?: AbortSignal } = {},
+  ) {
+    const notify = createMockChar();
+    const write = createMockChar();
+    const device = createMockDevice();
+    const { charMap } = createCharMap([
+      [NOTIFY_UUID, notify],
+      [WRITE_UUID, write],
+    ]);
+    const adapter = new QnScaleAdapter();
+    if (opts.key !== false) adapter.configure({ qnUserKey: 1000 });
+    const wait = (onActivity?: (minIdleMs?: number) => void) =>
+      waitForRawReading(
+        req(charMap, device, adapter, PROFILE, ADDRESS, {
+          onActivity,
+          manufacturerData: ADVERT,
+        }),
+      );
+    const promise =
+      opts.idleTimeoutMs === undefined
+        ? wait()
+        : withAbandonmentCleanup(
+            device,
+            () =>
+              untilAborted(
+                withIdleTimeout(wait, opts.idleTimeoutMs!, 'GATT reading timeout'),
+                opts.abortSignal,
+              ),
+            opts.abortSignal,
+          );
+    let settled = false;
+    void promise.then(
+      () => (settled = true),
+      () => (settled = true),
+    );
+    await vi.waitFor(() => expect(notify.subscribeCalled).toBe(true));
+    await vi.advanceTimersByTimeAsync(0);
+    const info = vi.spyOn(bleLog, 'info');
+    const infoLines = (needle: string): number =>
+      info.mock.calls.filter((c) => String(c[0]).includes(needle)).length;
+    const debug = vi.spyOn(bleLog, 'debug');
+    const debugLines = (needle: string): number =>
+      debug.mock.calls.filter((c) => String(c[0]).includes(needle)).length;
+    const writes = (frame: Buffer): number =>
+      write.writtenData.filter((w) => w.equals(frame)).length;
+    const writtenAt = (frame: Buffer): number =>
+      write.writtenData.findIndex((w) => w.equals(frame));
+    return {
+      notify,
+      device,
+      promise,
+      isSettled: () => settled,
+      infoLines,
+      debugLines,
+      writes,
+      writtenAt,
+    };
+  }
+
+  /** The log up to its final live frame; returns how many 0x22 went out before it. */
+  async function upToTheFinal(s: Awaited<ReturnType<typeof startSession>>): Promise<number> {
+    const steps: [number, Buffer][] = [
+      [130, INFO],
+      [194, INFO],
+      [210, INFO],
+      [146, READY],
+      [249, CONFIG_REQ],
+      [287, VISIT_OK],
+    ];
+    for (const [gapMs, frame] of steps) {
+      await vi.advanceTimersByTimeAsync(gapMs);
+      s.notify.triggerData(frame);
+    }
+    await vi.advanceTimersByTimeAsync(49);
+    const queriesBefore = s.writes(QUERY);
+    s.notify.triggerData(FINAL);
+    await vi.advanceTimersByTimeAsync(0);
+    return queriesBefore;
+  }
+
+  /** Feed frames at the given gaps (ms) and let the session react. */
+  async function feed(s: Awaited<ReturnType<typeof startSession>>, steps: [number, Buffer][]) {
+    for (const [gapMs, frame] of steps) {
+      await vi.advanceTimersByTimeAsync(gapMs);
+      s.notify.triggerData(frame);
+    }
+    await vi.advanceTimersByTimeAsync(0);
+  }
+
+  const START = '2026-10-19T16:38:13.480Z';
+
+  it('asks on the acceptance, holds the weigh-in and settles on the last 0x25 with the record', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date(START));
+      const s = await startSession();
+      expect(await upToTheFinal(s), 'the 0x22 goes out on the acceptance').toBe(1);
+      expect(s.isSettled(), 'the weigh-in waits for the answer').toBe(false);
+      await feed(s, [
+        [300, RECORD],
+        [146, EMPTY_24],
+      ]);
+      expect(s.isSettled(), 'not on the 0x24').toBe(false);
+      await feed(s, [[146, EMPTY_25]]);
+      expect(s.isSettled()).toBe(true);
+      const raw = await s.promise;
+      expect(raw.reading).toEqual(WEIGH_IN);
+      expect(raw.history).toEqual([STORED]);
+      expect(s.writes(QUERY)).toBe(1);
+      expect(s.writtenAt(QUERY)).toBeLessThan(s.writtenAt(ACK));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('settles at once on a "no stored weigh-ins" answer', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date(START));
+      const s = await startSession();
+      await upToTheFinal(s);
+      await vi.advanceTimersByTimeAsync(305);
+      expect(s.isSettled()).toBe(false);
+      await feed(s, [[1, NO_RECORDS]]);
+      expect(s.isSettled()).toBe(true);
+      const raw = await s.promise;
+      expect(raw.reading).toEqual(WEIGH_IN);
+      expect(raw.history ?? []).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('settles 3 s after the weigh-in when the scale does not answer', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date(START));
+      const s = await startSession();
+      await upToTheFinal(s);
+      await vi.advanceTimersByTimeAsync(2999);
+      expect(s.isSettled()).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(s.isSettled()).toBe(true);
+      expect((await s.promise).reading).toEqual(WEIGH_IN);
+      expect(s.infoLines('holding connection up to 3s')).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps holding while a batch is still arriving', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date(START));
+      const s = await startSession();
+      await upToTheFinal(s);
+      await feed(s, [
+        [300, ofTwo(1, 0)],
+        [146, EMPTY_24],
+        [146, EMPTY_25],
+      ]);
+      await vi.advanceTimersByTimeAsync(3000 - 592);
+      expect(s.isSettled()).toBe(false);
+      expect(s.infoLines('still arriving')).toBe(1);
+      await feed(s, [
+        [300, ofTwo(2, 60)],
+        [146, EMPTY_24],
+        [146, EMPTY_25],
+      ]);
+      expect(s.isSettled()).toBe(true);
+      const raw = await s.promise;
+      expect(raw.reading).toEqual(WEIGH_IN);
+      expect(raw.history).toEqual([
+        STORED,
+        { ...STORED, timestamp: new Date('2026-10-13T18:00:38.000Z') },
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // Through the transports' idle deadline at session_timeout_sec's minimum.
+  it('settles 23 s after the weigh-in when the rest of a batch never comes', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date(START));
+      const s = await startSession({ idleTimeoutMs: 5000 });
+      await upToTheFinal(s);
+      await feed(s, [
+        [300, ofTwo(1, 0)],
+        [146, EMPTY_24],
+        [146, EMPTY_25],
+      ]);
+      await vi.advanceTimersByTimeAsync(23_000 - 592 - 1);
+      expect(s.isSettled()).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(s.isSettled()).toBe(true);
+      const raw = await s.promise;
+      expect(raw.reading).toEqual(WEIGH_IN);
+      expect(raw.history).toEqual([STORED]);
+      expect(
+        s.debugLines(
+          "QN: the session ended while the weigh-in (71.15 kg) was held for the scale's " +
+            'stored ones: stored weigh-ins were still arriving (#463)',
+        ),
+      ).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // A unit that sends no 0x24 and 0x25 after its record waits the 3 s, no more.
+  it("settles 3 s after the weigh-in when the last record's 0x25 never comes", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date(START));
+      const s = await startSession();
+      await upToTheFinal(s);
+      await feed(s, [[300, RECORD]]);
+      await vi.advanceTimersByTimeAsync(3000 - 300 - 1);
+      expect(s.isSettled()).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(s.isSettled()).toBe(true);
+      const raw = await s.promise;
+      expect(raw.reading).toEqual(WEIGH_IN);
+      expect(raw.history).toEqual([STORED]);
+      expect(s.infoLines('still arriving')).toBe(0);
+      // One reason, from the 3 s line, not a second one as the session ends.
+      expect(s.debugLines('did not finish its answer to the stored-record query')).toBe(1);
+      expect(s.debugLines('the session ended while the weigh-in')).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('settles on the held weigh-in when the scale disconnects during the hold', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date(START));
+      const s = await startSession();
+      await upToTheFinal(s);
+      await vi.advanceTimersByTimeAsync(500);
+      expect(s.isSettled()).toBe(false);
+      s.device.triggerDisconnect();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(s.isSettled()).toBe(true);
+      expect((await s.promise).reading).toEqual(WEIGH_IN);
+      // The hold's own 3 s line belongs to the session that ended: nothing
+      // says "the session ends" after it has already ended.
+      await vi.advanceTimersByTimeAsync(3000);
+      expect(s.debugLines('did not answer the stored-record query')).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // A shutdown hands nothing over (D051). The disconnect that the cleanup
+  // fires used to settle the session on the held weigh-in anyway, into a
+  // promise nobody reads, with "Reading complete" in the normal log.
+  it('hands nothing over and logs no reading when a shutdown ends the hold', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date(START));
+      const shutdown = new AbortController();
+      const s = await startSession({ idleTimeoutMs: 60_000, abortSignal: shutdown.signal });
+      await upToTheFinal(s);
+      await vi.advanceTimersByTimeAsync(500);
+      expect(s.isSettled()).toBe(false);
+      const outcome = s.promise.then(
+        () => 'resolved',
+        (e: Error) => e.message,
+      );
+      shutdown.abort(new Error('shutting down'));
+      expect(await outcome).toBe('shutting down');
+      await vi.advanceTimersByTimeAsync(0);
+      expect(s.infoLines('Reading complete')).toBe(0);
+      // And the session really ended there: the adapter was told once, the
+      // shutdown says it handed nothing over, and no timer of the session or
+      // of its idle bound is left behind.
+      expect(s.debugLines('the session ended while the weigh-in')).toBe(1);
+      expect(s.debugLines('nothing is handed over')).toBe(1);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('still ends on the weigh-in at once without ble.qn_user_key', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date(START));
+      const s = await startSession({ key: false });
+      expect(await upToTheFinal(s)).toBe(0);
+      expect(s.isSettled()).toBe(true);
+      expect((await s.promise).reading).toEqual(WEIGH_IN);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 // ─── ES-CS20M with AE00 through waitForRawReading (#436) ─────────────────────
 
 describe('ES-CS20M on an AE00 unit through waitForRawReading (#436)', () => {
@@ -2704,7 +3586,7 @@ describe('ES-CS20M on an AE00 unit through waitForRawReading (#436)', () => {
       [uuid16(0xae02), createMockChar()],
     ]);
     const adapter = new EsCs20mAdapter(clock);
-    const promise = waitForRawReading(charMap, device, adapter, PROFILE, 'AABBCCDDEEFF');
+    const promise = waitForRawReading(req(charMap, device, adapter, PROFILE, 'AABBCCDDEEFF'));
     await vi.waitFor(() => expect(notify.subscribeCalled).toBe(true));
     await new Promise((r) => setTimeout(r, 20));
     // The legacy path wrote the kg command here, before CCCD, on every unit.
@@ -2746,7 +3628,7 @@ describe('ES-CS20M on an AE00 unit through waitForRawReading (#436)', () => {
       [uuid16(0xae02), createMockChar()],
     ]);
     const adapter = new EsCs20mAdapter(clock);
-    const promise = waitForRawReading(charMap, device, adapter, PROFILE, 'AABBCCDDEEFF');
+    const promise = waitForRawReading(req(charMap, device, adapter, PROFILE, 'AABBCCDDEEFF'));
     let settled = false;
     void promise.then(
       () => (settled = true),
@@ -2786,7 +3668,11 @@ describe('ES-CS20M on an AE00 unit through waitForRawReading (#436)', () => {
       expect(s.isSettled()).toBe(false);
       await vi.advanceTimersByTimeAsync(1);
       expect(s.isSettled()).toBe(true);
-      expect((await s.promise).reading).toEqual({ weight: 139.1, impedance: 470 });
+      expect((await s.promise).reading).toEqual({
+        weight: 139.1,
+        impedance: 470,
+        scaleComposition: 'bia',
+      });
     } finally {
       vi.useRealTimers();
     }
@@ -2834,7 +3720,11 @@ describe('ES-CS20M on an AE00 unit through waitForRawReading (#436)', () => {
       await s.play([[1, POWER_OFF]]);
       await vi.advanceTimersByTimeAsync(0);
       expect(s.isSettled()).toBe(true);
-      expect((await s.promise).reading).toEqual({ weight: 139.1, impedance: 404 });
+      expect((await s.promise).reading).toEqual({
+        weight: 139.1,
+        impedance: 404,
+        scaleComposition: 'bia',
+      });
     } finally {
       vi.useRealTimers();
     }
@@ -2882,7 +3772,7 @@ describe('onSessionStart placement', () => {
         parseCharNotification: vi.fn(() => ({ weight: 75, impedance: 500 })),
       });
 
-      const promise = waitForRawReading(charMap, device, adapter, PROFILE, 'AABBCCDDEEFF');
+      const promise = waitForRawReading(req(charMap, device, adapter, PROFILE, 'AABBCCDDEEFF'));
       await vi.waitFor(() => expect(notifyChar.subscribeCalled).toBe(true));
       if (mode === 'multi-char') {
         await vi.waitFor(() => expect(adapter.onConnected).toHaveBeenCalled());
@@ -2923,7 +3813,7 @@ describe('onSessionStart placement', () => {
       parseNotification: vi.fn(() => ({ weight: 75, impedance: 500 })),
     });
 
-    const promise = waitForRawReading(charMap, device, adapter, PROFILE, '');
+    const promise = waitForRawReading(req(charMap, device, adapter, PROFILE, ''));
     await vi.waitFor(() => expect(notifyChar.subscribeCalled).toBe(true));
     notifyChar.triggerData(Buffer.from([0x01]));
     await expect(promise).resolves.toMatchObject({ reading: { weight: 75 } });
@@ -2959,7 +3849,7 @@ describe('withAbandonmentCleanup() (#404)', () => {
 
     const attempt = withAbandonmentCleanup(device, () =>
       withIdleTimeout(
-        () => waitForRawReading(charMap, device, adapter, PROFILE, ''),
+        () => waitForRawReading(req(charMap, device, adapter, PROFILE, '')),
         50,
         'Timed out waiting for a complete scale reading',
       ),
@@ -2991,7 +3881,7 @@ describe('withAbandonmentCleanup() (#404)', () => {
 
     const attempt = withAbandonmentCleanup(device, () =>
       withIdleTimeout(
-        () => waitForRawReading(charMap, device, adapter, PROFILE, ''),
+        () => waitForRawReading(req(charMap, device, adapter, PROFILE, '')),
         50,
         'gave up',
       ),
@@ -3016,7 +3906,7 @@ describe('withAbandonmentCleanup() (#404)', () => {
     });
 
     const promise = withAbandonmentCleanup(device, () =>
-      waitForRawReading(charMap, device, adapter, PROFILE, ''),
+      waitForRawReading(req(charMap, device, adapter, PROFILE, '')),
     );
     await vi.waitFor(() => expect(notifyChar.subscribeCalled).toBe(true));
     notifyChar.triggerData(Buffer.from([0x01]));
@@ -3118,7 +4008,7 @@ describe('waitForRawReading() write lane (#211)', () => {
     adapter.matches(mockPeripheral('SBF75'));
     const device = createMockDevice();
     const charMap = new Map<string, BleChar>([[normalizeUuid(FFE1), ffe1]]);
-    const promise = waitForRawReading(charMap, device, adapter, PROFILE, '');
+    const promise = waitForRawReading(req(charMap, device, adapter, PROFILE, ''));
     promise.catch(() => {});
     return { promise, device };
   }
@@ -3210,7 +4100,7 @@ describe('waitForRawReading() write lane (#211)', () => {
       parseNotification: vi.fn(() => ({ weight: 75, impedance: 500 })),
     });
 
-    const promise = waitForRawReading(charMap, device, adapter, PROFILE, '');
+    const promise = waitForRawReading(req(charMap, device, adapter, PROFILE, ''));
     promise.catch(() => {});
     await vi.waitFor(() => expect(writeChar.accepted).toHaveLength(1));
     expect(writeChar.rejections).toEqual([]);
@@ -3242,7 +4132,7 @@ describe('waitForRawReading() write lane (#211)', () => {
       parseNotification: vi.fn(() => ({ weight: 75, impedance: 500 })),
     });
 
-    const promise = waitForRawReading(charMap, device, adapter, PROFILE, '');
+    const promise = waitForRawReading(req(charMap, device, adapter, PROFILE, ''));
     await vi.waitFor(() => expect(writeChar.accepted).toHaveLength(1));
     // Started while the write on WRITE_UUID is still open.
     expect(otherChar.accepted.map((a) => a.hex)).toEqual(['02']);
@@ -3292,7 +4182,7 @@ describe('waitForRawReading() write lane (#211)', () => {
       }),
     });
 
-    const promise = waitForRawReading(charMap, device, adapter, PROFILE, '');
+    const promise = waitForRawReading(req(charMap, device, adapter, PROFILE, ''));
     await vi.waitFor(() => expect(writeChar.accepted).toHaveLength(1));
     notifyChar.triggerData(Buffer.from([0x99]));
     await promise; // session over, lanes closed
@@ -3334,7 +4224,7 @@ describe('waitForRawReading() write lane (#211)', () => {
         ),
       });
 
-      const promise = waitForRawReading(charMap, device, adapter, PROFILE, '');
+      const promise = waitForRawReading(req(charMap, device, adapter, PROFILE, ''));
       await vi.advanceTimersByTimeAsync(1);
       expect(writeChar.accepted.map((a) => a.hex)).toEqual(['1309']);
 
@@ -3422,7 +4312,7 @@ describe('deferred notify binding (#408)', () => {
       parseCharNotification: vi.fn(() => ({ weight: 65.7, impedance: 500 })),
     });
 
-    const promise = waitForRawReading(charMap, device, adapter, PROFILE, '');
+    const promise = waitForRawReading(req(charMap, device, adapter, PROFILE, ''));
     await vi.waitFor(() => expect(adapter.onConnected).toHaveBeenCalled());
     await vi.waitFor(() => expect(wire).toContain('subscribe 2a9d'));
     indicate.triggerData(Buffer.from([0x02]));
@@ -3449,7 +4339,7 @@ describe('deferred notify binding (#408)', () => {
       parseCharNotification: vi.fn(() => ({ weight: 65.7, impedance: 500 })),
     });
 
-    const promise = waitForRawReading(charMap, device, adapter, PROFILE, '');
+    const promise = waitForRawReading(req(charMap, device, adapter, PROFILE, ''));
     await vi.waitFor(() => expect(indicate.subscribeCalled).toBe(true));
     indicate.triggerData(Buffer.from([0x02]));
     await expect(promise).resolves.toMatchObject({ reading: { weight: 65.7 } });
@@ -3480,7 +4370,7 @@ describe('deferred notify binding (#408)', () => {
       parseCharNotification: vi.fn(() => ({ weight: 75, impedance: 500 })),
     });
 
-    const promise = waitForRawReading(charMap, device, adapter, PROFILE, '');
+    const promise = waitForRawReading(req(charMap, device, adapter, PROFILE, ''));
     await vi.waitFor(() => expect(wire).toContain('subscribe 2a9d'));
     ordinary.triggerData(Buffer.from([0x01]));
     await promise;
@@ -3510,7 +4400,7 @@ describe('deferred notify binding (#408)', () => {
       parseCharNotification: vi.fn(() => ({ weight: 75, impedance: 500 })),
     });
 
-    const promise = waitForRawReading(charMap, device, adapter, PROFILE, '');
+    const promise = waitForRawReading(req(charMap, device, adapter, PROFILE, ''));
     await vi.waitFor(() => expect(adapter.onConnected).toHaveBeenCalled());
     first.triggerData(Buffer.from([0x01]));
     await promise;

@@ -1,28 +1,16 @@
-import type {
-  ScaleAdapter,
-  BleDeviceInfo,
-  BodyComposition,
-} from '../../interfaces/scale-adapter.js';
+import type { ScaleAdapter, BleDeviceInfo } from '../../interfaces/scale-adapter.js';
 import type { MqttProxyConfig } from '../../config/schema.js';
 import type { ScanOptions, ScanResult } from '../types.js';
 import type { RawReading } from '../shared.js';
-import { waitForRawReading, withAbandonmentCleanup } from '../shared.js';
-import { resolveAdapter, resolveAfterDiscovery } from '../../scales/resolve.js';
+import { nativePolicy, runGattSession, selectSessionAdapter } from '../session/runner.js';
+import { resolveAdapter } from '../../scales/resolve.js';
 import {
   evaluateAdvertisement,
   logAdvert,
   readsFromAdvertisement,
   safeName,
 } from '../advertisement.js';
-import {
-  bleLog,
-  normalizeUuid,
-  withTimeout,
-  withIdleTimeout,
-  formatMac,
-  RAW_READING_TIMEOUT_MS,
-  READING_SESSION_CAP_FACTOR,
-} from '../types.js';
+import { bleLog, normalizeUuid, withTimeout, formatMac } from '../types.js';
 import { COMMAND_TIMEOUT_MS, topics, type Topics } from './topics.js';
 import { type MqttClient, createMqttClient } from './client.js';
 import { mqttGattConnect, mqttGattDisconnect } from './gatt.js';
@@ -188,7 +176,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
       const decision = evaluateAdvertisement(adapter, info);
 
       if (decision.kind === 'complete') {
-        bleLog.info(`Broadcast reading: ${decision.reading.weight} kg`);
+        bleLog.info(`Broadcast reading: ${decision.reading.weight.toFixed(2)} kg`);
         registerScaleMac(config, entry.address, adapter).catch(() => {});
         return { reading: decision.reading, adapter };
       }
@@ -233,14 +221,12 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
         // does (#319): before discovery Mi Scale 2 claims anything advertising
         // the generic 0x181B service, and a standard BCS scale reaches its own
         // adapter only here.
-        const resolved =
-          resolveAfterDiscovery(info, { characteristicUuids: [...charMap.keys()] }, adapters) ??
-          adapter;
-        if (resolved.name !== adapter.name) {
-          bleLog.info(
-            `Re-resolved adapter after GATT discovery: ${adapter.name} -> ${resolved.name} (${entry.address})`,
-          );
-        }
+        const resolved = selectSessionAdapter(
+          info,
+          { characteristicUuids: [...charMap.keys()] },
+          adapters,
+          { advertisedPick: adapter, address: entry.address },
+        )!;
         // A scale read from its advertisements is never driven over GATT; its
         // GATT path can answer the unlock forever without a weight (#422).
         if (readsFromAdvertisement(resolved)) {
@@ -256,31 +242,20 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
         }
         // Bounded like the node-ble and noble reads. An ESP32 that drops off
         // Wi-Fi mid-session sends no `disconnected`, so without this the read
-        // waited for as long as the caller's own deadline allowed, if it had
-        // one, and that kind of deadline abandons rather than cleans up
-        // (B-18). A timeout here goes through withAbandonmentCleanup.
-        const idleMs = opts.readingTimeoutMs ?? RAW_READING_TIMEOUT_MS;
-        const raw = await withAbandonmentCleanup(device, () =>
-          withIdleTimeout(
-            (onActivity) =>
-              waitForRawReading(
-                charMap,
-                device,
-                resolved,
-                opts.profile,
-                entry.address.replace(/[:-]/g, '').toUpperCase(),
-                opts.weightUnit,
-                opts.onLiveData,
-                opts.scaleAuth,
-                onActivity,
-                info.localName,
-                info.manufacturerData,
-                opts.selectProfile,
-              ),
-            idleMs,
-            'Timed out waiting for a complete scale reading',
-            { ms: idleMs * READING_SESSION_CAP_FACTOR, message: 'GATT session cap exceeded' },
-          ),
+        // waited for as long as the caller's own deadline allowed (B-18).
+        const raw = await runGattSession(
+          {
+            charMap,
+            device,
+            adapter: resolved,
+            profile: opts.profile,
+            address: entry.address.replace(/[:-]/g, '').toUpperCase(),
+            onLiveData: opts.onLiveData,
+            scaleAuth: opts.scaleAuth,
+            deviceName: info.localName,
+            manufacturerData: info.manufacturerData,
+          },
+          nativePolicy(opts.readingTimeoutMs),
         );
         registerScaleMac(config, entry.address, resolved).catch(() => {});
         return raw;
@@ -295,7 +270,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
 
     if (weightOnlyFallback) {
       bleLog.info(
-        `Broadcast reading (weight only, impedance not yet available): ${weightOnlyFallback.reading.weight} kg`,
+        `Broadcast reading (weight only, impedance not yet available): ${weightOnlyFallback.reading.weight.toFixed(2)} kg`,
       );
       registerScaleMac(config, weightOnlyFallback.address, weightOnlyFallback.adapter).catch(
         () => {},
@@ -324,11 +299,6 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
       /* ignore */
     }
   }
-}
-
-export async function scanAndRead(opts: ScanOptions): Promise<BodyComposition> {
-  const { reading, adapter } = await scanAndReadRaw(opts);
-  return adapter.computeMetrics(reading, opts.profile);
 }
 
 export async function scanDevices(

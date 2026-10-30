@@ -1,15 +1,18 @@
-import type { UserProfile, SessionProfileSelection } from '../interfaces/scale-adapter.js';
+import type { AdapterRuntimeConfig, ScaleAuth, UserProfile } from '../interfaces/scale-adapter.js';
+import type { z } from 'zod';
 import type { BleHandlerName } from '../ble/types.js';
-import type {
-  AppConfig,
-  UserConfig,
-  ScaleConfig,
-  ScaleDisplayUnit,
-  ExporterEntry,
-  WeightUnit,
-  MqttProxyConfig,
-  EsphomeProxyConfig,
-  HaBluetoothConfig,
+import {
+  ADAPTER_BLE_OPTIONS,
+  RuntimeSchema,
+  type AppConfig,
+  type UserConfig,
+  type ScaleConfig,
+  type ScaleDisplayUnit,
+  type ExporterEntry,
+  type WeightUnit,
+  type MqttProxyConfig,
+  type EsphomeProxyConfig,
+  type HaBluetoothConfig,
 } from './schema.js';
 
 import { isOutOfRange, matchUserByWeight } from './user-matching.js';
@@ -86,6 +89,56 @@ export function resolveUserProfile(user: UserConfig, scaleConfig: ScaleConfig): 
     isAthlete: user.is_athlete,
     birthDate: user.birth_date,
     lastKnownWeight: resolveWeightAnchor(user),
+    // Only when off, so every profile of a config without the key is as before.
+    ...(user.estimate_body_composition === false && { estimateBodyComposition: false }),
+  };
+}
+
+/** The Beurer consent material a session hands to the adapter, from `users[0]`. */
+export function resolveScaleAuth(user: UserConfig | undefined): ScaleAuth {
+  return {
+    pin: user?.beurer_pin,
+    userIndex: user?.beurer_user_index,
+    provision: user?.beurer_provision,
+    registerNewUser: user?.beurer_register_new_user,
+  };
+}
+
+type CamelCase<K extends string> = K extends `${infer H}_${infer T}`
+  ? `${H}${Capitalize<CamelCase<T>>}`
+  : K;
+
+/**
+ * The adapter-owned `ble.*` keys of one fragment as configure() gets them (D076):
+ * camelCased, a null or missing key absent.
+ */
+export type AdapterOptions<S extends Record<string, z.ZodType>> = {
+  readonly [K in keyof S & string as CamelCase<K>]?: NonNullable<z.output<S[K]>>;
+};
+
+/**
+ * What every adapter's configure() gets, at startup and on each reload: the Xiaomi
+ * MiBeacon bind key plus the effective scale MAC the S400 nonce needs, the display
+ * unit the QN 0x13 command and the AC 27 D0 frame echo (#269), and every
+ * adapter-owned ble.* key (ADAPTER_BLE_OPTIONS) under its camelCase name.
+ */
+export function buildAdapterRuntimeConfig(
+  config: AppConfig,
+  scaleMac: string | undefined,
+): AdapterRuntimeConfig {
+  const ble: Record<string, unknown> = config.ble ?? {};
+  const options: Record<string, unknown> = {};
+  for (const key of Object.keys(ADAPTER_BLE_OPTIONS)) {
+    options[key.replace(/_([a-z0-9])/g, (_, c: string) => c.toUpperCase())] = ble[key] ?? undefined;
+  }
+  return {
+    bindKey: config.ble?.bind_key ?? undefined,
+    scaleMac,
+    displayUnit: resolveDisplayUnit(config.scale),
+    ...options,
+    // The config entries themselves, not copies: the processor moves
+    // last_known_weight on them in memory after each live weigh-in.
+    userWeights: config.users,
   };
 }
 
@@ -137,17 +190,18 @@ export interface ResolvedRuntimeConfig {
 export function resolveRuntimeConfig(config: AppConfig): ResolvedRuntimeConfig {
   const user = config.users[0];
   const profile = resolveUserProfile(user, config.scale);
+  const runtime = { ...RuntimeSchema.parse({}), ...config.runtime };
 
   return {
     profile,
     scaleMac: config.ble?.scale_mac ?? undefined,
     weightUnit: config.scale.weight_unit,
-    dryRun: config.runtime?.dry_run ?? false,
-    continuousMode: config.runtime?.continuous_mode ?? false,
-    scanCooldownSec: config.runtime?.scan_cooldown ?? 30,
-    retryFailedExports: config.runtime?.retry_failed_exports ?? true,
-    watchdogMaxFailures: config.runtime?.watchdog_max_consecutive_failures ?? 10,
-    watchConfig: config.runtime?.watch_config ?? true,
+    dryRun: runtime.dry_run,
+    continuousMode: runtime.continuous_mode,
+    scanCooldownSec: runtime.scan_cooldown,
+    retryFailedExports: runtime.retry_failed_exports,
+    watchdogMaxFailures: runtime.watchdog_max_consecutive_failures,
+    watchConfig: runtime.watch_config,
     bleHandler: config.ble?.handler ?? 'auto',
     bleAdapter: config.ble?.adapter ?? undefined,
     adapterPrivacy: config.ble?.adapter_privacy === true,

@@ -1,0 +1,109 @@
+{
+  "settled": {
+    "by": "reading",
+    "atMs": 5633
+  },
+  "reading": {
+    "weight": 84.8,
+    "impedance": 501
+  },
+  "history": [],
+  "subscribes": [
+    {
+      "seq": 0,
+      "atMs": 0,
+      "uuid": "fff1"
+    },
+    {
+      "seq": 1,
+      "atMs": 0,
+      "uuid": "ae02"
+    }
+  ],
+  "writes": [
+    {
+      "seq": 2,
+      "atMs": 0,
+      "uuid": "ae01",
+      "hex": "fedcbac00600020101ef",
+      "withResponse": false
+    },
+    {
+      "seq": 3,
+      "atMs": 200,
+      "uuid": "fff2",
+      "hex": "13090001100000002d",
+      "withResponse": false
+    },
+    {
+      "seq": 4,
+      "atMs": 513,
+      "uuid": "fff2",
+      "hex": "20080003b0e331ef",
+      "withResponse": false
+    },
+    {
+      "seq": 5,
+      "atMs": 513,
+      "uuid": "fff2",
+      "hex": "a20601321ef9",
+      "withResponse": false
+    },
+    {
+      "seq": 6,
+      "atMs": 513,
+      "uuid": "ae01",
+      "hex": "0270617373",
+      "withResponse": false
+    },
+    {
+      "seq": 7,
+      "atMs": 612,
+      "uuid": "ae01",
+      "hex": "014b844a039a14cb67d61e31f7216b3cc5",
+      "withResponse": false
+    },
+    {
+      "seq": 8,
+      "atMs": 907,
+      "uuid": "fff2",
+      "hex": "a00d02010008002106b804029d",
+      "withResponse": false
+    },
+    {
+      "seq": 9,
+      "atMs": 1107,
+      "uuid": "fff2",
+      "hex": "22060000032b",
+      "withResponse": false
+    },
+    {
+      "seq": 10,
+      "atMs": 4488,
+      "uuid": "fff2",
+      "hex": "22060000032b",
+      "withResponse": false
+    },
+    {
+      "seq": 11,
+      "atMs": 5633,
+      "uuid": "fff2",
+      "hex": "1f05001034",
+      "withResponse": false
+    }
+  ],
+  "rxDropped": 0,
+  "payload": {
+    "weight": 84.8,
+    "impedance": 501,
+    "bmi": 25.32,
+    "bodyFatPercent": 28.45,
+    "waterPercent": 52.23,
+    "boneMass": 2.55,
+    "muscleMass": 58.13,
+    "visceralFat": 14,
+    "physiqueRating": 1,
+    "bmr": 1846,
+    "metabolicAge": 31
+  }
+}

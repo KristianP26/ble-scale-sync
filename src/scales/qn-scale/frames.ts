@@ -7,35 +7,77 @@
  */
 
 import type { Gender } from '../../interfaces/scale-adapter.js';
-import { VENDOR_APP_USER_KEY, VISIT_ALGORITHM, VISIT_ATHLETE_STEP } from './constants.js';
+import {
+  RESULT_ACK_MEASURED,
+  RESULT_ACK_OPCODE,
+  USER_DELETE_SUBCOMMAND,
+  VENDOR_APP_USER_KEY,
+  VISIT_ALGORITHM,
+  VISIT_ATHLETE_STEP,
+} from './constants.js';
 
 /**
- * Build the extended-dialect measurement trigger for a weight anchor in kg.
+ * Build the extended-dialect measurement trigger for a weight anchor in kg,
+ * for user slot `slot` (see buildA2Frame).
  *
  * Clamped to the u16 the field can hold, so a nonsense config value degrades to
  * a wrong anchor rather than a malformed frame.
  */
-export function buildMeasurementTrigger(weightKg: number): number[] {
-  return buildA2Frame(Math.round(weightKg * 100));
+export function buildMeasurementTrigger(weightKg: number, slot = 1): number[] {
+  return buildA2Frame(Math.round(weightKg * 100), slot);
 }
 
 /**
- * Build an A2 frame around a raw u16 payload.
+ * Build an A2 frame around a raw u16 payload, `a2 06 <slot> <raw u16 BE>`.
  *
  * Separate from `buildMeasurementTrigger` because the live acknowledgement
  * echoes the scale's OWN raw weight bytes back verbatim, which is independent
  * of `weightScaleFactor`; only the pre-stream anchor has to convert from kg.
+ *
+ * [2] is the user slot whose identify weight the frame sets, per the vendor's
+ * published SDK; the Arboleaf CS10G app sends `a2 06 02 ..` for the user it
+ * registered in slot 2 (#501). Slot 1 is the frame every earlier capture shows.
  */
-// DO NOT merge this with the ready-time A2 the handshake builds inline. That
-// frame is `a2 06 01 32 <age>`, the identical shape, and buildA2Frame((0x32 <<
-// 8) | age) would emit the same bytes for every age the clamp accepts. They are
-// deliberately different frames whose payloads the scale reads differently, and
-// the comment on TRIGGER_WEIGHT_FALLBACK_KG in constants.ts says why.
-export function buildA2Frame(raw: number): number[] {
+// DO NOT merge this with buildOpenScaleA2. That frame is `a2 06 01 32 <age>`,
+// the identical shape, and buildA2Frame((0x32 << 8) | age) would emit the same
+// bytes for every age the clamp accepts. They are deliberately different frames
+// whose payloads the scale reads differently, and the comment on
+// TRIGGER_WEIGHT_FALLBACK_KG in constants.ts says why.
+export function buildA2Frame(raw: number, slot = 1): number[] {
   const v = Math.min(0xffff, Math.max(0, Math.round(raw)));
-  const cmd = [0xa2, 0x06, 0x01, (v >> 8) & 0xff, v & 0xff, 0x00];
-  cmd[5] = cmd.slice(0, 5).reduce((a, b) => a + b, 0) & 0xff;
-  return cmd;
+  return withChecksum([0xa2, 0x06, slot & 0xff, (v >> 8) & 0xff, v & 0xff]);
+}
+
+/** openScale's ready-time A2, `a2 06 01 32 <age>`: see buildA2Frame for why it stays apart. */
+export function buildOpenScaleA2(age: number): number[] {
+  return withChecksum([0xa2, 0x06, 0x01, 0x32, Math.min(0xff, Math.max(1, age))]);
+}
+
+/** The A00D user-delete frame for the slots `mask` selects (USER_DELETE_SUBCOMMAND, #461). */
+export function buildUserDelete(mask: number): number[] {
+  return withChecksum([0xa0, 0x0d, USER_DELETE_SUBCOMMAND, mask, 0, 0, 0, 0, 0, 0, 0, 0]);
+}
+
+/**
+ * The 0x22 start measurement / stored-data query with the session's protocol
+ * type, `22 06 <protocol type> <mask u16 BE> <cs>`. Per the vendor's published
+ * SDK the mask selects the users whose stored weigh-ins the scale hands over,
+ * `1 | (1 << slot)`: `00 03` for slot 1, the frame of every earlier capture,
+ * and `00 05` for slot 2, as the Arboleaf CS10G app sends it (#501).
+ */
+export function buildStoredDataQuery(protocolType: number, slot = 1): number[] {
+  const mask = (1 | (1 << slot)) & 0xffff;
+  return withChecksum([0x22, 0x06, protocolType, (mask >> 8) & 0xff, mask & 0xff]);
+}
+
+/**
+ * The end-of-measurement frame for a complete 19-byte result
+ * (`ble.qn_result_ack`, #331), built as the vendor's published SDK builds it:
+ * `1f 05 <protocol type> 10 <sum>`, with the protocol type every other frame
+ * of the session carries.
+ */
+export function buildResultAck(protocolType: number): number[] {
+  return withChecksum([RESULT_ACK_OPCODE, 0x05, protocolType & 0xff, RESULT_ACK_MEASURED]);
 }
 
 /**
@@ -118,7 +160,7 @@ const CONFIG_TAIL_SHORT = [0x00] as const;
  * byte, the way `buildTimeSync` is.
  */
 export function buildConfig(protocolType: number, unitFlag: number, long = false): number[] {
-  const body = [
+  return withChecksum([
     0x13,
     long ? 0x0a : 0x09,
     protocolType,
@@ -127,8 +169,7 @@ export function buildConfig(protocolType: number, unitFlag: number, long = false
     0x00,
     0x00,
     ...(long ? CONFIG_TRAILER : CONFIG_TAIL_SHORT),
-  ];
-  return [...body, body.reduce((a, b) => a + b, 0) & 0xff];
+  ]);
 }
 
 /**
@@ -154,6 +195,11 @@ export function buildTimeSync(
     (s >>> 24) & 0xff,
   ];
   if (long) body.push(tzByte & 0xff);
+  return withChecksum(body);
+}
+
+/** `body` with the family's trailing checksum appended: its sum, mod 256. */
+export function withChecksum(body: number[]): number[] {
   return [...body, body.reduce((a, b) => a + b, 0) & 0xff];
 }
 
@@ -189,14 +235,20 @@ export interface StoredRecord {
  *   [10..11]  weight, BE u16, /100 kg
  *   [12..13]  R50, BE u16
  *   [14..15]  R500, BE u16
+ *   [16..17]  the scale's own body fat x0.1, [18] heart rate when the frame
+ *             is longer than 19 bytes (not read)
+ *
+ * The Physiq (VA category 129) follows a record with 0x24 and 0x25, the rest of
+ * the scale's composition for it (#463); those are not read either.
  *
  * This is the layout the vendor's published Android SDK (qnsdkX 2.37.2) reads
  * for these scales, and three real records agree: #213 (504/502), #75
  * (507/505) and #461 (4303/4301). openScale reads both resistances
  * little-endian one byte later, which lands on the right R50 only because
  * R50 and R500 share their high byte; its R500 is the low byte of R500 and a
- * zero (246, 249 and 205 on those records). Classic scales use a different
- * layout and are not read through this. Null below 16 bytes.
+ * zero (246, 249 and 205 on those records). Classic scales lay the record
+ * out one byte earlier (time [5..8], weight [9..10]: the vendor's published
+ * SDK and #283) and are not read at all (D068). Null below 16 bytes.
  */
 export function decodeStoredRecord(data: Buffer): StoredRecord | null {
   if (data.length < 16) return null;
@@ -235,8 +287,9 @@ export interface VaComposition {
   /** x0.1 of the transmitted value: % of body weight when the scale reports percentages. */
   muscle: number;
   visceral: number;
+  /** Years; exported as the metabolic age with the scale's own composition (D078). */
   bodyAge: number;
-  /** kcal */
+  /** kcal; exported as the BMR with the scale's own composition (D078). */
   bmr: number;
   /** % */
   protein: number;
@@ -418,6 +471,8 @@ export const OPENSCALE_PROFILE_HEIGHT_MM = 1720;
 
 /** What the profile frame carries besides age, height and sex (#463). */
 export interface UserProfileFrameOptions {
+  /** User slot at [3]; 1 when unset (#501). */
+  slot?: number;
   /** User key at [4..5]; VENDOR_APP_USER_KEY (1000) when unset. */
   key?: number;
   /** Add VISIT_ATHLETE_STEP to the algorithm byte at [10]. */
@@ -428,7 +483,7 @@ export interface UserProfileFrameOptions {
  * Build the A00D #2 user profile frame ("visit") from an age, a height in cm
  * and a sex.
  *
- *   a0 0d 02 01 <key u16 BE> <sex> <age> <height mm, u16 BE> <algorithm> 02 <cs>
+ *   a0 0d 02 <slot> <key u16 BE> <sex> <age> <height mm, u16 BE> <algorithm> 02 <cs>
  *
  * Two vendor-app captures send this shape with the app user's configured age
  * at [7] and height in millimetres at [8..9], from different apps and scales:
@@ -464,7 +519,7 @@ export function buildUserProfileFrame(
     0xa0,
     0x0d,
     0x02,
-    0x01,
+    (opts.slot ?? 1) & 0xff,
     (key >> 8) & 0xff,
     key & 0xff,
     gender === 'female' ? 0x01 : 0x00,

@@ -12,7 +12,8 @@ const scanAndReadRaw = vi.fn();
 const releaseTransport = vi.fn(async () => {});
 vi.mock('../../src/ble/index.js', () => ({ scanAndReadRaw, releaseTransport }));
 
-vi.mock('../../src/config/resolve.js', () => ({
+vi.mock('../../src/config/resolve.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../src/config/resolve.js')>()),
   resolveUserProfile: () => ({ sex: 'male', age: 40, heightCm: 180, athlete: false }),
 }));
 

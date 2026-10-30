@@ -2,8 +2,19 @@ import { describe, it, expect } from 'vitest';
 import { adapters } from '../../src/scales/index.js';
 import { resolveAdapter, resolveAfterDiscovery } from '../../src/scales/resolve.js';
 import type { GattDiscovery } from '../../src/scales/resolve.js';
+import { matchesDescriptor } from '../../src/scales/match-descriptor.js';
 import { uuid16 } from '../../src/scales/body-comp-helpers.js';
 import type { BleDeviceInfo } from '../../src/interfaces/scale-adapter.js';
+import { M1690_ADVERT, M1690_FE95_PID_018E } from '../helpers/yunmai-m1690.js';
+import {
+  AR003_ADVERT,
+  AR003_ADVERT_NODE_BLE,
+  AR003_ADDRESS,
+  AR003_CHARS,
+  AR003_SERVICES,
+  ar003CharsWithout,
+} from '../helpers/renpho-a-r003.js';
+import { ADVERT_501 } from '../fixtures/qn/cs10g-501.js';
 
 /**
  * Registry collision guard for #182.
@@ -131,6 +142,9 @@ const FIXTURES: Record<string, BleDeviceInfo> = {
     address: '5C:31:3E:01:16:6D',
     serviceUuids: ['181d'],
   },
+  // #503: no CH100 advertisement is on record; its GATT (openScale#547) has
+  // 0x181B, which Mi Scale 2 claims, so the fixture carries it to pin the order.
+  'Huawei CH100/AH100': { localName: 'CH100', serviceUuids: ['181b'] },
   'Xiaomi Mi Scale 2': { localName: 'MIBFS', serviceUuids: [] },
   'Xiaomi Mijia Scale S800': { localName: 'Mijia Scale S800 A1AB', serviceUuids: [] },
   // Same FE95 service as the S800; the product id (0x3bd5 here) tells them apart.
@@ -242,10 +256,45 @@ describe('registry collision guard (#182)', () => {
     expect(claimed).toEqual(['A&D UC-352BLE']);
   });
 
+  // #503: claimed by its exact name only; the FAA0 vendor service it shares
+  // with other Chipsea scales (Beurer BF950) is never claimed.
+  it('Huawei CH100/AH100 claims no fixture but its own', () => {
+    const huawei = adapters.find((a) => a.name === 'Huawei CH100/AH100');
+    expect(huawei).toBeDefined();
+    const claimed = Object.entries(FIXTURES)
+      .filter(([, info]) => huawei!.matches(info))
+      .map(([name]) => name);
+    expect(claimed).toEqual(['Huawei CH100/AH100']);
+  });
+
   it('has no fixture for an adapter that is not registered', () => {
     const registered = new Set(adapters.map((a) => a.name));
     const stale = Object.keys(FIXTURES).filter((n) => !registered.has(n));
     expect(stale, `Stale fixtures (adapter removed/renamed): ${stale.join(', ')}`).toEqual([]);
+  });
+
+  // K-07: registry-check reasons about a non-custom adapter from its
+  // descriptor alone, which holds only while matches() claims nothing the
+  // descriptor does not. ES-CS20M does: it claims the anonymous ESCS20MB2 by
+  // the address echoed in its payload (#376, the reporter's capture) without
+  // being marked custom. Marking it changes the pinned descriptor, so it is
+  // listed here until that is decided.
+  it('a non-custom matches() claims no advertisement its descriptor does not', () => {
+    const escs20mb2: BleDeviceInfo = {
+      localName: '',
+      address: 'CF:EA:02:07:2C:87',
+      serviceUuids: [],
+      manufacturerData: { id: 0x1a10, data: Buffer.from('00040031cfea02072c870109', 'hex') },
+    };
+    const corpus = [...Object.values(FIXTURES), ...AC27_ADVERTS.map((c) => c.info), escs20mb2];
+    const beyond = adapters
+      .filter((a) => a.match && !a.match.custom)
+      .flatMap((a) =>
+        corpus
+          .filter((info) => a.matches(info) && !matchesDescriptor(info, a.match!))
+          .map((info) => `${a.name}: ${info.localName || info.address}`),
+      );
+    expect(beyond).toEqual(['ES-CS20M: CF:EA:02:07:2C:87']);
   });
 });
 
@@ -367,6 +416,64 @@ describe('AC 27 advertisements (#458, #462, #466)', () => {
   });
 });
 
+// Renpho A-R003 (#507): no name, 0x181D, and 17 bytes under company 0xFFFF
+// with the scale's address little-endian at [9..14] (tests/helpers/renpho-a-r003.ts).
+// The paths that pick before connecting and never re-resolve (the ESPHome
+// single-shot scan, noble auto-discovery) keep this pick.
+const RENPHO = 'Renpho ES-WBE28';
+const AR003_ADVERTS: Array<{ label: string; info: BleDeviceInfo; expected: string | undefined }> = [
+  {
+    label: 'A-R003 with its advertised 0x181D (proxies, noble on Linux and Windows)',
+    info: AR003_ADVERT,
+    expected: RENPHO,
+  },
+  {
+    label: 'A-R003 on node-ble with scale_mac (no advertised services)',
+    info: AR003_ADVERT_NODE_BLE,
+    expected: RENPHO,
+  },
+  // CoreBluetooth hides the address, so nothing checks the echo there.
+  {
+    label: 'A-R003 on macOS (no address) stays Standard GATT',
+    info: { ...AR003_ADVERT, address: undefined },
+    expected: 'Standard GATT (BCS/WSS)',
+  },
+  // #501: the QN CS10G also sends 17 bytes under 0xFFFF, its address at [5..10].
+  {
+    label: 'nameless 17-byte CS10G (#501), no services, claims nothing',
+    info: { ...ADVERT_501, localName: '', serviceUuids: [] },
+    expected: undefined,
+  },
+  {
+    label: 'nameless 17-byte CS10G (#501) with 0xFFE0 stays QN',
+    info: { ...ADVERT_501, localName: '' },
+    expected: 'QN Scale',
+  },
+  {
+    label: 'nameless 17-byte CS10G (#501) with 0x181D stays Standard GATT',
+    info: { ...ADVERT_501, localName: '', serviceUuids: ['181d'] },
+    expected: 'Standard GATT (BCS/WSS)',
+  },
+  {
+    label: 'named 17-byte CS10G (#501) stays QN',
+    info: ADVERT_501,
+    expected: 'QN Scale',
+  },
+];
+
+describe('nameless Renpho A-R003 advertisements (#507)', () => {
+  it.each(AR003_ADVERTS)('$label', ({ info, expected }) => {
+    expect(resolveAdapter(info, adapters)?.name).toBe(expected);
+  });
+
+  it('is claimed by Renpho and the generic fallback only', () => {
+    expect(adapters.filter((a) => a.matches(AR003_ADVERT)).map((a) => a.name)).toEqual([
+      RENPHO,
+      'Standard GATT (BCS/WSS)',
+    ]);
+  });
+});
+
 /**
  * Post-discovery collision guard.
  *
@@ -387,7 +494,9 @@ describe('AC 27 advertisements (#458, #462, #466)', () => {
 const byName = (name: string) => {
   const a = adapters.find((x) => x.name === name);
   if (!a) throw new Error(`adapter "${name}" not registered`);
-  return a;
+  const { charNotifyUuid, charWriteUuid } = a;
+  if (!charNotifyUuid || !charWriteUuid) throw new Error(`adapter "${name}" has no GATT wiring`);
+  return { charNotifyUuid, charWriteUuid };
 };
 const digoo = byName('Digoo');
 const hoffen = byName('Hoffen BS-8107');
@@ -424,6 +533,33 @@ describe('PICOOC connection-based scales (#408)', () => {
   });
 });
 
+// Yunmai Mini 2 M1690 (#474): no name, only the 0xFE95 service data with the
+// MiBeacon product id 0x018D (tests/helpers/yunmai-m1690.ts).
+describe('nameless Yunmai Mini 2 by its MiBeacon product id (#474)', () => {
+  it('resolves to Yunmai, and only Yunmai claims it', () => {
+    expect(resolveAdapter(M1690_ADVERT, adapters)?.name).toBe('Yunmai');
+    expect(adapters.filter((a) => a.matches(M1690_ADVERT)).map((a) => a.name)).toEqual(['Yunmai']);
+  });
+
+  // Holds on the code before #474 too: only 0x018D is claimed.
+  it('claims nothing for another product id in the same frame', () => {
+    const other = { ...M1690_ADVERT, serviceData: [{ uuid: 'fe95', data: M1690_FE95_PID_018E }] };
+    expect(adapters.filter((a) => a.matches(other)).map((a) => a.name)).toEqual([]);
+  });
+});
+
+// Characteristics: the 16 the #474 log lists after discovery. Services: the log
+// lists none; FFE0 hosting FFE4 and FFE5 hosting FFE9 is what openScale's
+// YunmaiHandler and the Yunmai notes say, FE95 hosting the Mi chars is a guess
+// (hypothesis). FFE0 is what QN's nameless fallback claims.
+const M1690_GATT = {
+  serviceUuids: [0x1800, 0x1801, 0xfe95, 0xffe0, 0xffe5].map(uuid16),
+  characteristicUuids: [
+    0x0001, 0x0002, 0x0004, 0x0007, 0x0010, 0x0013, 0x0014, 0x2a00, 0x2a01, 0x2a02, 0x2a03, 0x2a04,
+    0x2a05, 0xffe4, 0xffe9, 0xffea,
+  ].map(uuid16),
+};
+
 // Renpho ES-WBE28 (#267): the advertisement is the one renpho.test.ts matches
 // on; the characteristics are that test's ALL_CHARS from the btsnoop capture.
 // 0xFFE0 is the GATT service hosting the vendor 0xFFE1/0xFFE2 pair and 0x181C
@@ -433,6 +569,18 @@ const WBE28_GATT_SERVICES = [0x181b, 0x181d, 0x181c, 0xffe0].map(uuid16);
 const WBE28_CHARS = [
   0x2a9d, 0x2a9c, 0x2a9f, 0xffe1, 0xffe2, 0x2a8c, 0x2a8e, 0x2a85, 0x2a80, 0x2aff,
 ].map(uuid16);
+
+// The A-R003 characteristics without the 0x181C User Data service's (the
+// service split is the helper's hypothesis).
+const AR003_CHARS_WITHOUT_USER_DATA = ar003CharsWithout(
+  0x2a8c,
+  0x2a80,
+  0x2a85,
+  0x2a8e,
+  0x2a99,
+  0x2a9f,
+  0x2aff,
+);
 
 // A&D UC-352BLE (#408): the GATT discovery dump in HEADS-project/ThingML-BLE,
 // another unit; every handle the capture in oliexdev/openScale#1505 touches
@@ -594,6 +742,136 @@ const POST_DISCOVERY: PostDiscoveryCase[] = [
       characteristicUuids: [0xffb1, 0xffb2, 0xffb3].map(uuid16),
     },
     expected: 'Robi S9',
+  },
+  // #474: the Yunmai Mini 2 without a name. Before the product id claim the
+  // proxies (characteristics only) found nothing, and noble and node-ble with
+  // scale_mac, which pass the discovered services, gave it to QN's nameless
+  // 0xFFE0 fallback.
+  {
+    label: 'nameless Yunmai Mini 2 over a proxy (characteristics only)',
+    advertised: M1690_ADVERT,
+    gatt: { characteristicUuids: M1690_GATT.characteristicUuids },
+    expected: 'Yunmai',
+  },
+  {
+    label: 'nameless Yunmai Mini 2 on noble with scale_mac (services known)',
+    advertised: M1690_ADVERT,
+    gatt: M1690_GATT,
+    expected: 'Yunmai',
+  },
+  {
+    label: 'nameless Yunmai Mini 2 on node-ble with scale_mac (services unknown)',
+    advertised: M1690_ADVERT,
+    gatt: { ...M1690_GATT, advertisedServicesKnown: false },
+    expected: 'Yunmai',
+  },
+  // Renpho A-R003 (#507), characteristics from the log, services a hypothesis
+  // (tests/helpers/renpho-a-r003.ts). Inlife claims its 0xFFF2 without 0xFFF4,
+  // and QN's nameless fallback its discovered 0xFFE0 / 0xFFF0.
+  {
+    label: 'A-R003 over the ESPHome proxy or mqtt-proxy host-initiated (characteristics only)',
+    advertised: AR003_ADVERT,
+    gatt: { characteristicUuids: AR003_CHARS },
+    expected: RENPHO,
+  },
+  {
+    label: 'A-R003 mqtt-proxy autonomous connect, no cached advertisement',
+    advertised: { localName: '', address: AR003_ADDRESS, serviceUuids: [] },
+    gatt: { characteristicUuids: AR003_CHARS },
+    expected: RENPHO,
+  },
+  {
+    label: 'A-R003 on noble with scale_mac (services known)',
+    advertised: AR003_ADVERT,
+    gatt: { serviceUuids: AR003_SERVICES, characteristicUuids: AR003_CHARS },
+    expected: RENPHO,
+  },
+  {
+    label: 'A-R003 on noble with scale_mac on macOS (no address)',
+    advertised: { ...AR003_ADVERT, address: undefined },
+    gatt: { serviceUuids: AR003_SERVICES, characteristicUuids: AR003_CHARS },
+    expected: RENPHO,
+  },
+  {
+    label: 'A-R003 on node-ble with scale_mac (services unknown)',
+    advertised: AR003_ADVERT_NODE_BLE,
+    gatt: {
+      serviceUuids: AR003_SERVICES,
+      characteristicUuids: AR003_CHARS,
+      advertisedServicesKnown: false,
+    },
+    expected: RENPHO,
+  },
+  // A partial discovery misses the set, and the scale falls to the adapter
+  // that claims what is left: QN where the transport passes the discovered
+  // services (no consent pair to stop its fallback), Inlife otherwise. On
+  // node-ble the 0x181C User Data service can be exported late (bluez#1489).
+  {
+    label: 'A-R003 on node-ble before 0x181C is exported goes to QN',
+    advertised: AR003_ADVERT_NODE_BLE,
+    gatt: {
+      serviceUuids: AR003_SERVICES.filter((u) => u !== uuid16(0x181c)),
+      characteristicUuids: AR003_CHARS_WITHOUT_USER_DATA,
+      advertisedServicesKnown: false,
+    },
+    expected: 'QN Scale',
+  },
+  {
+    label: 'A-R003 on node-ble without 0x2AFF goes to Inlife',
+    advertised: AR003_ADVERT_NODE_BLE,
+    gatt: {
+      serviceUuids: AR003_SERVICES,
+      characteristicUuids: ar003CharsWithout(0x2aff),
+      advertisedServicesKnown: false,
+    },
+    expected: 'Inlife',
+  },
+  {
+    label: 'A-R003 on noble before 0x181C is discovered goes to QN',
+    advertised: AR003_ADVERT,
+    gatt: {
+      serviceUuids: AR003_SERVICES.filter((u) => u !== uuid16(0x181c)),
+      characteristicUuids: AR003_CHARS_WITHOUT_USER_DATA,
+    },
+    expected: 'QN Scale',
+  },
+  {
+    label: 'A-R003 over a proxy without 0x2A9F goes to Inlife',
+    advertised: AR003_ADVERT,
+    gatt: { characteristicUuids: ar003CharsWithout(0x2a9f) },
+    expected: 'Inlife',
+  },
+  {
+    label: 'A-R003 over a proxy without 0x2AFF goes to Inlife',
+    advertised: AR003_ADVERT,
+    gatt: { characteristicUuids: ar003CharsWithout(0x2aff) },
+    expected: 'Inlife',
+  },
+  // A "renpho" name with these characteristics keeps the name rule, which
+  // declines the QN pair 0xFFF1 / 0xFFF2: QN takes it where the name reaches
+  // it with QN's services, Inlife over a proxy where the advertised 0x181D
+  // makes QN defer.
+  {
+    label: '"Renpho-Scale" with the A-R003 characteristics over a proxy goes to Inlife',
+    advertised: { ...AR003_ADVERT, localName: 'Renpho-Scale' },
+    gatt: { characteristicUuids: AR003_CHARS },
+    expected: 'Inlife',
+  },
+  {
+    label: '"Renpho-Scale" with the A-R003 characteristics on noble goes to QN',
+    advertised: { ...AR003_ADVERT, localName: 'Renpho-Scale' },
+    gatt: { serviceUuids: AR003_SERVICES, characteristicUuids: AR003_CHARS },
+    expected: 'QN Scale',
+  },
+  {
+    label: '"Renpho-Scale" with the A-R003 characteristics on node-ble goes to QN',
+    advertised: { ...AR003_ADVERT_NODE_BLE, localName: 'Renpho-Scale' },
+    gatt: {
+      serviceUuids: AR003_SERVICES,
+      characteristicUuids: AR003_CHARS,
+      advertisedServicesKnown: false,
+    },
+    expected: 'QN Scale',
   },
   // #408: Inlife used to claim it on the bare 0xFFF0 and then on 0xFFF2 without
   // 0xFFF4, and hold the connection while the scale kept asking for the time.

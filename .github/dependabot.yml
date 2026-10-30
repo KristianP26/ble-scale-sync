@@ -10,7 +10,7 @@ updates:
     labels:
       - dependencies
     ignore:
-      # @types/node follows the oldest supported runtime (engines: node >=22),
+      # @types/node follows the oldest supported runtime (engines floor: Node 22.23.4),
       # so tsc rejects an API that Node 22 does not have. Its major moves
       # together with the engines floor, never on its own.
       - dependency-name: "@types/node"

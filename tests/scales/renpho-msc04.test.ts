@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import {
   RenphoMsc04Adapter,
   assertAllowedWrite,
@@ -7,7 +7,12 @@ import {
 } from '../../src/scales/renpho-msc04.js';
 import { adapters } from '../../src/scales/index.js';
 import { resolveAdapter } from '../../src/scales/resolve.js';
-import { uuid16, buildPayload } from '../../src/scales/body-comp-helpers.js';
+import {
+  uuid16,
+  buildPayload,
+  type ScaleBodyComp,
+  type SegmentImpedance,
+} from '../../src/scales/body-comp-helpers.js';
 import { bleLog } from '../../src/ble/types.js';
 import type {
   ConnectionContext,
@@ -36,6 +41,18 @@ const REC_1 = Buffer.from('ad040255aa2500240411000025530a00de0c200b', 'hex');
 const REC_2 = Buffer.from('ae0401ef08e4092a00ae0ac10a9007e108250100', 'hex');
 const REC_3 = Buffer.from('af0400ed011101b70008ea', 'hex');
 const RECORD = [REC_1, REC_2, REC_3];
+// The same record's segment impedances, ohm: 20 kHz [12..21], 100 kHz
+// [22..31], each trunk, left arm, right arm, left leg, right leg. flokecom-lab
+// compared all ten with the Renpho app on #117 (2026-09-19).
+const SEG_117: SegmentImpedance = {
+  trunk: { at20kHz: 22.2, at100kHz: 17.4 },
+  leftArm: { at20kHz: 310.4, at100kHz: 275.3 },
+  rightArm: { at20kHz: 305.5, at100kHz: 270.4 },
+  leftLeg: { at20kHz: 227.6, at100kHz: 201.7 },
+  rightLeg: { at20kHz: 234.6, at100kHz: 208.5 },
+};
+/** What a payload from RECORD carries whatever happens to the scale's body fat (#497). */
+const SEGMENTS: ScaleBodyComp = { segmentImpedance: SEG_117 };
 
 // First connection of the same capture: a stored 0x26 history record (age
 // 0x000005ad = 1453 s at [7..10], weight 95.85 kg), which the app acks with b6.
@@ -49,6 +66,8 @@ const HIST = [
 const LIVE_9560 = Buffer.from('55aa2100050100002558a3', 'hex');
 const STATUS_LOCKED = Buffer.from('55aa200005020901005080', 'hex'); // state 0x09
 const STATUS_DONE = Buffer.from('55aa200005031101005089', 'hex'); // state 0x11
+// The same connection's first status (seq 00): state 0x01, 0 stored records.
+const STATUS_MEASURING = Buffer.from('55aa200005000101005076', 'hex');
 
 // #434 (vossitch, DEBUG log): settled 0x24 at 81.55 kg.
 const FINAL_8155 = Buffer.from('55aa240006011100001fdb35', 'hex');
@@ -223,21 +242,43 @@ describe('RenphoMsc04Adapter', () => {
       expect(adapter.parseCharNotification(IND, REC_1)).toBeNull();
       expect(adapter.parseCharNotification(IND, REC_2)).toBeNull();
       const r = adapter.parseCharNotification(IND, REC_3);
-      expect(r).toEqual({ weight: 95.55, impedance: 0 });
+      expect(r).toEqual({ weight: 95.55, impedance: 0, scaleComposition: expect.any(Object) });
       expect(adapter.isComplete(r!)).toBe(true);
       expect(adapter.isFinal(r!)).toBe(true);
     });
 
-    it("exports the scale's body fat and visceral fat, and muscle mass as lean minus bone", () => {
+    it("exports the scale's body fat, skeletal muscle and visceral fat, and muscle mass as lean minus bone", () => {
       const adapter = settled();
       const r = feed(adapter, RECORD)!;
       const payload = adapter.computeMetrics(r, PROFILE_187);
       expect(payload.bodyFatPercent).toBe(23.7);
       expect(payload.visceralFat).toBe(8);
+      // The scale's own figure, [37..38] / 10 (#497).
+      expect(payload.skeletalMusclePercent).toBe(43.9);
       expect(payload.impedance).toBe(0);
-      expect(payload).toEqual(buildPayload(95.55, 0, { fat: 23.7, visceralFat: 8 }, PROFILE_187));
+      expect(payload).toEqual(
+        buildPayload(
+          95.55,
+          0,
+          { fat: 23.7, visceralFat: 8, skeletalMuscle: 43.9, ...SEGMENTS },
+          PROFILE_187,
+        ),
+      );
+      // The ten segment impedances, as the debug line prints them (#497).
+      expect(payload).toMatchObject({
+        impedanceTrunk20kHz: 22.2,
+        impedanceTrunk100kHz: 17.4,
+        impedanceLeftArm20kHz: 310.4,
+        impedanceLeftArm100kHz: 275.3,
+        impedanceRightArm20kHz: 305.5,
+        impedanceRightArm100kHz: 270.4,
+        impedanceLeftLeg20kHz: 227.6,
+        impedanceLeftLeg100kHz: 201.7,
+        impedanceRightLeg20kHz: 234.6,
+        impedanceRightLeg100kHz: 208.5,
+      });
       // Not the scale's skeletal muscle percentage of body weight (#253).
-      expect(Math.abs(payload.muscleMass - 0.439 * 95.55)).toBeGreaterThan(20);
+      expect(Math.abs(payload.muscleMass! - 0.439 * 95.55)).toBeGreaterThan(20);
       assertPayloadRanges(payload);
     });
 
@@ -289,9 +330,10 @@ describe('RenphoMsc04Adapter', () => {
       expect(feed(settled(), [REC_1, wrongMarker, REC_3])).toBeNull();
     });
 
-    // Two gates reject this (no settled weight yet, and so no weight to match);
-    // removing either one alone leaves the test green.
-    it('ignores a record that arrives before the settled weight', () => {
+    // Two gates reject this (no 0x11 right before it, no stored-record count);
+    // removing either alone leaves it green. The D057 block at the end of this
+    // file isolates each one.
+    it('ignores a record with neither a settled weight nor a status before it', () => {
       const adapter = makeAdapter();
       adapter.onSessionStart();
       expect(feed(adapter, RECORD)).toBeNull();
@@ -361,7 +403,8 @@ describe('RenphoMsc04Adapter', () => {
       const r = feed(adapter, RECORD)!;
       // 95.55 kg at BMI 27.3 is a 187.1 cm profile: 4.1 cm from 183, 0.9 from 188.
       const short = defaultProfile({ height: 183 });
-      expect(adapter.computeMetrics(r, short)).toEqual(buildPayload(95.55, 0, {}, short));
+      // The segment impedances go out all the same (#497).
+      expect(adapter.computeMetrics(r, short)).toEqual(buildPayload(95.55, 0, SEGMENTS, short));
       const tall = defaultProfile({ height: 188 });
       expect(adapter.computeMetrics(r, tall).bodyFatPercent).toBe(23.7);
     });
@@ -439,6 +482,8 @@ const MADE_UP_PROFILE: UserProfile = {
 };
 // seq 00, slot 09, 0x0690 = 168.0 cm, 0x1996 = 65.50 kg, a9 ff 02.
 const MADE_UP_B2 = '55aab20009000906901996a9ff02b2';
+// The same with the made-up profile byte 9e at [11].
+const MADE_UP_B2_9E = '55aab200090009069019969eff02a7';
 
 /** `bytes` followed by their 55AA checksum. */
 function withSum(bytes: number[]): Buffer {
@@ -526,6 +571,11 @@ describe('RenphoMsc04Adapter connect handshake (#434, D038)', () => {
 
   it('builds the guest b2 from the profile height and last weight', () => {
     expect(buildGuestProfileFrame(0, MADE_UP_PROFILE).toString('hex')).toBe(MADE_UP_B2);
+  });
+
+  it('puts a given profile byte at [11] and keeps the rest of the guest form', () => {
+    // Made-up byte 9e: [11] a9 -> 9e, checksum b2 -> a7.
+    expect(buildGuestProfileFrame(0, MADE_UP_PROFILE, 0x9e).toString('hex')).toBe(MADE_UP_B2_9E);
   });
 
   it('falls back to 170.0 cm and 70.00 kg, and the fallback passes the allow-list', () => {
@@ -620,6 +670,18 @@ describe('RenphoMsc04Adapter connect handshake (#434, D038)', () => {
     it.each(refused)('refuses %s', (_what, f) => {
       expect(() => assertAllowedWrite(f)).toThrow(/refusing/);
     });
+
+    it("takes a b2's [11] only when it is exactly the session's profile byte", () => {
+      const with9e = Buffer.from(MADE_UP_B2_9E, 'hex');
+      expect(() => assertAllowedWrite(with9e, 0x9e)).not.toThrow();
+      // Without the byte the default a9 applies, so 9e is refused, and a9 with 9e too.
+      expect(() => assertAllowedWrite(with9e)).toThrow(/refusing/);
+      expect(() => assertAllowedWrite(Buffer.from(MADE_UP_B2, 'hex'), 0x9e)).toThrow(/refusing/);
+      // [12] and [13] are still checked with another byte.
+      const p9e = withByte(GOOD_B2, 6, 0x9e);
+      expect(() => assertAllowedWrite(b2(withByte(p9e, 7, 0x03)), 0x9e)).toThrow(/refusing/);
+      expect(() => assertAllowedWrite(b2(withByte(p9e, 8, 0x03)), 0x9e)).toThrow(/refusing/);
+    });
   });
 
   it('never logs the b2 frame or the height and weight in it', async () => {
@@ -685,8 +747,35 @@ describe('RenphoMsc04Adapter connect handshake (#434, D038)', () => {
     adapter.parseCharNotification(IND, FINAL);
     const r = feed(adapter, RECORD)!;
     expect(adapter.isFinal(r)).toBe(true);
+    // #497: with the estimate off, the line says what goes out instead.
+    const off = { ...PROFILE_187, estimateBodyComposition: false };
+    info.mockClear();
+    expect(adapter.computeMetrics(r, off).bodyFatPercent).toBeNull();
+    expect(info.mock.calls.map((c) => String(c[0]))).toEqual([
+      "Renpho R-MSC04: the scale's body fat, skeletal muscle and visceral fat were computed " +
+        'for the guest profile we sent, not exported (#434); exporting no body composition ' +
+        '(estimate_body_composition is off)',
+    ]);
+    info.mockClear();
     // PROFILE_187 passes the D022 height gate, so only the guest rule stops it.
-    expect(adapter.computeMetrics(r, PROFILE_187)).toEqual(buildPayload(95.55, 0, {}, PROFILE_187));
+    // The segment impedances are not the guest profile's, so they go out (#497).
+    expect(adapter.computeMetrics(r, PROFILE_187)).toEqual(
+      buildPayload(95.55, 0, SEGMENTS, PROFILE_187),
+    );
+    const infoLines = info.mock.calls.map((c) => String(c[0]));
+    expect(infoLines.some((l) => l.includes('not exported'))).toBe(true);
+  });
+
+  it('does not export them from a full session without a 0x24 either (D057)', async () => {
+    const info = vi.spyOn(bleLog, 'info').mockImplementation(() => {});
+    vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+    const { adapter } = await connectedAdapter();
+    // The end of the #117 capture's second connection, from weight locked on.
+    const r = feed(adapter, [STATUS_LOCKED, STATUS_DONE, ...RECORD]);
+    expect(r).not.toBeNull();
+    expect(adapter.computeMetrics(r!, PROFILE_187)).toEqual(
+      buildPayload(95.55, 0, SEGMENTS, PROFILE_187),
+    );
     const infoLines = info.mock.calls.map((c) => String(c[0]));
     expect(infoLines.some((l) => l.includes('not exported'))).toBe(true);
   });
@@ -704,7 +793,7 @@ describe('RenphoMsc04Adapter connect handshake (#434, D038)', () => {
     const r2 = feed(adapter, RECORD)!;
     expect(adapter.computeMetrics(r2, PROFILE_187).bodyFatPercent).toBe(23.7);
     expect(adapter.computeMetrics(r1, PROFILE_187)).toEqual(
-      buildPayload(95.55, 0, {}, PROFILE_187),
+      buildPayload(95.55, 0, SEGMENTS, PROFILE_187),
     );
   });
 });
@@ -786,10 +875,10 @@ describe('RenphoMsc04Adapter handshake diagnostics (#434)', () => {
     const other = await connectedAdapter(captureClock, MADE_UP_PROFILE);
     other.adapter.parseCharNotification(IND, FINAL);
     feed(other.adapter, RECORD);
-    const verdicts = lines().filter((l) => l.includes('BMI height'));
+    const verdicts = lines().filter((l) => l.includes('the height we sent'));
     expect(verdicts).toEqual([
-      "Renpho R-MSC04: the record's BMI height matches the height we sent (within 1 cm)",
-      "Renpho R-MSC04: the record's BMI height does not match the height we sent (within 1 cm)",
+      "Renpho R-MSC04: the record's BMI matches the height we sent (BMI within 0.1)",
+      "Renpho R-MSC04: the record's BMI does not match the height we sent (BMI within 0.1)",
     ]);
   });
 
@@ -819,6 +908,29 @@ describe('RenphoMsc04Adapter handshake diagnostics (#434)', () => {
         'last status 0x09 at 3.2 s; 0x24 yes; stored records replayed 0; ' +
         'composition record no; last frame 2.3 s before the end)',
     ]);
+  });
+
+  it('summarises a session without a 0x24 whose record was used (D057)', async () => {
+    vi.useFakeTimers();
+    const lines = debugLines();
+    const { adapter } = await connectedAdapter();
+    const at = (ms: number, f: Buffer): void => {
+      vi.advanceTimersByTime(ms);
+      adapter.parseCharNotification(IND, f);
+    };
+    // The end of the #117 capture's second connection, with its spacing.
+    at(50, STATUS_LOCKED);
+    at(9630, STATUS_DONE);
+    at(135, REC_1);
+    at(91, REC_2);
+    at(89, REC_3);
+    adapter.onSessionEnd();
+
+    const summary = lines().find((l) => l.includes('session ended'));
+    expect(summary).toContain('first status 0x09 with 0 stored records');
+    expect(summary).toContain('last status 0x11');
+    expect(summary).toContain('0x24 no');
+    expect(summary).toContain('composition record used');
   });
 
   it('reports a failed write as failed in the summary', async () => {
@@ -921,6 +1033,19 @@ describe('RenphoMsc04Adapter BLE_RMSC04_HANDSHAKE (#434)', () => {
     expect(adapter.computeMetrics(r, PROFILE_187).bodyFatPercent).toBe(23.7);
   });
 
+  it('lets the D022 height gate decide in a time session without a 0x24 (D057)', async () => {
+    vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+    vi.spyOn(bleLog, 'info').mockImplementation(() => {});
+    vi.stubEnv('BLE_RMSC04_HANDSHAKE', 'time');
+    const { adapter } = await connectedAdapter();
+    // The end of the #117 capture's second connection, from weight locked on.
+    const r = feed(adapter, [STATUS_LOCKED, STATUS_DONE, ...RECORD]);
+    expect(r).not.toBeNull();
+    expect(adapter.computeMetrics(r!, PROFILE_187).bodyFatPercent).toBe(23.7);
+    const short = defaultProfile({ height: 183 });
+    expect(adapter.computeMetrics(r!, short)).toEqual(buildPayload(95.55, 0, SEGMENTS, short));
+  });
+
   it('names the mode in the summary', async () => {
     const debug = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
     vi.stubEnv('BLE_RMSC04_HANDSHAKE', 'none');
@@ -929,5 +1054,524 @@ describe('RenphoMsc04Adapter BLE_RMSC04_HANDSHAKE (#434)', () => {
     const lines = debug.mock.calls.map((c) => String(c[0]));
     expect(lines).toContain('Renpho R-MSC04: connect writes none');
     expect(lines.find((l) => l.includes('session ended'))).toContain('(writes none; no status;');
+  });
+});
+
+// ─── 0x25 record in a session without a 0x24 (#434, D057) ───────────────────
+
+// A session that connects after the weight locked never gets the 0x24. These
+// replay the end of the #117 capture's second connection from its 0x09 status
+// on, which is what such a session sees; a #434 log shows the same shape
+// (0x09 with 0 stored records, 0x11, the record). Sequences that mix in a frame
+// from another source say so where they do.
+describe('RenphoMsc04Adapter 0x25 record without a settled weight (#434, D057)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+  });
+
+  function fresh(): RenphoMsc04Adapter {
+    const adapter = makeAdapter();
+    adapter.onSessionStart();
+    return adapter;
+  }
+
+  const hexFrame = (h: string): Buffer => Buffer.from(h, 'hex');
+
+  it('takes the record as the reading in a session that starts at weight locked', () => {
+    const adapter = fresh();
+    const r = feed(adapter, [STATUS_LOCKED, STATUS_DONE, ...RECORD]);
+    expect(r).toEqual({ weight: 95.55, impedance: 0, scaleComposition: expect.any(Object) });
+    expect(adapter.isComplete(r!)).toBe(true);
+    expect(adapter.isFinal(r!)).toBe(true);
+  });
+
+  it('takes it in a session that starts at measurement complete', () => {
+    const adapter = fresh();
+    const r = feed(adapter, [STATUS_DONE, ...RECORD]);
+    expect(r).toEqual({ weight: 95.55, impedance: 0, scaleComposition: expect.any(Object) });
+    expect(adapter.isComplete(r!)).toBe(true);
+  });
+
+  it('takes it after a first 0x01 status when no 0x24 arrives in the session', () => {
+    // The shape of a #434 log (0x01, then 0x09, no 0x24); that session itself
+    // had a stored record. Here the capture's frames without its 0x21 and 0x24.
+    const adapter = fresh();
+    const r = feed(adapter, [STATUS_MEASURING, STATUS_LOCKED, STATUS_DONE, ...RECORD]);
+    expect(r).toEqual({ weight: 95.55, impedance: 0, scaleComposition: expect.any(Object) });
+    expect(adapter.isComplete(r!)).toBe(true);
+  });
+
+  it('ignores it unless 0x11 is the status right before it', () => {
+    expect(feed(fresh(), [STATUS_LOCKED, ...RECORD])).toBeNull();
+    // A_STATUS_ENDING is from the capture's first connection.
+    const ending = hexFrame(A_STATUS_ENDING);
+    expect(feed(fresh(), [STATUS_LOCKED, STATUS_DONE, ending, ...RECORD])).toBeNull();
+  });
+
+  it('ignores it when the session started with stored records', () => {
+    // C_STATUS_LOCKED is from vossitch's #434 log ([8] 01), the rest from the capture.
+    const adapter = fresh();
+    expect(feed(adapter, [hexFrame(C_STATUS_LOCKED), STATUS_DONE, ...RECORD])).toBeNull();
+  });
+
+  it('lets a 0x24 still decide: a record that does not match it is ignored after 0x11', () => {
+    // FINAL_8155 is from vossitch's #434 log, the rest from the capture.
+    const adapter = fresh();
+    expect(feed(adapter, [FINAL_8155, STATUS_LOCKED, STATUS_DONE, ...RECORD])).toBeNull();
+  });
+
+  it('does not count the statuses of the previous session', () => {
+    const a = fresh();
+    feed(a, [STATUS_LOCKED, STATUS_DONE]);
+    a.onSessionStart();
+    expect(feed(a, RECORD)).toBeNull();
+
+    // C_STATUS_LOCKED is from vossitch's #434 log, the rest from the capture.
+    const b = fresh();
+    feed(b, [STATUS_LOCKED, STATUS_DONE]);
+    b.onSessionStart();
+    expect(feed(b, [hexFrame(C_STATUS_LOCKED), STATUS_DONE, ...RECORD])).toBeNull();
+  });
+
+  it('takes the record of a clean session after one with stored records', () => {
+    // C_STATUS_LOCKED is from vossitch's #434 log, the rest from the capture.
+    const adapter = fresh();
+    feed(adapter, [hexFrame(C_STATUS_LOCKED)]);
+    adapter.onSessionStart();
+    const r = feed(adapter, [STATUS_LOCKED, STATUS_DONE, ...RECORD]);
+    expect(r).toEqual({ weight: 95.55, impedance: 0, scaleComposition: expect.any(Object) });
+    expect(adapter.isComplete(r!)).toBe(true);
+    expect(adapter.isFinal(r!)).toBe(true);
+  });
+
+  it('ignores a record whose weight is out of range (derived)', () => {
+    // Derived from REC_1 and REC_3 (#117 capture): weight [7..10] 00002553 -> 00000000,
+    // checksum ea -> 72. No real record has a weight out of range; REC_2 is unchanged.
+    const rec1 = hexFrame('ad040255aa2500240411000000000a00de0c200b');
+    const rec3 = hexFrame('af0400ed011101b7000872');
+    const adapter = fresh();
+    expect(feed(adapter, [STATUS_LOCKED, STATUS_DONE, rec1, REC_2, rec3])).toBeNull();
+  });
+});
+
+// ─── ble.rmsc04_profile_byte (#434, D079) ────────────────────────────────────
+
+// Made up, NOT from any capture: 187 cm fits the #117 record (95.55 kg, BMI 27.3).
+const OWN: UserProfile = {
+  gender: 'male',
+  birthDate: '1996-03-01',
+  age: 30,
+  height: 187,
+  isAthlete: false,
+};
+// The scale's 0x22 answer to our b2 (seq 00, slot 09). Constructed: an owner's
+// DEBUG log on #434 (comment 6175828320) shows "scale answered b2 with 09", and
+// the #117 capture's answers (A_REPLY_B2_SEQ1) carry the b2 seq at [5].
+const REPLY_B2 = Buffer.from('55aa22000200092c', 'hex');
+// The 0x23 answer to our b3 (seq 01), constructed the same way.
+const REPLY_B3 = Buffer.from('55aa2300030107012e', 'hex');
+// STATUS_DONE again, with seq 04 (constructed): a second 0x11 in the session.
+const STATUS_DONE_AGAIN = Buffer.from('55aa20000504110100508a', 'hex');
+
+const USED = "Renpho R-MSC04: using the scale's body fat, skeletal muscle and visceral fat";
+const REASON = {
+  noFat: 'the scale reported no body fat',
+  notWritten: 'the profile frame with ble.rmsc04_profile_byte was not confirmed as written',
+  notAnswered:
+    'the scale did not answer the profile frame before it first reported the measurement ' +
+    'complete, or its last status before the record was not measurement complete',
+  otherProfile:
+    'the weigh-in was matched to a user whose height, sex, birth date or age is not the ' +
+    'profile sent to the scale',
+  bmi: "the scale's BMI does not fit the height sent to it",
+};
+const notUsed = (why: string): string =>
+  "Renpho R-MSC04: the scale's body fat, skeletal muscle and visceral fat are not used for " +
+  `this weigh-in: ${why}; using the estimate (#434)`;
+
+describe('RenphoMsc04Adapter ble.rmsc04_profile_byte (#434, D079)', () => {
+  let spies: ReturnType<typeof spyAllLevels>;
+
+  beforeEach(() => {
+    spies = spyAllLevels();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+    vi.useRealTimers();
+  });
+
+  /** One connect with the option set to `byte`, on `adapter` or a new one. */
+  async function ownSession(
+    byte: string | null = '9e',
+    profile: UserProfile = OWN,
+    write?: (data: Buffer) => Promise<void>,
+    adapter = new RenphoMsc04Adapter(captureClock),
+  ): Promise<{ adapter: RenphoMsc04Adapter; written: Written[] }> {
+    adapter.configure({ rmsc04ProfileByte: byte ?? undefined });
+    const { ctx, written } = handshakeCtx(profile, write);
+    adapter.onSessionStart();
+    await adapter.onConnected(ctx);
+    return { adapter, written };
+  }
+
+  /** computeMetrics and the info lines it logged. */
+  function metrics(adapter: RenphoMsc04Adapter, r: ScaleReading, profile: UserProfile = OWN) {
+    spies[1].mockClear();
+    const payload = adapter.computeMetrics(r, profile);
+    return { payload, info: spies[1].mock.calls.map((c) => String(c[0])) };
+  }
+
+  function expectExported(adapter: RenphoMsc04Adapter, r: ScaleReading | null, p = OWN): void {
+    expect(r).not.toBeNull();
+    const { payload, info } = metrics(adapter, r!, p);
+    expect(payload).toEqual(
+      buildPayload(95.55, 0, { fat: 23.7, visceralFat: 8, skeletalMuscle: 43.9, ...SEGMENTS }, p),
+    );
+    expect(payload.skeletalMusclePercent).toBe(43.9);
+    expect(info).toEqual([
+      `${USED}, computed for the profile sent with ble.rmsc04_profile_byte (#434)`,
+    ]);
+  }
+
+  function expectEstimate(
+    adapter: RenphoMsc04Adapter,
+    r: ScaleReading | null,
+    why: string,
+    p = OWN,
+    // The segment impedances go out whichever way the gates decide (#497).
+    comp: ScaleBodyComp = SEGMENTS,
+  ): void {
+    expect(r).not.toBeNull();
+    const { payload, info } = metrics(adapter, r!, p);
+    expect(payload).toEqual(buildPayload(95.55, 0, comp, p));
+    expect(info).toEqual([notUsed(why)]);
+  }
+
+  it('writes the byte at [11] of the guest b2, in either case', async () => {
+    expect((await ownSession('9e', MADE_UP_PROFILE)).written[0].hex).toBe(MADE_UP_B2_9E);
+    expect((await ownSession('9E', MADE_UP_PROFILE)).written[0].hex).toBe(MADE_UP_B2_9E);
+  });
+
+  it('writes the byte 00 too, and uses the scale figures with it', async () => {
+    // 00 is falsy: [11] a9 -> 00, checksum b2 -> 09.
+    expect((await ownSession('00', MADE_UP_PROFILE)).written[0].hex).toBe(
+      '55aab2000900090690199600ff0209',
+    );
+    const { adapter } = await ownSession('00');
+    expectExported(
+      adapter,
+      feed(adapter, [REPLY_B2, FINAL, STATUS_LOCKED, STATUS_DONE, ...RECORD]),
+    );
+  });
+
+  it('goes back to the guest byte a9 once the option is unset', async () => {
+    const adapter = new RenphoMsc04Adapter(captureClock);
+    await ownSession('9e', MADE_UP_PROFILE, undefined, adapter);
+    expect((await ownSession(null, MADE_UP_PROFILE, undefined, adapter)).written[0].hex).toBe(
+      MADE_UP_B2,
+    );
+    await ownSession('9e', MADE_UP_PROFILE, undefined, adapter);
+    adapter.configure({});
+    const { ctx, written } = handshakeCtx(MADE_UP_PROFILE);
+    adapter.onSessionStart();
+    await adapter.onConnected(ctx);
+    expect(written[0].hex).toBe(MADE_UP_B2);
+  });
+
+  it('logs nothing when configured', () => {
+    const adapter = new RenphoMsc04Adapter(captureClock);
+    adapter.configure({ rmsc04ProfileByte: '9e' });
+    adapter.configure({});
+    expect(logged(spies)).toEqual([]);
+  });
+
+  it("exports the scale's body fat, skeletal muscle and visceral fat from a full weigh-in", async () => {
+    const { adapter } = await ownSession();
+    const r = feed(adapter, [REPLY_B2, FINAL, STATUS_LOCKED, STATUS_DONE, ...RECORD]);
+    expectExported(adapter, r);
+  });
+
+  it('exports them from a session that connected at weight locked (D057)', async () => {
+    const { adapter } = await ownSession();
+    const r = feed(adapter, [STATUS_LOCKED, REPLY_B2, REPLY_B3, STATUS_DONE, ...RECORD]);
+    expectExported(adapter, r);
+  });
+
+  it('uses the estimate when the session started at measurement complete', async () => {
+    const { adapter } = await ownSession();
+    expectEstimate(adapter, feed(adapter, [STATUS_DONE, REPLY_B2, ...RECORD]), REASON.notAnswered);
+  });
+
+  it('uses the estimate when a 0x11 came before the answer, even with a second 0x11', async () => {
+    const { adapter } = await ownSession();
+    const r = feed(adapter, [STATUS_DONE, REPLY_B2, STATUS_DONE_AGAIN, ...RECORD]);
+    expectEstimate(adapter, r, REASON.notAnswered);
+  });
+
+  it('exports when a second 0x11 follows one that came after the answer', async () => {
+    const { adapter } = await ownSession();
+    const r = feed(adapter, [STATUS_LOCKED, REPLY_B2, STATUS_DONE, STATUS_DONE_AGAIN, ...RECORD]);
+    expectExported(adapter, r);
+  });
+
+  it('uses the estimate when the record follows a 0x24 without a 0x11', async () => {
+    const { adapter } = await ownSession();
+    const r = feed(adapter, [REPLY_B2, FINAL, STATUS_LOCKED, ...RECORD]);
+    expectEstimate(adapter, r, REASON.notAnswered);
+  });
+
+  it('uses the estimate when another status follows the 0x11', async () => {
+    const { adapter } = await ownSession();
+    const r = feed(adapter, [REPLY_B2, FINAL, STATUS_DONE, STATUS_LOCKED, ...RECORD]);
+    expectEstimate(adapter, r, REASON.notAnswered);
+  });
+
+  it.each([
+    ['no answer', null],
+    ['an answer with another seq', '55aa22000201092d'],
+    ['an answer for another slot', '55aa220002000124'],
+    ['an answer of another length', '55aa2200030009002d'],
+    ["the app's answer from the #117 capture", A_REPLY_B2_SEQ1],
+  ])('uses the estimate with %s', async (_what, reply) => {
+    const { adapter } = await ownSession();
+    const answer = reply === null ? [] : [Buffer.from(reply, 'hex')];
+    const r = feed(adapter, [...answer, FINAL, STATUS_LOCKED, STATUS_DONE, ...RECORD]);
+    expectEstimate(adapter, r, REASON.notAnswered);
+  });
+
+  it('does not carry the answer or the latch into the next session', async () => {
+    // (a) The answer of session 1 does not count in session 2.
+    const a = new RenphoMsc04Adapter(captureClock);
+    await ownSession('9e', OWN, undefined, a);
+    feed(a, [REPLY_B2]);
+    a.onSessionEnd();
+    await ownSession('9e', OWN, undefined, a);
+    expectEstimate(a, feed(a, [STATUS_LOCKED, STATUS_DONE, ...RECORD]), REASON.notAnswered);
+
+    // (b) A 0x11 before the answer in session 1 does not close session 2.
+    const b = new RenphoMsc04Adapter(captureClock);
+    await ownSession('9e', OWN, undefined, b);
+    feed(b, [STATUS_DONE, REPLY_B2]);
+    b.onSessionEnd();
+    await ownSession('9e', OWN, undefined, b);
+    expectExported(b, feed(b, [STATUS_LOCKED, REPLY_B2, REPLY_B3, STATUS_DONE, ...RECORD]));
+  });
+
+  it('takes a BMI within 0.1 of the height sent, and nothing further', async () => {
+    // 95.55 kg at 187.4 cm is BMI 27.21 (0.09 from 27.3), at 188 cm 27.03 (0.27).
+    const near = { ...OWN, height: 187.4 };
+    const a = (await ownSession('9e', near)).adapter;
+    expectExported(a, feed(a, [REPLY_B2, FINAL, STATUS_LOCKED, STATUS_DONE, ...RECORD]), near);
+
+    const far = { ...OWN, height: 188 };
+    const b = (await ownSession('9e', far)).adapter;
+    spies[0].mockClear();
+    const r = feed(b, [REPLY_B2, FINAL, STATUS_LOCKED, STATUS_DONE, ...RECORD]);
+    expect(spies[0].mock.calls.map((c) => String(c[0]))).toContain(
+      "Renpho R-MSC04: the record's BMI does not match the height we sent (BMI within 0.1)",
+    );
+    expectEstimate(b, r, REASON.bmi, far);
+  });
+
+  it.each([
+    ['height', { height: 187.1 }],
+    ['sex', { gender: 'female' as const }],
+    ['birth date', { birthDate: '1996-03-02' }],
+    ['age', { age: 31 }],
+  ])('uses the estimate for a user with another %s than the profile sent', async (_f, diff) => {
+    const { adapter } = await ownSession();
+    const r = feed(adapter, [REPLY_B2, FINAL, STATUS_LOCKED, STATUS_DONE, ...RECORD]);
+    expectEstimate(adapter, r, REASON.otherProfile, { ...OWN, ...diff });
+  });
+
+  it('exports for an athlete: the scale is never told', async () => {
+    const athlete = { ...OWN, isAthlete: true };
+    const { adapter } = await ownSession('9e', athlete);
+    const r = feed(adapter, [REPLY_B2, FINAL, STATUS_LOCKED, STATUS_DONE, ...RECORD]);
+    expectExported(adapter, r, athlete);
+  });
+
+  it('uses the estimate when the profile height is out of range and 170.0 cm went out', async () => {
+    const tall = { ...OWN, height: 300 };
+    const { adapter } = await ownSession('9e', tall);
+    const r = feed(adapter, [REPLY_B2, FINAL, STATUS_LOCKED, STATUS_DONE, ...RECORD]);
+    expectEstimate(
+      adapter,
+      r,
+      "the first user's height is out of range, so the profile frame carried 170.0 cm",
+      tall,
+    );
+  });
+
+  it('counts an answer that arrives before the transport confirms the b2 write', async () => {
+    // The scale's 0x22 can beat the Write Response, which took up to 90 ms in
+    // the #117 captures.
+    const adapter = new RenphoMsc04Adapter(captureClock);
+    adapter.configure({ rmsc04ProfileByte: '9e' });
+    let release!: () => void;
+    const { ctx } = handshakeCtx(OWN, (buf) =>
+      buf[2] === 0xb2 ? new Promise<void>((resolve) => (release = resolve)) : Promise.resolve(),
+    );
+    adapter.onSessionStart();
+    const connecting = adapter.onConnected(ctx);
+    feed(adapter, [REPLY_B2]);
+    release();
+    await connecting;
+
+    expectExported(adapter, feed(adapter, [FINAL, STATUS_LOCKED, STATUS_DONE, ...RECORD]));
+  });
+
+  it('does not count a b2 write confirmed only after its session ended', async () => {
+    // send() is true only while its session still owns the link. The session
+    // cleanup unsubscribes before it calls onSessionEnd, so a record should not
+    // follow it; this keeps the contract from depending on that.
+    const adapter = new RenphoMsc04Adapter(captureClock);
+    adapter.configure({ rmsc04ProfileByte: '9e' });
+    let release!: () => void;
+    const { ctx } = handshakeCtx(OWN, (buf) =>
+      buf[2] === 0xb2 ? new Promise<void>((resolve) => (release = resolve)) : Promise.resolve(),
+    );
+    adapter.onSessionStart();
+    const connecting = adapter.onConnected(ctx);
+    feed(adapter, [REPLY_B2]);
+    adapter.onSessionEnd();
+    release();
+    await connecting;
+
+    const r = feed(adapter, [FINAL, STATUS_LOCKED, STATUS_DONE, ...RECORD]);
+    expectEstimate(adapter, r, REASON.notWritten);
+  });
+
+  it('uses the estimate when the b2 write failed', async () => {
+    const { adapter } = await ownSession('9e', OWN, async (buf) => {
+      if (buf[2] === 0xb2) throw new Error('GATT write failed');
+    });
+    const r = feed(adapter, [REPLY_B2, FINAL, STATUS_LOCKED, STATUS_DONE, ...RECORD]);
+    expectEstimate(adapter, r, REASON.notWritten);
+  });
+
+  it("does not let a previous session's late b2 count for this session's failed one", async () => {
+    const adapter = new RenphoMsc04Adapter(captureClock);
+    adapter.configure({ rmsc04ProfileByte: '9e' });
+    let release!: () => void;
+    const one = handshakeCtx(OWN, (buf) =>
+      buf[2] === 0xb2 ? new Promise<void>((resolve) => (release = resolve)) : Promise.resolve(),
+    );
+    adapter.onSessionStart();
+    const connecting = adapter.onConnected(one.ctx);
+    adapter.onSessionEnd();
+
+    const two = handshakeCtx(OWN, async (buf) => {
+      if (buf[2] === 0xb2) throw new Error('GATT write failed');
+    });
+    adapter.onSessionStart();
+    await adapter.onConnected(two.ctx);
+    release();
+    await connecting;
+
+    const r = feed(adapter, [REPLY_B2, STATUS_LOCKED, STATUS_DONE, ...RECORD]);
+    expectEstimate(adapter, r, REASON.notWritten);
+  });
+
+  it('uses the estimate for a record without body fat (derived)', async () => {
+    // Derived from REC_3: fat 00ed -> 0000, checksum ea -> fd.
+    const noFat = Buffer.from('af040000011101b70008fd', 'hex');
+    const { adapter } = await ownSession();
+    const r = feed(adapter, [REPLY_B2, FINAL, STATUS_LOCKED, STATUS_DONE, REC_1, REC_2, noFat]);
+    // Nor its segment impedances: no body fat, no sign the scale measured (#497).
+    expectEstimate(adapter, r, REASON.noFat, OWN, {});
+  });
+
+  it('has no effect with BLE_RMSC04_HANDSHAKE=time: no b2, the D022 gate decides', async () => {
+    vi.stubEnv('BLE_RMSC04_HANDSHAKE', 'time');
+    const { adapter, written } = await ownSession();
+    expect(written.map((w) => w.hex)).toEqual([CAPTURE_CLOCK_B3]);
+    adapter.parseCharNotification(IND, FINAL);
+    const r = feed(adapter, RECORD)!;
+    expect(adapter.computeMetrics(r, PROFILE_187).bodyFatPercent).toBe(23.7);
+  });
+
+  it('never logs the byte, the frame or the height', async () => {
+    const run = async (byte: string): Promise<string[]> => {
+      vi.useFakeTimers({ now: Date.UTC(2026, 0, 1) });
+      for (const s of spies) s.mockClear();
+      const { adapter } = await ownSession(byte);
+      const r = feed(adapter, [REPLY_B2, FINAL, STATUS_LOCKED, STATUS_DONE, ...RECORD])!;
+      adapter.computeMetrics(r, OWN);
+      adapter.onSessionEnd();
+      vi.useRealTimers();
+      return logged(spies);
+    };
+    const with9e = await run('9e');
+    expect(await run('5c')).toEqual(with9e);
+    expect(with9e.some((l) => l.includes('with ble.rmsc04_profile_byte'))).toBe(true);
+    for (const l of with9e) {
+      expect(l).not.toContain('55aab2');
+      expect(l).not.toContain('074e');
+      expect(l).not.toContain('1870');
+      expect(l).not.toMatch(/\b187(\.0)?\b/);
+    }
+  });
+
+  // #497: with the estimate off, a failed gate exports no body composition,
+  // and the line says so instead of promising the estimate.
+  it('exports no body composition, and says so, when the user turned the estimate off', async () => {
+    const off: UserProfile = { ...OWN, estimateBodyComposition: false };
+    const { adapter } = await ownSession('9e', off);
+    const r = feed(adapter, [FINAL, STATUS_LOCKED, STATUS_DONE, ...RECORD]);
+    const { payload, info } = metrics(adapter, r!, off);
+    expect(payload).toEqual(buildPayload(95.55, 0, SEGMENTS, off));
+    expect(payload.bodyFatPercent).toBeNull();
+    expect(info).toEqual([
+      "Renpho R-MSC04: the scale's body fat, skeletal muscle and visceral fat are not used for " +
+        `this weigh-in: ${REASON.notAnswered}; exporting no body composition ` +
+        '(estimate_body_composition is off) (#434)',
+    ]);
+  });
+
+  it("still exports the scale's body fat with the estimate off when the gates pass", async () => {
+    const off: UserProfile = { ...OWN, estimateBodyComposition: false };
+    const { adapter } = await ownSession('9e', off);
+    expectExported(
+      adapter,
+      feed(adapter, [REPLY_B2, FINAL, STATUS_LOCKED, STATUS_DONE, ...RECORD]),
+      off,
+    );
+  });
+
+  it('keeps everything the gate reads pinned to the reading', async () => {
+    // (a) A reload that unsets the option does not change a pinned record.
+    const a = (await ownSession()).adapter;
+    const r1 = feed(a, [REPLY_B2, FINAL, STATUS_LOCKED, STATUS_DONE, ...RECORD])!;
+    a.configure({});
+    expectExported(a, r1);
+
+    // (b) Nor does one that sets it change a record from a session without it.
+    const b = (await ownSession(null)).adapter;
+    const r2 = feed(b, [REPLY_B2, FINAL, STATUS_LOCKED, STATUS_DONE, ...RECORD])!;
+    b.configure({ rmsc04ProfileByte: '9e' });
+    const { payload, info } = metrics(b, r2);
+    expect(payload).toEqual(buildPayload(95.55, 0, SEGMENTS, OWN));
+    expect(info.some((l) => l.includes('not exported'))).toBe(true);
+
+    // (c) Nor does the next session starting before computeMetrics runs (#394).
+    const c = (await ownSession()).adapter;
+    const r3 = feed(c, [REPLY_B2, FINAL, STATUS_LOCKED, STATUS_DONE, ...RECORD])!;
+    c.onSessionEnd();
+    c.onSessionStart();
+    c.parseCharNotification(IND, STATUS_MEASURING);
+    expectExported(c, r3);
+
+    // (d) Nor do the statuses the same session sends after the record and
+    // before computeMetrics runs: 0x05, then 0x04 (#434 logs; these two frames
+    // are from the #117 capture).
+    const d = (await ownSession()).adapter;
+    const r4 = feed(d, [REPLY_B2, FINAL, STATUS_LOCKED, STATUS_DONE, ...RECORD])!;
+    d.parseCharNotification(IND, Buffer.from(A_STATUS_STORED_3, 'hex'));
+    d.parseCharNotification(IND, Buffer.from(A_STATUS_ENDING, 'hex'));
+    expectExported(d, r4);
   });
 });

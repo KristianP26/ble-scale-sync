@@ -66,7 +66,7 @@ function encryptFrame(
   const cipher = createCipheriv('aes-128-ccm', key, nonce, { authTagLength: 4 });
   cipher.setAAD(Buffer.from([0x11]), { plaintextLength: obj.length });
   const enc = Buffer.concat([cipher.update(obj), cipher.final()]);
-  const parts = [fc, pidBuf, Buffer.from([cnt])];
+  const parts: Buffer[] = [fc, pidBuf, Buffer.from([cnt])];
   if (includeMac) parts.push(macFrame);
   parts.push(enc, ext, cipher.getAuthTag());
   return Buffer.concat(parts);
@@ -321,7 +321,6 @@ describe('XiaomiS400Adapter metrics', () => {
   it('is broadcast-only', () => {
     expect(adapter.parseNotification()).toBeNull();
     expect(adapter.preferPassive).toBe(true);
-    expect(adapter.normalizesWeight).toBe(true);
   });
 
   it('completes on a plausible weight regardless of impedance', () => {
@@ -349,12 +348,12 @@ describe('XiaomiS400Adapter metrics', () => {
     const profile = { height: 185, age: 25, gender: 'male' as const, isAthlete: false };
     const comp = adapter.computeMetrics({ weight: 86.1, impedance: 512.5 }, profile);
     expect(comp.bmi).toBeCloseTo(25.2, 1);
-    expect(Math.abs(comp.bodyFatPercent - 22.7)).toBeLessThan(2.5);
-    expect(Math.abs(comp.boneMass - 3.6)).toBeLessThan(0.5);
+    expect(Math.abs(comp.bodyFatPercent! - 22.7)).toBeLessThan(2.5);
+    expect(Math.abs(comp.boneMass! - 3.6)).toBeLessThan(0.5);
     // The app's 35.5 kg is skeletal muscle, a different quantity from the
     // muscleMass field and with no counterpart in the payload. Its own figures
     // imply the muscle mass: 86.1 * (1 - 0.227) - 3.6 = 62.95 kg.
-    expect(Math.abs(comp.muscleMass - 62.95)).toBeLessThan(2.5);
-    expect(Math.abs(comp.waterPercent - 56.3)).toBeLessThan(5);
+    expect(Math.abs(comp.muscleMass! - 62.95)).toBeLessThan(2.5);
+    expect(Math.abs(comp.waterPercent! - 56.3)).toBeLessThan(5);
   });
 });

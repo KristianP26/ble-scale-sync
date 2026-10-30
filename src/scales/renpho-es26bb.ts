@@ -8,14 +8,10 @@ import type {
   UserProfile,
   BodyComposition,
 } from '../interfaces/scale-adapter.js';
-import {
-  uuid16,
-  buildPayload,
-  biaFatIfPlausible,
-  WEIGHT_ONLY_HOLD_MS,
-} from './body-comp-helpers.js';
+import { uuid16, WEIGHT_ONLY_HOLD_MS, biaPayload } from './body-comp-helpers.js';
 import { matchesDescriptor, type MatchDescriptor } from './match-descriptor.js';
 import { bleLog } from '../ble/types.js';
+import { sum8 } from './renpho-55aa.js';
 
 // Renpho ES-26BB custom service / characteristic UUIDs
 const CHR_RESULTS = uuid16(0x2a10); // notify: measurement results
@@ -34,10 +30,7 @@ const LIVE_TYPE_FINAL = 0x01;
 const LIVE_TYPE_FINAL_ALT = 0x11;
 
 function isChecksumValid(data: Buffer): boolean {
-  if (data.length < 2) return false;
-  let sum = 0;
-  for (let i = 0; i < data.length - 1; i++) sum = (sum + data[i]) & 0xff;
-  return sum === data[data.length - 1];
+  return data.length >= 2 && sum8(data.subarray(0, -1)) === data[data.length - 1];
 }
 
 /**
@@ -56,7 +49,6 @@ export class RenphoEs26bbAdapter implements ScaleAdapterCore, GattWiring, HoldFo
   readonly match: MatchDescriptor = { priority: 230, names: { exact: ['es-26bb-b'] } };
   readonly charNotifyUuid = CHR_RESULTS;
   readonly charWriteUuid = CHR_CONTROL;
-  readonly normalizesWeight = true;
 
   private ctx: ConnectionContext | null = null;
 
@@ -161,8 +153,7 @@ export class RenphoEs26bbAdapter implements ScaleAdapterCore, GattWiring, HoldFo
     // impedance and then passes an empty comp publishes the impedance and
     // ignores it (#386). biaFatIfPlausible bounds the value first, because the
     // scaling of this field has never been checked against a capture.
-    const fat = biaFatIfPlausible(reading.weight, reading.impedance, profile);
-    return buildPayload(reading.weight, reading.impedance, { fat }, profile);
+    return biaPayload(reading, profile);
   }
 
   private async sendOfflineAck(): Promise<void> {

@@ -50,7 +50,7 @@ describe('export queue when the file cannot be written', () => {
   let info: ReturnType<typeof vi.spyOn>;
   let warn: ReturnType<typeof vi.spyOn>;
   const linesOf = (spy: ReturnType<typeof vi.spyOn>): string[] =>
-    spy.mock.calls.map((c) => c.map(String).join(' '));
+    spy.mock.calls.map((c: unknown[]) => c.map(String).join(' '));
 
   beforeEach(() => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'export-queue-nospc-'));

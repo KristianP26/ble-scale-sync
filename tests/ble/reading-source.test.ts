@@ -22,6 +22,54 @@ afterEach(() => {
 });
 
 describe('createReadingSource (#246)', () => {
+  it('mqtt-proxy returns a watcher with scaleAuth forwarded + mqtt prefix', async () => {
+    const mqttProxy = { broker_url: 'x' } as never;
+    const plan = await createReadingSource({
+      bleHandler: 'mqtt-proxy',
+      mqttProxy,
+      adapters: ADAPTERS,
+      targetMac: 'AA:BB:CC:DD:EE:FF',
+      profile: PROFILE,
+      scaleAuth: AUTH,
+    });
+    expect(plan.kind).toBe('watcher');
+    if (plan.kind !== 'watcher') return;
+    expect(plan.failureLogPrefix).toBe('Error processing reading');
+    expect(plan.watcher).toBeInstanceOf(h.FakeMqttWatcher);
+    // scaleAuth is forwarded like it is to the ESPHome watcher. Dropping it here
+    // left a configured consent PIN unseen on this transport (B-15).
+    expect((plan.watcher as unknown as { args: unknown[] }).args).toEqual([
+      mqttProxy,
+      ADAPTERS,
+      'AA:BB:CC:DD:EE:FF',
+      PROFILE,
+      AUTH,
+    ]);
+  });
+
+  it('esphome-proxy returns a watcher with 5 ctor args (scaleAuth forwarded) + esphome prefix', async () => {
+    const esphomeProxy = { host: 'h' } as never;
+    const plan = await createReadingSource({
+      bleHandler: 'esphome-proxy',
+      esphomeProxy,
+      adapters: ADAPTERS,
+      targetMac: 'AA:BB:CC:DD:EE:FF',
+      profile: PROFILE,
+      scaleAuth: AUTH,
+    });
+    expect(plan.kind).toBe('watcher');
+    if (plan.kind !== 'watcher') return;
+    expect(plan.failureLogPrefix).toBe('Error processing ESPHome reading');
+    expect(plan.watcher).toBeInstanceOf(h.FakeEsphomeWatcher);
+    expect((plan.watcher as unknown as { args: unknown[] }).args).toEqual([
+      esphomeProxy,
+      ADAPTERS,
+      'AA:BB:CC:DD:EE:FF',
+      PROFILE,
+      AUTH,
+    ]);
+  });
+
   it('mqtt-proxy selected but mqttProxy undefined falls through to poll', async () => {
     const plan = await createReadingSource({
       bleHandler: 'mqtt-proxy',

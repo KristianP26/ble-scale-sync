@@ -1,6 +1,7 @@
-import { expect } from 'vitest';
+import { expect, vi } from 'vitest';
 import type {
   BleDeviceInfo,
+  ConnectionContext,
   UserProfile,
   BodyComposition,
   ScaleReading,
@@ -10,7 +11,7 @@ import type {
 export function mockPeripheral(
   name: string,
   uuids: string[] = [],
-  manufacturerData?: Buffer,
+  manufacturerData?: BleDeviceInfo['manufacturerData'],
   charUuids?: string[],
 ): BleDeviceInfo {
   return {
@@ -18,6 +19,43 @@ export function mockPeripheral(
     serviceUuids: uuids,
     manufacturerData,
     ...(charUuids ? { characteristicUuids: charUuids } : {}),
+  };
+}
+
+/**
+ * A complete ConnectionContext with inert defaults. Typed on purpose: a test
+ * that spells the literal out by hand drifts the moment the contract grows a
+ * required member, and a renamed member must fail tsc, not read `undefined`.
+ */
+export function makeConnectionContext(
+  overrides: Partial<ConnectionContext> = {},
+): ConnectionContext {
+  return {
+    write: vi.fn().mockResolvedValue(undefined),
+    read: vi.fn().mockResolvedValue(Buffer.alloc(0)),
+    subscribe: vi.fn().mockResolvedValue(undefined),
+    profile: defaultProfile(),
+    deviceAddress: '',
+    availableChars: new Set(),
+    ...overrides,
+  };
+}
+
+/** A complete BodyComposition, zeros except what the test sets. */
+export function makeBodyComposition(overrides: Partial<BodyComposition> = {}): BodyComposition {
+  return {
+    weight: 0,
+    impedance: 0,
+    bmi: 0,
+    bodyFatPercent: 0,
+    waterPercent: 0,
+    boneMass: 0,
+    muscleMass: 0,
+    visceralFat: 0,
+    physiqueRating: 0,
+    bmr: 0,
+    metabolicAge: 0,
+    ...overrides,
   };
 }
 
@@ -32,6 +70,18 @@ export function defaultProfile(overrides?: Partial<UserProfile>): UserProfile {
 }
 
 export function assertPayloadRanges(payload: BodyComposition): void {
+  // A value is null only when the user turned the estimate off (#497); an
+  // adapter's own payload never withholds one.
+  for (const k of [
+    'bodyFatPercent',
+    'waterPercent',
+    'boneMass',
+    'muscleMass',
+    'visceralFat',
+    'physiqueRating',
+  ] as const) {
+    expect(payload[k], `${k} is null`).not.toBeNull();
+  }
   if (payload.bmi !== 0) {
     expect(payload.bmi).toBeGreaterThanOrEqual(10);
     expect(payload.bmi).toBeLessThanOrEqual(60);

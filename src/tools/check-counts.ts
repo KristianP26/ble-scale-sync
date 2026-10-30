@@ -28,7 +28,7 @@
  * `tests/check-counts.test.ts`. That cross-check is the important half: the
  * regexes here are cheap and keep this file runnable by bare `node` with no
  * install step, but a silently-wrong derivation combined with `write` would
- * rewrite eight public files to the wrong number, which is worse than the drift
+ * rewrite every public occurrence to the wrong number, which is worse than the drift
  * this exists to stop.
  *
  * Deliberately NOT checked here: the maintainer's private notes also carry
@@ -108,12 +108,6 @@ export const OCCURRENCES: Occurrence[] = [
     pattern: /(<text\b[^>]*>)(\d+)\.(\d+)(<\/text>)/,
     counts: ['protocol', 'exporters'],
     label: 'logo, <protocol>.<exporters>',
-  },
-  {
-    file: 'docs/faq.md',
-    pattern: /There are (\d+) scale adapters/,
-    counts: ['protocol'],
-    label: 'FAQ JSON-LD answer',
   },
   {
     file: 'docs/faq.md',
@@ -273,7 +267,7 @@ function main(argv: string[]): void {
   const write = argv.includes('write');
   const counts = readCounts();
 
-  // Group by file: docs/faq.md carries two occurrences, and a naive
+  // Group by file: a file can carry more than one occurrence, and a naive
   // read-modify-write per occurrence would let the second write clobber the
   // first.
   const byFile = new Map<string, Occurrence[]>();

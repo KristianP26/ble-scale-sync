@@ -1,0 +1,19 @@
+{
+  "settled": {
+    "by": "error",
+    "atMs": 0,
+    "error": "Trisa: no measurement characteristic discovered (expected 0x8A21 or 0x8A24). Likely a transient GATT discovery race. Try again."
+  },
+  "reading": null,
+  "history": [],
+  "subscribes": [
+    {
+      "seq": 0,
+      "atMs": 0,
+      "uuid": "8a82"
+    }
+  ],
+  "writes": [],
+  "rxDropped": 0,
+  "payload": null
+}

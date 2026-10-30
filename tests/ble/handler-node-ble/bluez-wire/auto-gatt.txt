@@ -1,0 +1,98 @@
++0ms [debug] D-Bus connection established
++0ms :1.1 Hello
++0ms :1.1 Introspect /org/bluez
++0ms :1.1 Introspect /org/bluez
++0ms :1.1 Introspect /org/bluez
++0ms :1.1 AgentManager1.RegisterAgent /org/bluez /org/blescalesync/agent KeyboardDisplay
++0ms [debug] BlueZ pairing agent registered (KeyboardDisplay)
++0ms [debug] Not claiming the BlueZ default-agent role (no users[].beurer_pin configured)
++0ms :1.1 Introspect hci0
++0ms :1.1 Get hci0 Adapter1.Powered
++0ms :1.1 Get hci0 Adapter1.Discovering
++0ms [debug] Discovery state at start: Discovering=false, our filtered session=no
++0ms :1.1 Adapter1.SetDiscoveryFilter hci0 {Transport=le,DuplicateData=true}
++0ms [debug] Discovery filter: Transport=le, DuplicateData=true
++0ms :1.1 Adapter1.StartDiscovery hci0
++0ms [debug] Discovery started
++0ms :1.1 Introspect hci0
++0ms :1.1 Introspect hci0
++0ms :1.1 Introspect hci0/dev_11_22_33_44_55_66
++0ms :1.1 AddMatch hci0/dev_11_22_33_44_55_66 Properties.PropertiesChanged
++0ms :1.1 Get hci0/dev_11_22_33_44_55_66 Device1.Name
++0ms [debug] Discovered: Phone [11:22:33:44:55:66]
++0ms :1.1 Get hci0/dev_11_22_33_44_55_66 Device1.AddressType
++0ms :1.1 Get hci0/dev_11_22_33_44_55_66 Device1.AdvertisingFlags -> InvalidArgs
++0ms :1.1 Get hci0/dev_11_22_33_44_55_66 Device1.UUIDs -> InvalidArgs
++0ms :1.1 Get hci0/dev_11_22_33_44_55_66 Device1.ServiceData -> InvalidArgs
++0ms :1.1 Get hci0/dev_11_22_33_44_55_66 Device1.ManufacturerData -> InvalidArgs
++0ms :1.1 RemoveMatch hci0/dev_11_22_33_44_55_66 Properties.PropertiesChanged
++0ms :1.1 Introspect hci0
++0ms :1.1 Introspect hci0/dev_AA_BB_CC_DD_EE_01
++0ms :1.1 AddMatch hci0/dev_AA_BB_CC_DD_EE_01 Properties.PropertiesChanged
++0ms :1.1 Get hci0/dev_AA_BB_CC_DD_EE_01 Device1.Name
++0ms [debug] Discovered: WIRE-GATT [AA:BB:CC:DD:EE:01]
++0ms :1.1 Get hci0/dev_AA_BB_CC_DD_EE_01 Device1.AddressType
++0ms :1.1 Get hci0/dev_AA_BB_CC_DD_EE_01 Device1.AdvertisingFlags -> InvalidArgs
++0ms :1.1 Get hci0/dev_AA_BB_CC_DD_EE_01 Device1.UUIDs -> InvalidArgs
++0ms :1.1 Get hci0/dev_AA_BB_CC_DD_EE_01 Device1.ServiceData -> InvalidArgs
++0ms :1.1 Get hci0/dev_AA_BB_CC_DD_EE_01 Device1.ManufacturerData -> InvalidArgs
++0ms [info] Auto-discovered: Wire GATT (WIRE-GATT [AA:BB:CC:DD:EE:01])
++0ms :1.1 Get hci0/dev_AA_BB_CC_DD_EE_01 Device1.AddressType
++0ms :1.1 Get hci0/dev_AA_BB_CC_DD_EE_01 Device1.AdvertisingFlags -> InvalidArgs
++0ms :1.1 Get hci0/dev_AA_BB_CC_DD_EE_01 Device1.UUIDs -> InvalidArgs
++0ms :1.1 Get hci0/dev_AA_BB_CC_DD_EE_01 Device1.ServiceData -> InvalidArgs
++0ms :1.1 Get hci0/dev_AA_BB_CC_DD_EE_01 Device1.ManufacturerData -> InvalidArgs
++0ms [debug] Stopping discovery before connect...
++0ms :1.1 Get hci0 Adapter1.Discovering
++0ms :1.1 Adapter1.StopDiscovery hci0
++0ms [debug] Discovery stopped
++500ms :1.1 Get hci0/dev_AA_BB_CC_DD_EE_01 Device1.RSSI -> InvalidArgs
++500ms [debug] Connect attempt 1/6...
++500ms :1.1 Device1.Connect hci0/dev_AA_BB_CC_DD_EE_01
++500ms [debug] Connected (took 0ms)
++500ms [info] Connected. Discovering services...
++500ms :1.1 Introspect hci0/dev_AA_BB_CC_DD_EE_01
++500ms :1.1 Get hci0/dev_AA_BB_CC_DD_EE_01 Device1.ServicesResolved
++500ms :1.1 Introspect hci0/dev_AA_BB_CC_DD_EE_01
++500ms :1.1 Introspect hci0/dev_AA_BB_CC_DD_EE_01/service0010
++500ms :1.1 Get hci0/dev_AA_BB_CC_DD_EE_01/service0010 GattService1.UUID
++500ms :1.1 Introspect hci0/dev_AA_BB_CC_DD_EE_01/service0010
++500ms :1.1 Introspect hci0/dev_AA_BB_CC_DD_EE_01/service0010/char0011
++500ms :1.1 AddMatch hci0/dev_AA_BB_CC_DD_EE_01/service0010/char0011 Properties.PropertiesChanged
++500ms :1.1 Get hci0/dev_AA_BB_CC_DD_EE_01/service0010/char0011 GattCharacteristic1.UUID
++500ms :1.1 Introspect hci0/dev_AA_BB_CC_DD_EE_01/service0010/char0013
++500ms :1.1 AddMatch hci0/dev_AA_BB_CC_DD_EE_01/service0010/char0013 Properties.PropertiesChanged
++500ms :1.1 Get hci0/dev_AA_BB_CC_DD_EE_01/service0010/char0013 GattCharacteristic1.UUID
++500ms [debug]   Service 0000fff0-0000-1000-8000-00805f9b34fb: chars=[0000fff1-0000-1000-8000-00805f9b34fb, 0000fff2-0000-1000-8000-00805f9b34fb]
++500ms :1.1 Get hci0/dev_AA_BB_CC_DD_EE_01/service0010/char0011 GattCharacteristic1.Flags
++500ms [debug]     Char 0000fff1-0000-1000-8000-00805f9b34fb: flags=[notify]
++500ms :1.1 Get hci0/dev_AA_BB_CC_DD_EE_01/service0010/char0013 GattCharacteristic1.Flags
++500ms [debug]     Char 0000fff2-0000-1000-8000-00805f9b34fb: flags=[write-without-response]
++500ms [debug] Looking for notify=0000fff1-0000-1000-8000-00805f9b34fb, write=0000fff2-0000-1000-8000-00805f9b34fb
++500ms :1.1 GattCharacteristic1.StartNotify hci0/dev_AA_BB_CC_DD_EE_01/service0010/char0011
++500ms :1.1 GattCharacteristic1.WriteValue hci0/dev_AA_BB_CC_DD_EE_01/service0010/char0013 01 command
++500ms [debug] Unlock write: [01]
++500ms [info] Subscribed to notifications. Step on the scale.
++700ms [debug] Notification 0000fff100001000800000805f9b34fb: [aa 1f 68 00 00]
++1100ms [debug] Notification 0000fff100001000800000805f9b34fb: [aa 1f 72 02 00]
++1100ms [info] Reading complete: 80.50 kg / 512 Ohm
++1100ms :1.1 Device1.Disconnect hci0/dev_AA_BB_CC_DD_EE_01
++1100ms :1.1 RemoveMatch hci0/dev_AA_BB_CC_DD_EE_01 Properties.PropertiesChanged
++1100ms [debug] Disconnect (after reading) answered in 0 ms
++1100ms [debug] Disconnecting AA:BB:CC:DD:EE:01 after the session...
++1100ms :1.1 Introspect hci0/dev_AA_BB_CC_DD_EE_01
++1100ms :1.1 AddMatch hci0/dev_AA_BB_CC_DD_EE_01 Properties.PropertiesChanged
++1100ms :1.1 Device1.Disconnect hci0/dev_AA_BB_CC_DD_EE_01
++1100ms :1.1 RemoveMatch hci0/dev_AA_BB_CC_DD_EE_01 Properties.PropertiesChanged
++1100ms [debug] Disconnect (teardown) answered in 0 ms
++1600ms [debug] D-Bus connection reset
++1600ms [debug] D-Bus connection reset after GATT operation
++1600ms exec btmgmt --index 0 power off
++1600ms exec btmgmt --index 0 info
++1600ms [debug] btmgmt: adapter powered off
++2100ms exec btmgmt --index 0 power on
++4100ms exec btmgmt --index 0 info
++4100ms [debug] btmgmt: adapter powered on
++4100ms [debug] Preemptive btmgmt reset after GATT
++4100ms => {"reading":{"weight":80.5,"impedance":512},"adapter":"Wire GATT"}
+--- match rules held

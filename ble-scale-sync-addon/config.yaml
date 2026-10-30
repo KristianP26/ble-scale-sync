@@ -1,6 +1,6 @@
 name: BLE Scale Sync
 # x-release-please-start-version
-version: 1.33.0
+version: 1.38.0
 # x-release-please-end
 slug: ble-scale-sync
 description: >-
@@ -60,12 +60,16 @@ options:
   qn_report_byte: ''
   qn_weight_ack: ''
   qn_user_key: ''
+  qn_user_slot: ''
   qn_a4_prelude: ''
   qn_time_sync_long: ''
   qn_config_long: ''
+  qn_result_ack: ''
+  rmsc04_profile_byte: ''
   auto_clear_stale_bond: false
   preemptive_adapter_reset: true
   adapter_privacy: false
+  pairing_retry_max_min: 60
   esphome_proxy_host: ''
   esphome_proxy_port: 6053
   esphome_proxy_encryption_key: ''
@@ -86,6 +90,7 @@ options:
   user_is_athlete: false
   user_weight_min: 40
   user_weight_max: 150
+  user_estimate_body_composition: true
   out_of_range: warn
   mqtt_enabled: true
   mqtt_auto: true
@@ -102,6 +107,7 @@ options:
   garmin_upload_timeout_sec: 180
   scan_cooldown: 30
   idle_rescan_delay: 5
+  no_reading_rescan_delay: 0
   retry_failed_exports: true
   reset_bluetooth: true
   debug: false
@@ -116,12 +122,16 @@ schema:
   qn_report_byte: str?
   qn_weight_ack: str?
   qn_user_key: str?
+  qn_user_slot: str?
   qn_a4_prelude: str?
   qn_time_sync_long: str?
   qn_config_long: str?
+  qn_result_ack: str?
+  rmsc04_profile_byte: str?
   auto_clear_stale_bond: bool?
   preemptive_adapter_reset: bool?
   adapter_privacy: bool?
+  pairing_retry_max_min: int(0,1440)?
   esphome_proxy_host: str?
   esphome_proxy_port: port?
   esphome_proxy_encryption_key: password?
@@ -142,6 +152,7 @@ schema:
   user_is_athlete: bool
   user_weight_min: int(10,300)
   user_weight_max: int(10,500)
+  user_estimate_body_composition: bool?
   out_of_range: list(warn|skip)
   mqtt_enabled: bool
   mqtt_auto: bool
@@ -158,6 +169,7 @@ schema:
   garmin_upload_timeout_sec: int(10,900)?
   scan_cooldown: int(5,3600)
   idle_rescan_delay: int(0,3600)?
+  no_reading_rescan_delay: int(0,3600)?
   retry_failed_exports: bool?
   reset_bluetooth: bool
   debug: bool

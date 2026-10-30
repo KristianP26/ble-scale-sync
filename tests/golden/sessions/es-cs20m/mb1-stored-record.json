@@ -1,0 +1,48 @@
+{
+  "settled": {
+    "by": "reading",
+    "atMs": 2000
+  },
+  "reading": {
+    "weight": 91.45,
+    "impedance": 0
+  },
+  "history": [],
+  "subscribes": [
+    {
+      "seq": 1,
+      "atMs": 0,
+      "uuid": "2a10"
+    }
+  ],
+  "writes": [
+    {
+      "seq": 0,
+      "atMs": 0,
+      "uuid": "2a11",
+      "hex": "55aa9000040100000094",
+      "withResponse": false
+    },
+    {
+      "seq": 2,
+      "atMs": 100,
+      "uuid": "2a11",
+      "hex": "55aa9000040100000094",
+      "withResponse": false
+    }
+  ],
+  "rxDropped": 0,
+  "payload": {
+    "weight": 91.45,
+    "impedance": 0,
+    "bmi": 27.31,
+    "bodyFatPercent": 23.47,
+    "waterPercent": 55.87,
+    "boneMass": 2.94,
+    "muscleMass": 67.05,
+    "visceralFat": 11,
+    "physiqueRating": 5,
+    "bmr": 1913,
+    "metabolicAge": 31
+  }
+}

@@ -1,5 +1,5 @@
 import type { Characteristic } from '@stoprocent/noble';
-import type { BleChar } from '../shared.js';
+import type { BleChar } from '../session/ports.js';
 import { bleLog, errMsg, withTimeout } from '../types.js';
 
 /**

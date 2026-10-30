@@ -34,8 +34,10 @@ const mom: UserConfig = {
 
 const appConfig: AppConfig = {
   version: 1,
-  scale: { weight_unit: 'kg', height_unit: 'cm' },
+  scale: { weight_unit: 'kg', height_unit: 'cm', display_unit: 'weight_unit' },
   unknown_user: 'nearest',
+  out_of_range: 'warn',
+  update_check: true,
   users: [dad, mom],
   global_exporters: [
     { type: 'influxdb', url: 'http://localhost:8086', token: 't', org: 'o', bucket: 'b' },
@@ -70,7 +72,7 @@ describe('Multi-user flow: matching → profile resolution', () => {
   it('converts height from inches when height_unit is in', () => {
     const inchConfig: AppConfig = {
       ...appConfig,
-      scale: { weight_unit: 'kg', height_unit: 'in' },
+      scale: { weight_unit: 'kg', height_unit: 'in', display_unit: 'weight_unit' },
     };
     const user: UserConfig = {
       ...dad,
@@ -121,12 +123,10 @@ describe('Multi-user flow: ExportContext construction', () => {
     const context: ExportContext = {
       userName: user.name,
       userSlug: user.slug,
-      userConfig: user,
     };
 
     expect(context.userName).toBe('Dad');
     expect(context.userSlug).toBe('dad');
-    expect(context.userConfig).toBe(dad);
   });
 
   it('includes drift warning when weight is near boundary', () => {
@@ -139,7 +139,6 @@ describe('Multi-user flow: ExportContext construction', () => {
     const context: ExportContext = {
       userName: dad.name,
       userSlug: dad.slug,
-      userConfig: dad,
       ...(drift ? { driftWarning: drift } : {}),
     };
     expect(context.driftWarning).toContain('near the lower boundary');
@@ -152,7 +151,6 @@ describe('Multi-user flow: ExportContext construction', () => {
     const context: ExportContext = {
       userName: dad.name,
       userSlug: dad.slug,
-      userConfig: dad,
       ...(drift ? { driftWarning: drift } : {}),
     };
     expect(context.driftWarning).toBeUndefined();

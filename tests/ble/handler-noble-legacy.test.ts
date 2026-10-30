@@ -6,6 +6,7 @@ import type {
   BleDeviceInfo,
   BodyComposition,
 } from '../../src/interfaces/scale-adapter.js';
+import { makeBodyComposition } from '../helpers/scale-test-utils.js';
 
 // Suppress log output during tests
 vi.spyOn(console, 'log').mockImplementation(() => {});
@@ -71,7 +72,8 @@ function makePassiveAdapter(
       }
     }) as ScaleAdapter['parseServiceData'],
     isComplete: (r: ScaleReading): boolean => r.weight > 0 && r.impedance > 0,
-    computeMetrics: (_r: ScaleReading): BodyComposition => ({ weight: 70.0, impedance: 500 }),
+    computeMetrics: (_r: ScaleReading): BodyComposition =>
+      makeBodyComposition({ weight: 70.0, impedance: 500 }),
     parseNotification: () => null,
     charNotifyUuid: undefined as unknown as string,
     charWriteUuid: undefined as unknown as string,

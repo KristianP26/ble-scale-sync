@@ -1,10 +1,17 @@
 import { createReadingSource } from '../ble/index.js';
 import type { ScaleAdapter } from '../interfaces/scale-adapter.js';
-import { resolveSessionProfile, resolveUserProfile } from '../config/resolve.js';
+import { resolveScaleAuth, resolveUserProfile } from '../config/resolve.js';
 import { ConsecutiveFailureWatchdog } from '../ble/watchdog.js';
 import { bleFailureKind, shouldCountAsWatchdogFailure } from '../ble/failure-kind.js';
-import { abortableSleep, POST_DISCONNECT_GRACE_MS, SessionTimeoutError } from '../ble/types.js';
+import {
+  abortableSleep,
+  POST_DISCONNECT_GRACE_MS,
+  PairingDeferredError,
+  SessionTimeoutError,
+  StaleLinkError,
+} from '../ble/types.js';
 import { createLogger } from '../logger.js';
+import { RuntimeSchema } from '../config/schema.js';
 import { PollReadingSource } from './poll-source.js';
 import type { ReadingSource } from './loop.js';
 import type { AppContext } from './context.js';
@@ -21,8 +28,8 @@ const log = createLogger('Sync');
  */
 const DEFAULT_PROXY_LIVENESS_MIN = 30;
 
-/** Fallback for `runtime.idle_rescan_delay` when the whole runtime block is absent. */
-const DEFAULT_IDLE_RESCAN_DELAY_SEC = 5;
+/** The schema's defaults, for a config without a runtime block. */
+const RUNTIME_DEFAULTS = RuntimeSchema.parse({});
 
 export interface ReadingSourceBundle {
   source: ReadingSource;
@@ -33,6 +40,8 @@ export interface ReadingSourceBundle {
   onSuccess?: () => Promise<void> | void;
   onFailure?: (err: unknown) => void;
   failureDelayMs?: (err: unknown) => number | undefined;
+  /** A minimum wait for this error on the backoff path (#475), see RuntimeLoopDeps. */
+  failureDelayFloor?: (err: unknown) => { ms: number; label: string } | undefined;
 }
 
 /**
@@ -51,13 +60,7 @@ export async function buildReadingSource(
   // Re-derived on each call (and on each reload) so edits to users[0] land on
   // the next cycle without a process restart.
   const profile = () => resolveUserProfile(ctx.config.users[0], ctx.config.scale);
-  const selectProfile = (weightKg: number) => resolveSessionProfile(ctx.config, weightKg);
-  const scaleAuth = () => ({
-    pin: ctx.config.users[0]?.beurer_pin,
-    userIndex: ctx.config.users[0]?.beurer_user_index,
-    provision: ctx.config.users[0]?.beurer_provision,
-    registerNewUser: ctx.config.users[0]?.beurer_register_new_user,
-  });
+  const scaleAuth = () => resolveScaleAuth(ctx.config.users[0]);
 
   const plan = await createReadingSource({
     bleHandler: ctx.bleHandler,
@@ -69,7 +72,6 @@ export async function buildReadingSource(
     profile,
     selectProfile,
     scaleAuth: scaleAuth(),
-    weightUnit: ctx.weightUnit,
   });
   if (plan.kind === 'watcher') {
     const { watcher } = plan;
@@ -97,7 +99,6 @@ export async function buildReadingSource(
           profile,
           selectProfile,
           scaleAuth: scaleAuth(),
-          weightUnit: ctx.weightUnit,
         }),
       onFailure: (err) => {
         if (!(err instanceof TransportWedgedError)) return;
@@ -141,9 +142,13 @@ export async function buildReadingSource(
     // A skipped connect found the scale, so "No scale found" would send the
     // user looking in the wrong place (#417). So does a session that ran out
     // of time after connecting and subscribing (#460): the scale was there,
-    // it just never completed a reading.
+    // it just never completed a reading. A link BlueZ keeps listing as
+    // connected (#472) is a scale that was found, too, and so is one whose
+    // pairing is held back after nobody confirmed it (#471).
     failureLogPrefixFor: (err) => {
       if (bleFailureKind(err) === 'blocked') return 'Scale found but not connected';
+      if (err instanceof StaleLinkError) return 'Scale found but not connected';
+      if (err instanceof PairingDeferredError) return 'Scale found, waiting to pair';
       if (err instanceof SessionTimeoutError) return 'Scale connected but sent no reading';
       return undefined;
     },
@@ -164,8 +169,27 @@ export async function buildReadingSource(
     // same way scan_cooldown is read in onSuccess below.
     failureDelayMs: (err) =>
       bleFailureKind(err) === 'idle'
-        ? (ctx.config.runtime?.idle_rescan_delay ?? DEFAULT_IDLE_RESCAN_DELAY_SEC) * 1000
+        ? (ctx.config.runtime?.idle_rescan_delay ?? RUNTIME_DEFAULTS.idle_rescan_delay) * 1000
         : undefined,
+    // A session that connected, heard the scale and then went quiet until its
+    // idle timeout ('no-reading', D041) waits at least
+    // runtime.no_reading_rescan_delay (#475). A scale that accepts a connection
+    // all the time and keeps its weigh-ins (BF915) otherwise shows PAIR through
+    // a new session every few minutes, all day. Not after the session cap: frames
+    // other than status frames kept coming the whole time (D070), which is more
+    // likely somebody on the scale than nobody. Not after a session that heard
+    // nothing either: the watchdog counts those, and a long wait would only
+    // delay its recovery. A held pairing (#471) and a stale link (#472) are
+    // neither, so they keep their own waits.
+    // Only a floor: the backoff still advances (D041). Read per call, so a
+    // reload lands with the next session that ends this way.
+    failureDelayFloor: (err) => {
+      if (bleFailureKind(err) !== 'no-reading') return undefined;
+      if (!(err instanceof SessionTimeoutError) || err.reason !== 'idle') return undefined;
+      const sec =
+        ctx.config.runtime?.no_reading_rescan_delay ?? RUNTIME_DEFAULTS.no_reading_rescan_delay;
+      return sec > 0 ? { ms: sec * 1000, label: 'runtime.no_reading_rescan_delay' } : undefined;
+    },
     onFailure: (err) => {
       // Idle cycles (radio alive, scale simply not advertising) must not trip
       // the watchdog (#213). Only GATT failures and dead-radio wedges count.
@@ -177,6 +201,9 @@ export async function buildReadingSource(
         // The scale sent frames, so the Bluetooth path works; nobody weighed
         // in before the session timed out (#460, D041).
         log.debug('Scale answered but sent no reading; not counting toward watchdog');
+      } else if (err instanceof PairingDeferredError) {
+        // Listened to the scale's advertisements instead of connecting (#471).
+        log.debug('Waiting to pair the scale; not counting toward watchdog');
       } else {
         log.debug('Idle cycle (radio alive, scale not on); not counting toward watchdog');
       }
