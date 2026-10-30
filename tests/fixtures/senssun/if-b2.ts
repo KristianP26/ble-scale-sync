@@ -70,6 +70,13 @@ const SOCKS = `
 2026-10-29 23:40:57.466 [BLE:debug] Notification 0000fff100001000800000805f9b34fb: [10 00 00 c5 0b 03 81 00 00 01 90]
 `;
 
+/** Derived: the socks log with a record cut after 7 bytes just before the ack. */
+const SOCKS_CUT_RECORD = SOCKS.replace(
+  '2026-10-29 23:40:57.466',
+  '2026-10-29 23:40:57.400 [BLE:debug] Notification 0000fff100001000800000805f9b34fb: [10 00 00 c5 1d 03 82]\n' +
+    '2026-10-29 23:40:57.466',
+);
+
 /** Barefoot again: the record follows the ack within 0.1 s. */
 const BAREFOOT_SECOND = `
 2026-10-30 02:10:59.905 [BLE:debug] Notification 0000fff100001000800000805f9b34fb: [10 00 00 c5 0e 03 80 03 af 08 1e 01 a0 0a]
@@ -101,6 +108,14 @@ const traces: Record<string, Trace> = {
     advert: ADVERT,
     steps: fromDebugLog(SOCKS),
     disconnectAtMs: 6_020,
+  },
+  'if-b2-473-socks-cut-record': {
+    provenance: 'derived',
+    source:
+      'the socks log above, with the first 7 bytes of a record in a notification of their own just before the profile ack',
+    advert: ADVERT,
+    steps: fromDebugLog(SOCKS_CUT_RECORD),
+    disconnectAtMs: 15_247,
   },
   'if-b2-473-record-first': {
     provenance: 'derived',

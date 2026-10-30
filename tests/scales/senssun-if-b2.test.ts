@@ -141,6 +141,14 @@ describe('Senssun IF_B2 protocol', () => {
     const reassembler = new IfB2Reassembler();
     expect(reassembler.push(Buffer.concat([ack.subarray(0, 5), ack]))).toEqual([ack]);
   });
+  it('drops a record cut short when the next notification is a whole frame', () => {
+    // Derived from health: its first 7 bytes, then the logged ack on its own.
+    const reassembler = new IfB2Reassembler();
+    expect(reassembler.push(health.subarray(0, 7))).toEqual([]);
+    expect(reassembler.push(ack)).toEqual([ack]);
+    expect(reassembler.push(health.subarray(0, 20))).toEqual([]);
+    expect(reassembler.push(health.subarray(20))).toEqual([health]);
+  });
   it('recovers a complete acknowledgement behind an incomplete health-record prefix', () => {
     const reassembler = new IfB2Reassembler();
     expect(reassembler.push(Buffer.concat([health.subarray(0, 5), ack]))).toEqual([ack]);

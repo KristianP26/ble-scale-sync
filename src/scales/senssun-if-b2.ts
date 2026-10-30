@@ -81,10 +81,32 @@ function u16(frame: Buffer, at: number): number {
   return frame.readUInt16BE(at);
 }
 
+/** True when `data` starts with a whole frame: header, length, namespace, type and checksum. */
+function startsWithWholeFrame(data: Buffer): boolean {
+  if (data.length < 11 || !data.subarray(0, 4).equals(CLOUD_HEADER)) return false;
+  const length = data[4];
+  const type =
+    length === 11
+      ? PROFILE_ACK_FRAME
+      : length === 14
+        ? LIVE_WEIGHT_FRAME
+        : length === 29
+          ? HEALTH_RECORD_FRAME
+          : undefined;
+  if (type === undefined || data.length < length || data[5] !== 0x03 || data[6] !== type)
+    return false;
+  const checksum = data.subarray(4, length - 1).reduce((sum, value) => (sum + value) & 0xff, 0);
+  return data[length - 1] === checksum;
+}
+
 export class IfB2Reassembler {
   private pending = Buffer.alloc(0);
 
   push(data: Buffer): Buffer[] {
+    // A notification that starts with a whole frame does not continue the bytes
+    // still pending: their frame lost its rest, and waiting for its length
+    // would hold this frame back, and lose it when nothing follows.
+    if (this.pending.length && startsWithWholeFrame(data)) this.pending = Buffer.alloc(0);
     if (data.length) this.pending = Buffer.concat([this.pending, data]);
     if (this.pending.length > MAX_BUFFER)
       this.pending = this.pending.subarray(this.pending.length - MAX_BUFFER);
