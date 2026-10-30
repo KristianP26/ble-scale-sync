@@ -6,13 +6,13 @@ import {
   decodeIfB2Frame,
   IF_B2_MAX_PROFILE_WRITES,
   IF_B2_RECORD_WAIT_MS,
-  type IfB2HealthRecord,
 } from '../../src/scales/senssun-if-b2.js';
-import { uuid16 } from '../../src/scales/body-comp-helpers.js';
+import { buildPayload, uuid16 } from '../../src/scales/body-comp-helpers.js';
 import type { UserProfile } from '../../src/interfaces/scale-adapter.js';
 import { buildAdapterRuntimeConfig } from '../../src/config/resolve.js';
 import type { AppConfig, UserConfig } from '../../src/config/schema.js';
 import { bleLog } from '../../src/ble/types.js';
+import { session as LOGGED } from '../fixtures/senssun/if-b2.js';
 
 // These frames and profiles are synthetic and contain no hardware-captured measurements.
 // Expected composition values were calculated independently from the protocol equations.
@@ -41,13 +41,6 @@ function profileAcknowledgement(status: number, pin = 1): Buffer {
 const profileCreated = profileAcknowledgement(0);
 const profileUpdated = profileAcknowledgement(1);
 const profile = { height: 176, age: 42, gender: 'male' as const, isAthlete: false };
-
-function decodeRecord(frame: Buffer, withProfile?: UserProfile): IfB2HealthRecord {
-  const decoded = decodeIfB2Frame(frame, withProfile);
-  if (decoded?.frameType !== 'health_record')
-    throw new Error(`not a record: ${decoded?.frameType}`);
-  return decoded;
-}
 
 function liveFrame(weightTenths: number, control = 0xa0): Buffer {
   const frame = Buffer.from(live);
@@ -87,13 +80,12 @@ describe('Senssun IF_B2 protocol', () => {
       control: 0xa0,
       stable: false,
     });
-    expect(decodeIfB2Frame(alternateHealth, profile)).toMatchObject({
+    expect(decodeIfB2Frame(alternateHealth)).toMatchObject({
       frameType: 'health_record',
       recordSlot: 0,
       profilePin: '0001',
       weightKg: 68.4,
       impedanceOhms: 330,
-      fatPercent: 18.7,
       elapsedSeconds: 0,
     });
   });
@@ -136,25 +128,6 @@ describe('Senssun IF_B2 protocol', () => {
     expect(reassembler.push(frame.subarray(0, 23))).toEqual([]);
     expect(reassembler.push(frame.subarray(23))).toEqual([frame]);
   });
-  it('decodes verified health fields and derived metrics', () => {
-    const decoded = decodeIfB2Frame(health, profile);
-    expect(decoded).toMatchObject({
-      frameType: 'health_record',
-      weightKg: 72.6,
-      impedanceOhms: 520,
-      fatPercent: 20.8,
-      waterPercent: 54.4,
-      musclePercent: 40.8,
-      boneKg: 4.1,
-      bmr: 1687,
-      bodyAge: 47,
-    });
-    const near = Buffer.from(health);
-    near[12] = 0x00;
-    near[13] = 0xd2;
-    near[28] = near.subarray(4, 28).reduce((sum, value) => (sum + value) & 0xff, 0);
-    expect(decodeIfB2Frame(near, profile)).toMatchObject({ fatPercent: 21, waterPercent: 54.4 });
-  });
   it('returns null for malformed, unsupported, end and invalid-profile frames', () => {
     const malformed = Buffer.from(live);
     malformed[13] ^= 1;
@@ -169,14 +142,13 @@ describe('Senssun IF_B2 protocol', () => {
     const end = Buffer.from(health);
     end[7] = 0xff;
     end[28] = end.subarray(4, 28).reduce((sum, value) => (sum + value) & 0xff, 0);
-    expect(decodeIfB2Frame(end, profile)).toBeNull();
+    expect(decodeIfB2Frame(end)).toBeNull();
     const declaredMismatch = Buffer.from(live);
     declaredMismatch[4] = 15;
     declaredMismatch[13] = declaredMismatch
       .subarray(4, 13)
       .reduce((sum, value) => (sum + value) & 0xff, 0);
     expect(decodeIfB2Frame(declaredMismatch)).toBeNull();
-    expect(decodeIfB2Frame(health, { ...profile, height: 0 })).toBeNull();
   });
   it('builds the exact reusable cloud profile command', () => {
     expect(buildCloudProfileCommand(profile, 72.6)).toEqual(profileCommand);
@@ -215,40 +187,6 @@ describe('Senssun IF_B2 protocol', () => {
   it('decodes the PIN of a profile acknowledgement', () => {
     expect(decodeIfB2Frame(profileAcknowledgement(0, 2))).toMatchObject({ profilePin: '0002' });
   });
-  it('maps impedance and verified BMR/body age into immutable composition', () => {
-    const adapter = new SenssunIfB2Adapter();
-    const reading = adapter.parseNotification(health, profile)!;
-    const metrics = adapter.computeMetrics(reading, profile);
-    expect(metrics).toMatchObject({
-      weight: 72.6,
-      impedance: 520,
-      bodyFatPercent: 20.8,
-      waterPercent: 54.4,
-      muscleMass: 29.62,
-      boneMass: 4.1,
-      bmr: 1687,
-      metabolicAge: 47,
-    });
-    expect(adapter.parseNotification(live, profile)).toMatchObject({ weight: 72.6 });
-    expect(adapter.computeMetrics(reading, profile).bmr).toBe(1687);
-  });
-  it.each([
-    { gender: 'male', age: 100, weight: 40, bmr: 452 },
-    { gender: 'male', age: 21, weight: 42, bmr: 1017 },
-    { gender: 'female', age: 52, weight: 146.5, bmr: 2016 },
-  ] as const)(
-    'exports float32 BMR $bmr for $gender at age $age and $weight kg',
-    ({ gender, age, weight, bmr }) => {
-      const frame = Buffer.from(health);
-      frame.writeUInt16BE(weight * 10, 10);
-      frame[28] = frame.subarray(4, 28).reduce((sum, value) => (sum + value) & 0xff, 0);
-      const selectedProfile: UserProfile = { height: 100, age, gender, isAthlete: false };
-      const adapter = new SenssunIfB2Adapter();
-      const reading = adapter.parseNotification(frame, selectedProfile)!;
-
-      expect(adapter.computeMetrics(reading, selectedProfile).bmr).toBe(bmr);
-    },
-  );
 });
 describe('Senssun IF_B2 session state', () => {
   beforeEach(() => vi.useFakeTimers());
@@ -416,7 +354,7 @@ describe('Senssun IF_B2 session state', () => {
     adapter.parseNotification(profileUpdated);
     expect(adapter.parseNotification(health)).toMatchObject({
       weight: 72.6,
-      impedance: 520,
+      impedance: 0,
     });
   });
 
@@ -527,7 +465,7 @@ describe('Senssun IF_B2 session state', () => {
     'accepts a current record after a successful acknowledgement',
     async (ack) => {
       const adapter = await acknowledgedAdapter(ack);
-      expect(adapter.parseNotification(health)).toMatchObject({ impedance: 520 });
+      expect(adapter.parseNotification(health)).toMatchObject({ impedance: 0 });
     },
   );
 
@@ -535,21 +473,21 @@ describe('Senssun IF_B2 session state', () => {
     const writes: Array<{ uuid: string; data: Buffer; withResponse: boolean }> = [];
     const adapter = new SenssunIfB2Adapter();
     await connect(adapter, writes);
-    expect(adapter.parseNotification(health)).toMatchObject({ weight: 72.6, impedance: 520 });
+    expect(adapter.parseNotification(health)).toMatchObject({ weight: 72.6, impedance: 0 });
     adapter.parseNotification(quietLive);
     await vi.advanceTimersByTimeAsync(5_000);
     expect(writes).toEqual([]);
   });
   it('emits a record that arrives before the profile ack, once', async () => {
     const adapter = await selectedAdapter();
-    expect(adapter.parseNotification(health)).toMatchObject({ weight: 72.6, impedance: 520 });
+    expect(adapter.parseNotification(health)).toMatchObject({ weight: 72.6, impedance: 0 });
     expect(adapter.parseNotification(profileCreated)).toBeNull();
     expect(adapter.parseNotification(health)).toBeNull();
   });
   it('processes a concatenated current record and acknowledgement in order', async () => {
     const adapter = await selectedAdapter();
     expect(adapter.parseNotification(Buffer.concat([health, profileUpdated]))).toMatchObject({
-      impedance: 520,
+      impedance: 0,
     });
   });
 
@@ -575,28 +513,13 @@ describe('Senssun IF_B2 session state', () => {
     },
   );
 
-  it.each([100, 1_300])(
-    'uses the BMI estimate after the processor rejects %s ohm impedance',
-    async (impedance) => {
-      const adapter = await acknowledgedAdapter();
-      const reading = adapter.parseNotification(
-        currentRecord((frame) => frame.writeUInt16BE(impedance, 14)),
-      )!;
-      adapter.onSessionEnd();
-      reading.impedance = 0;
-      const weightOnlyEstimate = new SenssunIfB2Adapter().computeMetrics(
-        { weight: 72.6, impedance: 0 },
-        profile,
-      );
-      expect(adapter.computeMetrics(reading, profile)).toEqual(weightOnlyEstimate);
-    },
-  );
-
   it('emits the final record instead of an earlier live frame in the same notification', async () => {
     const adapter = await selectedAdapter();
     expect(
-      adapter.parseNotification(Buffer.concat([quietLive, health, profileUpdated])),
-    ).toMatchObject({ impedance: 520 });
+      adapter.isFinal(
+        adapter.parseNotification(Buffer.concat([quietLive, health, profileUpdated]))!,
+      ),
+    ).toBe(true);
   });
 
   it.each([2, 3, 4])(
@@ -699,7 +622,7 @@ describe('Senssun IF_B2 session state', () => {
     await Promise.resolve();
     await Promise.resolve();
 
-    expect(adapter.parseNotification(health)).toMatchObject({ impedance: 520 });
+    expect(adapter.parseNotification(health)).toMatchObject({ impedance: 0 });
   });
 
   it('processes a concatenated acknowledgement and current record in order', async () => {
@@ -707,7 +630,7 @@ describe('Senssun IF_B2 session state', () => {
     await connect(adapter);
     await settleSelection(adapter);
     expect(adapter.parseNotification(Buffer.concat([profileUpdated, health]))).toMatchObject({
-      impedance: 520,
+      impedance: 0,
     });
   });
 
@@ -734,60 +657,52 @@ describe('Senssun IF_B2 session state', () => {
     expect(adapter.parseNotification(health)).toMatchObject({ weight: 72.6 });
   });
 
-  it('emits one fragmented current record and keeps its composition pinned across sessions', async () => {
+  it('emits a record split over two notifications once', async () => {
     const adapter = await acknowledgedAdapter();
     expect(adapter.parseNotification(health.subarray(0, 20))).toBeNull();
     const reading = adapter.parseNotification(health.subarray(20))!;
-    expect(reading).toMatchObject({ weight: 72.6, impedance: 520 });
+    expect(reading).toMatchObject({ weight: 72.6, impedance: 0 });
     expect(adapter.isComplete(reading)).toBe(true);
     expect(adapter.parseNotification(health)).toBeNull();
-    const metrics = adapter.computeMetrics(reading, profile);
-
-    adapter.onSessionStart();
-    await connect(adapter, [], () => ({ ...profile, age: 30 }));
-    await settleSelection(adapter);
-    adapter.parseNotification(profileUpdated);
-    expect(adapter.computeMetrics(reading, profile)).toEqual(metrics);
   });
 
-  it('derives composition despite invalid transmitted composition fields', async () => {
-    const adapter = await acknowledgedAdapter();
-    const invalidComposition = currentRecord((frame) => {
-      frame.writeUInt16BE(0xffff, 12);
-      frame.writeUInt16BE(0xffff, 16);
-      frame.writeUInt16BE(0xffff, 18);
-      frame.writeUInt16BE(0xffff, 20);
-      frame.writeUInt16BE(0xffff, 22);
-    });
-    const expected = decodeRecord(invalidComposition, profile);
-    const reading = adapter.parseNotification(invalidComposition)!;
+  // The two logged records: the first has bytes 12-13 and 16-19 out of any
+  // plausible range, the second has them in range. Neither may matter.
+  it.each(['if-b2-473-barefoot', 'if-b2-473-barefoot-second'])(
+    'turns the record of %s into a weight-only reading',
+    async (trace) => {
+      const steps = LOGGED.traces[trace].steps.map((step) => Buffer.from(step.hex, 'hex'));
+      const record = Buffer.concat(steps.slice(-2));
+      const adapter = new SenssunIfB2Adapter();
+      await connect(adapter);
+      for (const frame of steps.slice(0, -2)) adapter.parseNotification(frame);
+      const reading =
+        adapter.parseNotification(steps.at(-2)!) ?? adapter.parseNotification(steps.at(-1)!);
+      const weight = record.readUInt16BE(10) / 10;
+      expect(reading).toEqual({ weight, impedance: 0 });
+      expect(adapter.isFinal(reading!)).toBe(true);
+      expect(adapter.computeMetrics(reading!, profile)).toEqual(
+        buildPayload(weight, 0, {}, profile),
+      );
+    },
+  );
 
-    expect(adapter.computeMetrics(reading, profile)).toMatchObject({
-      bodyFatPercent: expected.fatPercent,
-      waterPercent: expected.waterPercent,
-      bmr: expected.bmr,
-      metabolicAge: expected.bodyAge,
-    });
-  });
-
-  it('uses the selected profile rather than the transport startup profile', async () => {
-    const selectedProfile: UserProfile = { ...profile, age: 62, gender: 'female' };
-    const transportProfile: UserProfile = { ...profile, age: 20 };
-    const expected = decodeRecord(health, selectedProfile);
+  it('estimates from BMI for the profile computeMetrics gets, not the one written', async () => {
+    const written: UserProfile = { ...profile, age: 62, gender: 'female' };
+    const other: UserProfile = { height: 160, age: 25, gender: 'female', isAthlete: true };
     const adapter = new SenssunIfB2Adapter();
-    await connect(adapter, [], () => selectedProfile, transportProfile);
+    await connect(adapter, [], () => written);
     await settleSelection(adapter);
     adapter.parseNotification(profileUpdated);
-
     const reading = adapter.parseNotification(health)!;
-    expect(adapter.computeMetrics(reading, transportProfile)).toMatchObject({
-      bodyFatPercent: expected.fatPercent,
-      waterPercent: expected.waterPercent,
-      bmr: expected.bmr,
-      metabolicAge: expected.bodyAge,
-    });
-  });
 
+    expect(reading).toEqual({ weight: 72.6, impedance: 0 });
+    for (const p of [profile, other])
+      expect(adapter.computeMetrics(reading, p)).toEqual(buildPayload(72.6, 0, {}, p));
+    const off = { ...profile, estimateBodyComposition: false };
+    expect(adapter.computeMetrics(reading, off)).toEqual(buildPayload(72.6, 0, {}, off));
+    expect(adapter.computeMetrics(reading, off).bodyFatPercent).toBeNull();
+  });
   describe.each([
     ['onSessionStart', (adapter: SenssunIfB2Adapter) => adapter.onSessionStart()],
     ['onSessionEnd', (adapter: SenssunIfB2Adapter) => adapter.onSessionEnd()],

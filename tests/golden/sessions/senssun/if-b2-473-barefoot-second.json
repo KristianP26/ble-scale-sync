@@ -5,27 +5,7 @@
   },
   "reading": {
     "weight": 94.3,
-    "impedance": 251,
-    "scaleComposition": {
-      "record": {
-        "frameType": "health_record",
-        "recordSlot": 0,
-        "profilePin": "0001",
-        "weightKg": 94.3,
-        "fatPercent": 27.9,
-        "impedanceOhms": 251,
-        "waterPercent": 49.6,
-        "musclePercent": 37.6,
-        "boneKg": 3.7,
-        "bmr": 1988,
-        "elapsedSeconds": 0,
-        "raw": "100000c51d038200000103af011700fb01ef0176001f07c500000000ba",
-        "bodyAge": 47,
-        "compositionSource": "derived_from_impedance",
-        "derivedFatSource": "derived"
-      },
-      "transmittedFatTenths": 279
-    }
+    "impedance": 0
   },
   "history": [],
   "subscribes": [
@@ -110,15 +90,15 @@
   "rxDropped": 0,
   "payload": {
     "weight": 94.3,
-    "impedance": 251,
+    "impedance": 0,
     "bmi": 30.44,
-    "bodyFatPercent": 27.9,
-    "waterPercent": 49.6,
-    "boneMass": 3.7,
-    "muscleMass": 35.46,
-    "visceralFat": 14,
+    "bodyFatPercent": 29.99,
+    "waterPercent": 51.11,
+    "boneMass": 2.77,
+    "muscleMass": 63.25,
+    "visceralFat": 15,
     "physiqueRating": 1,
-    "bmr": 1988,
+    "bmr": 1838,
     "metabolicAge": 47
   }
 }

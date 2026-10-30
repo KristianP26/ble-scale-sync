@@ -44,22 +44,25 @@ export interface IfB2LiveWeight {
   stable: boolean;
   raw: string;
 }
+/**
+ * The record (0x82) after a weigh-in. Only the fields below are decoded.
+ * Bytes 12-13, 16-19 and 20-21 are not, and bytes 14-15 look like an impedance
+ * that no display or app value from the same weigh-in has confirmed, so the
+ * adapter reports none (weight only).
+ */
 export interface IfB2HealthRecord {
   frameType: 'health_record';
+  /** Byte 7; 0 in every logged record. */
   recordSlot: number;
-  weightKg: number;
-  impedanceOhms: number;
-  fatPercent: number;
-  waterPercent: number;
-  musclePercent: number;
-  boneKg: number;
-  bmr: number;
-  bodyAge?: number;
-  elapsedSeconds: number;
+  /** Bytes 8-9 as hex, the profile slot; 0001 in every logged record. */
   profilePin: string;
+  /** Bytes 10-11 / 10. */
+  weightKg: number;
+  /** Bytes 14-15, raw and unused. */
+  impedanceOhms: number;
+  /** Bytes 24-27; 0 in every logged record, meaning unproven. */
+  elapsedSeconds: number;
   raw: string;
-  compositionSource?: string;
-  derivedFatSource?: 'derived' | 'transmitted';
 }
 export interface IfB2ProfileAck {
   frameType: 'profile_ack';
@@ -71,15 +74,6 @@ export interface IfB2ProfileAck {
 }
 export type IfB2Frame = IfB2LiveWeight | IfB2ProfileAck | IfB2HealthRecord;
 
-/** The decoded record a reading came from, carried on the reading (D077). */
-type IfB2Composition = { record: IfB2HealthRecord; transmittedFatTenths: number };
-
-function f32(value: number): number {
-  return Math.fround(value);
-}
-function roundOne(value: number): number {
-  return Math.floor(value * 10 + 0.5) / 10;
-}
 function u16(frame: Buffer, at: number): number {
   return frame.readUInt16BE(at);
 }
@@ -141,7 +135,7 @@ export class IfB2Reassembler {
  * a bad header, length, namespace or checksum, an unknown type, a record
  * whose fields are out of range. Never throws.
  */
-export function decodeIfB2Frame(frame: Buffer, profile?: UserProfile): IfB2Frame | null {
+export function decodeIfB2Frame(frame: Buffer): IfB2Frame | null {
   if (frame.length < 8 || !frame.subarray(0, 4).equals(CLOUD_HEADER)) return null;
   if (frame[4] !== frame.length) return null;
   if (frame[5] !== 0x03) return null;
@@ -172,109 +166,15 @@ export function decodeIfB2Frame(frame: Buffer, profile?: UserProfile): IfB2Frame
   if (frame[6] !== HEALTH_RECORD_FRAME || frame.length !== 29) return null;
   if (frame[7] === 0xff) return null;
   const weightKg = u16(frame, 10) / 10;
-  const result: IfB2HealthRecord = {
+  if (weightKg <= 0) return null;
+  return {
     frameType: 'health_record',
     recordSlot: frame[7],
     profilePin: frame.subarray(8, 10).toString('hex'),
     weightKg,
-    fatPercent: u16(frame, 12) / 10,
     impedanceOhms: u16(frame, 14),
-    waterPercent: u16(frame, 16) / 10,
-    musclePercent: u16(frame, 18) / 10,
-    boneKg: u16(frame, 20) / 10,
-    bmr: u16(frame, 22),
     elapsedSeconds: frame.readUInt32BE(24),
     raw: frame.toString('hex'),
-  };
-  if (
-    result.weightKg <= 0 ||
-    result.impedanceOhms <= 0 ||
-    (!profile &&
-      (result.fatPercent <= 0 ||
-        result.fatPercent > 100 ||
-        result.waterPercent < 0 ||
-        result.waterPercent > 100 ||
-        result.musclePercent < 0 ||
-        result.musclePercent > 100 ||
-        result.boneKg <= 0 ||
-        result.boneKg > result.weightKg))
-  )
-    return null;
-  if (profile) {
-    if (profile.gender !== 'male' && profile.gender !== 'female') return null;
-    if (!(profile.height > 0) || !(profile.age >= 1)) return null;
-    const derived = deriveComposition(
-      result.weightKg,
-      result.impedanceOhms,
-      profile,
-      u16(frame, 12),
-    );
-    result.bodyAge = derived.bodyAge;
-    result.bmr = derived.bmr;
-    result.fatPercent = derived.fat;
-    result.waterPercent = derived.water;
-    result.musclePercent = derived.muscle;
-    result.boneKg = derived.bone;
-    result.compositionSource = 'derived_from_impedance';
-    result.derivedFatSource = derived.fatSource;
-  }
-  return result;
-}
-
-function deriveComposition(
-  weightKg: number,
-  impedanceOhms: number,
-  profile: UserProfile,
-  transmittedFatTenths: number,
-) {
-  const weight = f32(weightKg),
-    height = f32(profile.height),
-    impedance = f32(impedanceOhms);
-  let fat: number;
-  if (impedance < 50) fat = f32(3.9);
-  else if (impedance > 3000) fat = f32(75.1);
-  else {
-    const z = Math.min(impedance, f32(375));
-    let adjusted = weight;
-    if (profile.gender === 'male' && adjusted > 64)
-      adjusted = f32(f32(f32(adjusted - f32(64)) / f32(2)) + f32(64));
-    const term = f32(f32(z + f32(4750)) + f32(Math.abs(30 - profile.age)));
-    const numerator = profile.gender === 'male' ? 6.37e7 : 6.45e7;
-    const denominator = 11554 - (term * 8.4 * adjusted * 10) / f32(height * height);
-    fat = f32(roundOne((numerator / denominator - 5800) / 10));
-    fat = Math.min(Math.max(fat, f32(4)), f32(75));
-  }
-  const reportedFat =
-    Math.abs(transmittedFatTenths - f32(fat * f32(10))) <= 3
-      ? f32(transmittedFatTenths / f32(10))
-      : fat;
-  const water = f32(roundOne(f32(f32(f32(100) - fat) * f32(11)) / f32(16)));
-  const muscleFactor =
-    profile.gender === 'male'
-      ? 0.85 - (profile.age * 0.0578) / weight - height * 0.00038
-      : 0.78 - (profile.age * 0.0578) / weight - height * 0.00025;
-  const muscle = f32(roundOne(water * muscleFactor));
-  const bone = f32(roundOne(f32(100 - reportedFat) * (profile.gender === 'male' ? 0.052 : 0.061)));
-  // Preserve BodyMonitor's Java float rounding after each BMR operation.
-  const isMale = profile.gender === 'male';
-  const weightTerm = f32(weight * f32(isMale ? 13.9 : 9.6));
-  const heightTerm = f32(height * f32(isMale ? 5.1 : 1.9));
-  const base = f32(f32(weightTerm + f32(isMale ? 66 : 665)) + heightTerm);
-  const ageTerm = f32(profile.age * f32(isMale ? 6.8 : 4.7));
-  const bmr = Math.trunc(f32(base - ageTerm));
-  const bmi = weight / f32(f32(height / f32(100)) * f32(height / f32(100)));
-  const bodyAge = Math.min(
-    Math.max(Math.trunc(profile.age * (0.00313 * profile.age * (bmi - 21.5) + 1)), profile.age - 5),
-    profile.age + 5,
-  );
-  return {
-    fat: roundOne(reportedFat),
-    water: roundOne(water),
-    muscle: roundOne(muscle),
-    bone: roundOne(bone),
-    bmr,
-    bodyAge,
-    fatSource: reportedFat === fat ? ('derived' as const) : ('transmitted' as const),
   };
 }
 
@@ -496,12 +396,11 @@ export class SenssunIfB2Adapter implements ScaleAdapterCore, HoldForComposition 
     return held;
   }
 
-  parseNotification(data: Buffer, profile?: UserProfile): ScaleReading | null {
+  parseNotification(data: Buffer): ScaleReading | null {
     const s = this.s;
     let emitted: ScaleReading | null = null;
     for (const frame of s.reassembler.push(data)) {
-      const decodeProfile = s.selected ?? s.ctx?.profile ?? profile;
-      const decoded = decodeIfB2Frame(frame, decodeProfile);
+      const decoded = decodeIfB2Frame(frame);
       if (!decoded) continue;
 
       if (decoded.frameType === 'live_weight') {
@@ -534,11 +433,9 @@ export class SenssunIfB2Adapter implements ScaleAdapterCore, HoldForComposition 
       s.completed = true;
       this.stopWrites(s);
       s.clearSelectionCandidate();
-      const reading: ScaleReading<IfB2Composition> = {
-        weight: decoded.weightKg,
-        impedance: decoded.impedanceOhms,
-        scaleComposition: { record: decoded, transmittedFatTenths: u16(frame, 12) },
-      };
+      // Weight only: bytes 14-15 stay in the DEBUG Notification line until a
+      // display or app value from the same weigh-in confirms them.
+      const reading: ScaleReading = { weight: decoded.weightKg, impedance: 0 };
       this.recordReadings.add(reading);
       emitted = reading;
     }
@@ -553,22 +450,8 @@ export class SenssunIfB2Adapter implements ScaleAdapterCore, HoldForComposition 
     return this.recordReadings.has(reading);
   }
 
+  /** BMI estimate for the matched user: the record's composition bytes are not decoded. */
   computeMetrics(reading: ScaleReading, profile: UserProfile): BodyComposition {
-    if (reading.impedance === 0) return buildPayload(reading.weight, 0, {}, profile);
-    const pinned = reading.scaleComposition as IfB2Composition | undefined;
-    if (!pinned) return buildPayload(reading.weight, reading.impedance, {}, profile);
-    const record = pinned.record;
-    const comp = {
-      fat: record.fatPercent,
-      water: record.waterPercent,
-      muscle: record.musclePercent,
-      bone: record.boneKg,
-      bmr: record.bmr,
-      bodyAge: record.bodyAge,
-    };
-    const payload = buildPayload(reading.weight, reading.impedance, comp, profile);
-    if (comp.bmr !== undefined) payload.bmr = comp.bmr;
-    if (comp.bodyAge !== undefined) payload.metabolicAge = comp.bodyAge;
-    return payload;
+    return buildPayload(reading.weight, 0, {}, profile);
   }
 }
