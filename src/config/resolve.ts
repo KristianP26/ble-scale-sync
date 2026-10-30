@@ -1,9 +1,4 @@
-import type {
-  AdapterRuntimeConfig,
-  ScaleAuth,
-  SessionProfileSelection,
-  UserProfile,
-} from '../interfaces/scale-adapter.js';
+import type { AdapterRuntimeConfig, ScaleAuth, UserProfile } from '../interfaces/scale-adapter.js';
 import type { z } from 'zod';
 import type { BleHandlerName } from '../ble/types.js';
 import {
@@ -20,7 +15,7 @@ import {
   type HaBluetoothConfig,
 } from './schema.js';
 
-import { isOutOfRange, matchUserByWeight } from './user-matching.js';
+import { matchUserByWeight } from './user-matching.js';
 
 // --- Scale display unit ---
 
@@ -125,7 +120,8 @@ export type AdapterOptions<S extends Record<string, z.ZodType>> = {
  * What every adapter's configure() gets, at startup and on each reload: the Xiaomi
  * MiBeacon bind key plus the effective scale MAC the S400 nonce needs, the display
  * unit the QN 0x13 command and the AC 27 D0 frame echo (#269), and every
- * adapter-owned ble.* key (ADAPTER_BLE_OPTIONS) under its camelCase name.
+ * adapter-owned ble.* key (ADAPTER_BLE_OPTIONS) under its camelCase name, plus
+ * the users and a lookup of the profile a weight matches.
  */
 export function buildAdapterRuntimeConfig(
   config: AppConfig,
@@ -144,27 +140,14 @@ export function buildAdapterRuntimeConfig(
     // The config entries themselves, not copies: the processor moves
     // last_known_weight on them in memory after each live weigh-in.
     userWeights: config.users,
-  };
-}
-
-/**
- * Select the profile authorized for one measured weight.
- *
- * Matching remains centralized in matchUserByWeight; ambiguous range matches
- * cannot authorize a session, even when ordinary matching resolves a tiebreak.
- * Apply the out_of_range policy before resolving demographics.
- */
-export function resolveSessionProfile(
-  config: AppConfig,
-  weightKg: number,
-): SessionProfileSelection | null {
-  const match = matchUserByWeight(config.users, weightKg, config.unknown_user);
-  if (!match.user || match.tier === 'tiebreak') return null;
-  if (config.out_of_range === 'skip' && isOutOfRange(match.user, weightKg)) return null;
-
-  return {
-    userSlug: match.user.slug,
-    profile: resolveUserProfile(match.user, config.scale),
+    // Resolved on each call, so a moved last_known_weight and today's age count.
+    // Silent: the processor logs its own match for the reading.
+    profileForWeight: (weightKg: number) => {
+      const { user } = matchUserByWeight(config.users, weightKg, config.unknown_user, {
+        log: false,
+      });
+      return user ? resolveUserProfile(user, config.scale) : undefined;
+    },
   };
 }
 
