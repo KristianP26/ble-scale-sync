@@ -45,6 +45,7 @@ _Weight only_ means the weight is read and body composition is estimated from BM
 | Medisana BS430 / BS440 / BS444                                         | Yes              |       |
 | Active Era BS-06 and other `AC 27` scales                              | Yes              | Detected by manufacturer id `0x27AC`; wake it before stepping on |
 | Senssun Fat                                                            | Yes              | Model A only |
+| Senssun IF_B2                                                          | Weight only      | Experimental; see [Known Limitations](#senssun-if-b2) |
 | MGB (Swan / Icomon / YG)                                               | Yes              |       |
 | Hutbit 218008 / WL292                                                  | Yes              | Also sold under stock `SWAN` branding |
 | Robi S9                                                                | Weight only      |       |
@@ -163,6 +164,10 @@ In Docker set `TZ`: the scale's clock is set to the host's local time. Report re
 ### Huawei CH100 / AH100
 
 Experimental. The scale encrypts every frame with its Bluetooth address, which macOS does not reveal, so read it from Linux, Windows, an [ESPHome proxy](/guide/esphome-proxy) or the [ESP32 proxy](/guide/esp32-proxy). If the log says `the scale refused this host`, bind the scale once with openScale as its first user, then weigh in again. Each connection sends the first user's profile to the scale. Its body fat is used for a user with that sex, age and height, and estimated for everyone else. Report results with a debug log on [#503](https://github.com/KristianP26/ble-scale-sync/issues/503).
+
+### Senssun IF_B2 {#senssun-if-b2}
+
+Experimental. Once the weight settles, ble-scale-sync sends the scale the profile of the user that weight matches, or of the first user when it matches nobody. Body composition is estimated from BMI, and the values the scale computes are not read. A weigh-in without a body measurement, in socks for example, goes out with the weight about nine seconds after the scale accepts the profile. If it does not work, open an issue with a log taken with `runtime.debug: true` during one weigh-in, the scale model and the transport.
 
 ### Active Era BS-06 and other `AC 27` scales
 
