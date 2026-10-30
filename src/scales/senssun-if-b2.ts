@@ -297,30 +297,58 @@ export function buildCloudProfileCommand(profile: UserProfile, weightKg: number)
   return bytes;
 }
 
+/**
+ * One weigh-in's state, replaced whole in onSessionStart and onSessionEnd:
+ * every session shares the one adapter object, so nothing here may reach the
+ * next weigh-in. Its timers are its own: dispose() stops them, and every
+ * callback checks that its session is still the adapter's.
+ */
+class IfB2Session {
+  ctx: ConnectionContext | undefined;
+  reassembler = new IfB2Reassembler();
+  candidateWeight: number | undefined;
+  stableWeight: number | undefined;
+  selected: UserProfile | undefined;
+  selectionAttempted = false;
+  profileAcknowledged = false;
+  completed = false;
+  profileWriteInFlight = false;
+  pendingRecord: IfB2Composition | undefined;
+  ignoredRecordLogged = false;
+  pendingCommandError: Error | undefined;
+  selectionTimer: NodeJS.Timeout | undefined;
+  commandTimer: NodeJS.Timeout | undefined;
+  commandWindowTimer: NodeJS.Timeout | undefined;
+
+  clearSelectionCandidate(): void {
+    clearTimeout(this.selectionTimer);
+    this.selectionTimer = undefined;
+    this.candidateWeight = undefined;
+  }
+
+  clearTimers(): void {
+    clearTimeout(this.selectionTimer);
+    clearInterval(this.commandTimer);
+    clearTimeout(this.commandWindowTimer);
+    this.selectionTimer = undefined;
+    this.commandTimer = undefined;
+    this.commandWindowTimer = undefined;
+  }
+
+  dispose(): void {
+    this.clearTimers();
+  }
+}
+
 export class SenssunIfB2Adapter implements ScaleAdapterCore {
   readonly name = 'Senssun IF_B2';
   readonly match: MatchDescriptor = { priority: 300, names: { exact: ['if_b2'] } };
   readonly serviceUuid = uuid16(0xfff0);
   readonly charNotifyUuid = uuid16(0xfff1);
   readonly charWriteUuid = uuid16(0xfff2);
-  private reassembler = new IfB2Reassembler();
-  private ctx: ConnectionContext | undefined;
-  private stableWeight: number | undefined;
   /** From configure(): process lifetime, replaced on every config reload. */
   private profileForWeight: AdapterRuntimeConfig['profileForWeight'];
-  private candidateWeight: number | undefined;
-  private selected: UserProfile | undefined;
-  private selectionAttempted = false;
-  private profileAcknowledged = false;
-  private completed = false;
-  private selectionTimer: NodeJS.Timeout | undefined;
-  private commandTimer: NodeJS.Timeout | undefined;
-  private commandWindowTimer: NodeJS.Timeout | undefined;
-  private profileWriteInFlight = false;
-  private pendingRecord: IfB2Composition | undefined;
-  private ignoredRecordLogged = false;
-  private pendingCommandError: Error | undefined;
-  private sessionToken = 0;
+  private s = new IfB2Session();
 
   matches(device: BleDeviceInfo): boolean {
     return matchesDescriptor(device, this.match);
@@ -331,143 +359,109 @@ export class SenssunIfB2Adapter implements ScaleAdapterCore {
   }
 
   onSessionStart(): void {
-    this.sessionToken++;
-    this.resetSessionState();
+    // The old session's timers would otherwise still fire, so stop them first
+    // (the same deliberate step as QN's dispose()).
+    this.s.dispose();
+    this.s = new IfB2Session();
   }
 
   async onConnected(ctx: ConnectionContext): Promise<void> {
-    this.ctx = undefined;
+    const s = this.s;
+    s.ctx = undefined;
     const missing = [this.charNotifyUuid, this.charWriteUuid].filter(
       (uuid) => !ctx.availableChars.has(uuid),
     );
     if (missing.length) throw new Error(`IF_B2 discovery race: missing ${missing.join(', ')}`);
-    this.ctx = ctx;
+    s.ctx = ctx;
   }
 
   onSessionEnd(): void {
-    this.sessionToken++;
-    this.resetSessionState();
-  }
-
-  private resetSessionState(): void {
-    this.clearTimers();
-    this.ctx = undefined;
-    this.reassembler = new IfB2Reassembler();
-    this.candidateWeight = undefined;
-    this.stableWeight = undefined;
-    this.selected = undefined;
-    this.selectionAttempted = false;
-    this.profileAcknowledged = false;
-    this.completed = false;
-    this.profileWriteInFlight = false;
-    this.pendingCommandError = undefined;
-    this.pendingRecord = undefined;
-    this.ignoredRecordLogged = false;
-  }
-
-  private clearSelectionCandidate(): void {
-    clearTimeout(this.selectionTimer);
-    this.selectionTimer = undefined;
-    this.candidateWeight = undefined;
-  }
-
-  private clearTimers(): void {
-    clearTimeout(this.selectionTimer);
-    clearInterval(this.commandTimer);
-    clearTimeout(this.commandWindowTimer);
-    this.selectionTimer = undefined;
-    this.commandTimer = undefined;
-    this.commandWindowTimer = undefined;
+    this.s.dispose();
+    this.s = new IfB2Session();
   }
 
   private considerLiveWeight(weightKg: number): void {
-    if (this.selectionAttempted || this.completed) return;
+    const s = this.s;
+    if (s.selectionAttempted || s.completed) return;
     if (weightKg === 0) {
-      this.clearSelectionCandidate();
+      s.clearSelectionCandidate();
       return;
     }
 
-    if (this.candidateWeight === weightKg) return;
+    if (s.candidateWeight === weightKg) return;
 
-    this.clearSelectionCandidate();
-    this.candidateWeight = weightKg;
-    const token = this.sessionToken;
-    this.selectionTimer = setTimeout(() => {
-      const weight = this.candidateWeight;
-      if (token !== this.sessionToken || !this.ctx || weight === undefined || this.completed)
-        return;
-      this.candidateWeight = undefined;
-      this.selectionTimer = undefined;
-      this.selectionAttempted = true;
-      this.stableWeight = weight;
+    s.clearSelectionCandidate();
+    s.candidateWeight = weightKg;
+    s.selectionTimer = setTimeout(() => {
+      const weight = s.candidateWeight;
+      if (this.s !== s || !s.ctx || weight === undefined || s.completed) return;
+      s.candidateWeight = undefined;
+      s.selectionTimer = undefined;
+      s.selectionAttempted = true;
+      s.stableWeight = weight;
       // Once per weigh-in, on the settled weight. Nobody matching still writes
       // users[0]: the ack answers a write, and no log shows a weigh-in without
       // one, so skipping it could leave no reading. The processor decides who
       // the reading belongs to.
-      this.selected = this.profileForWeight?.(weight) ?? this.ctx.profile;
-      this.startProfileWrites();
+      s.selected = this.profileForWeight?.(weight) ?? s.ctx.profile;
+      this.startProfileWrites(s);
     }, SELECTION_QUIET_MS);
+    s.selectionTimer.unref?.();
   }
 
-  private writeProfile(command: Buffer, token: number): void {
-    const ctx = this.ctx;
-    if (!ctx || token !== this.sessionToken || this.profileWriteInFlight) return;
-    this.profileWriteInFlight = true;
+  private writeProfile(s: IfB2Session, command: Buffer): void {
+    const ctx = s.ctx;
+    if (!ctx || this.s !== s || s.profileWriteInFlight) return;
+    s.profileWriteInFlight = true;
     void ctx
       .write(this.charWriteUuid, command, true)
       .catch((error: unknown) => {
-        if (token !== this.sessionToken || this.profileAcknowledged || this.completed) return;
-        this.clearTimers();
+        if (this.s !== s || s.profileAcknowledged || s.completed) return;
+        s.clearTimers();
         const detail = error instanceof Error ? error.message : String(error);
-        this.pendingCommandError = new Error(`IF_B2 profile write failed: ${detail}`);
+        s.pendingCommandError = new Error(`IF_B2 profile write failed: ${detail}`);
       })
       .finally(() => {
-        if (token === this.sessionToken) this.profileWriteInFlight = false;
+        s.profileWriteInFlight = false;
       });
   }
 
-  private startProfileWrites(): void {
-    const selected = this.selected;
-    const weight = this.stableWeight;
-    if (!this.ctx || !selected || weight === undefined) return;
-    const token = this.sessionToken;
+  private startProfileWrites(s: IfB2Session): void {
+    const selected = s.selected;
+    const weight = s.stableWeight;
+    if (!s.ctx || !selected || weight === undefined) return;
     let command: Buffer;
     try {
       command = buildCloudProfileCommand(selected, weight);
     } catch (error) {
-      this.clearTimers();
-      this.pendingCommandError = error instanceof Error ? error : new Error(String(error));
+      s.clearTimers();
+      s.pendingCommandError = error instanceof Error ? error : new Error(String(error));
       return;
     }
     const send = () => {
-      if (
-        token !== this.sessionToken ||
-        !this.ctx ||
-        this.profileAcknowledged ||
-        this.completed ||
-        this.pendingCommandError
-      )
+      if (this.s !== s || !s.ctx || s.profileAcknowledged || s.completed || s.pendingCommandError)
         return;
-      this.writeProfile(command, token);
+      this.writeProfile(s, command);
     };
-    this.commandWindowTimer = setTimeout(() => {
-      if (token !== this.sessionToken || this.profileAcknowledged || this.completed) return;
-      this.clearTimers();
-      this.pendingCommandError = new Error('IF_B2 profile acknowledgement timed out');
+    s.commandWindowTimer = setTimeout(() => {
+      if (this.s !== s || s.profileAcknowledged || s.completed) return;
+      s.clearTimers();
+      s.pendingCommandError = new Error('IF_B2 profile acknowledgement timed out');
     }, PROFILE_TIMEOUT_MS);
-    this.commandTimer = setInterval(send, PROFILE_RETRY_MS);
+    s.commandWindowTimer.unref?.();
+    s.commandTimer = setInterval(send, PROFILE_RETRY_MS);
+    s.commandTimer.unref?.();
     send();
   }
 
-  private completePendingRecord(): ScaleReading | null {
-    if (!this.pendingRecord || !this.selected || !this.profileAcknowledged || this.completed)
-      return null;
+  private completePendingRecord(s: IfB2Session): ScaleReading | null {
+    if (!s.pendingRecord || !s.selected || !s.profileAcknowledged || s.completed) return null;
 
-    const { record: decoded, transmittedFatTenths } = this.pendingRecord;
-    this.pendingRecord = undefined;
-    this.completed = true;
-    this.clearTimers();
-    this.pendingCommandError = undefined;
+    const { record: decoded, transmittedFatTenths } = s.pendingRecord;
+    s.pendingRecord = undefined;
+    s.completed = true;
+    s.clearTimers();
+    s.pendingCommandError = undefined;
     const reading: ScaleReading<IfB2Composition> = {
       weight: decoded.weightKg,
       impedance: decoded.impedanceOhms,
@@ -477,22 +471,23 @@ export class SenssunIfB2Adapter implements ScaleAdapterCore {
   }
 
   parseNotification(data: Buffer, profile?: UserProfile): ScaleReading | null {
-    if (this.pendingCommandError) {
-      const error = this.pendingCommandError;
-      this.pendingCommandError = undefined;
+    const s = this.s;
+    if (s.pendingCommandError) {
+      const error = s.pendingCommandError;
+      s.pendingCommandError = undefined;
       throw error;
     }
 
     let emitted: ScaleReading | null = null;
-    for (const frame of this.reassembler.push(data)) {
+    for (const frame of s.reassembler.push(data)) {
       let decoded: IfB2Frame;
       try {
-        const decodeProfile = this.selected ?? (this.ctx ? this.ctx.profile : profile);
+        const decodeProfile = s.selected ?? (s.ctx ? s.ctx.profile : profile);
         decoded = decodeIfB2Frame(frame, decodeProfile);
       } catch (error) {
         if (error instanceof IfB2ProfileAcknowledgementError) {
-          this.clearTimers();
-          this.pendingCommandError = undefined;
+          s.clearTimers();
+          s.pendingCommandError = undefined;
           throw error;
         }
         continue;
@@ -506,15 +501,15 @@ export class SenssunIfB2Adapter implements ScaleAdapterCore {
       }
 
       if (decoded.frameType === 'profile_ack') {
-        if (!this.selected || this.completed) continue;
-        this.clearTimers();
-        this.pendingCommandError = undefined;
+        if (!s.selected || s.completed) continue;
+        s.clearTimers();
+        s.pendingCommandError = undefined;
         if (decoded.status === 'deleted')
           throw new Error('IF_B2 returned an unexpected profile-delete acknowledgement');
         if (decoded.status === 'full')
           throw new Error('IF_B2 profile storage is full; PIN 0001 is unavailable');
-        this.profileAcknowledged = true;
-        const reading = this.completePendingRecord();
+        s.profileAcknowledged = true;
+        const reading = this.completePendingRecord(s);
         if (reading) emitted = reading;
         continue;
       }
@@ -526,13 +521,13 @@ export class SenssunIfB2Adapter implements ScaleAdapterCore {
         decoded.recordSlot !== 0 ||
         decoded.elapsedSeconds !== 0
       ) {
-        if (!this.ignoredRecordLogged)
+        if (!s.ignoredRecordLogged)
           bleLog.debug('Senssun IF_B2: ignoring a record that is not this weigh-in');
-        this.ignoredRecordLogged = true;
+        s.ignoredRecordLogged = true;
         continue;
       }
 
-      if (!this.selected && !this.ctx && profile) {
+      if (!s.selected && !s.ctx && profile) {
         const reading: ScaleReading<IfB2Composition> = {
           weight: decoded.weightKg,
           impedance: decoded.impedanceOhms,
@@ -542,14 +537,14 @@ export class SenssunIfB2Adapter implements ScaleAdapterCore {
         continue;
       }
 
-      if (!this.selected || this.stableWeight === undefined)
+      if (!s.selected || s.stableWeight === undefined)
         throw new Error('IF_B2 final record arrived before safe profile selection');
-      if (this.completed) continue;
+      if (s.completed) continue;
 
-      if (!this.pendingRecord) {
-        this.pendingRecord = { record: decoded, transmittedFatTenths: u16(frame, 12) };
+      if (!s.pendingRecord) {
+        s.pendingRecord = { record: decoded, transmittedFatTenths: u16(frame, 12) };
       }
-      const reading = this.completePendingRecord();
+      const reading = this.completePendingRecord(s);
       if (reading) emitted = reading;
     }
     return emitted;
