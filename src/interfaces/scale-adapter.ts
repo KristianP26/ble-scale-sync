@@ -353,6 +353,14 @@ export interface AdapterRuntimeConfig {
   /** Every configured user's weight hints, in config order (see UserWeightHint). */
   userWeights?: readonly UserWeightHint[];
   /**
+   * The profile of the user the processor would match a live weigh-in of this
+   * weight to (`matchUserByWeight` with `unknown_user`), resolved at call time
+   * and without any log line; `undefined` when nobody matches. For an adapter
+   * that writes the person's profile to the scale before it measures (Senssun
+   * IF_B2). Which user the reading goes to stays the processor's decision.
+   */
+  profileForWeight?: (weightKg: number) => UserProfile | undefined;
+  /**
    * The adapter-owned `ble.*` keys, camelCased (`qn_user_key` -> `qnUserKey`,
    * D076). The adapter that owns a key types it in its own configure().
    */

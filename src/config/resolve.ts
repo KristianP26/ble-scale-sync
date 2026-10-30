@@ -15,6 +15,8 @@ import {
   type HaBluetoothConfig,
 } from './schema.js';
 
+import { matchUserByWeight } from './user-matching.js';
+
 // --- Scale display unit ---
 
 /**
@@ -118,7 +120,8 @@ export type AdapterOptions<S extends Record<string, z.ZodType>> = {
  * What every adapter's configure() gets, at startup and on each reload: the Xiaomi
  * MiBeacon bind key plus the effective scale MAC the S400 nonce needs, the display
  * unit the QN 0x13 command and the AC 27 D0 frame echo (#269), and every
- * adapter-owned ble.* key (ADAPTER_BLE_OPTIONS) under its camelCase name.
+ * adapter-owned ble.* key (ADAPTER_BLE_OPTIONS) under its camelCase name, plus
+ * the users and a lookup of the profile a weight matches.
  */
 export function buildAdapterRuntimeConfig(
   config: AppConfig,
@@ -137,6 +140,14 @@ export function buildAdapterRuntimeConfig(
     // The config entries themselves, not copies: the processor moves
     // last_known_weight on them in memory after each live weigh-in.
     userWeights: config.users,
+    // Resolved on each call, so a moved last_known_weight and today's age count.
+    // Silent: the processor logs its own match for the reading.
+    profileForWeight: (weightKg: number) => {
+      const { user } = matchUserByWeight(config.users, weightKg, config.unknown_user, {
+        log: false,
+      });
+      return user ? resolveUserProfile(user, config.scale) : undefined;
+    },
   };
 }
 

@@ -76,12 +76,21 @@ export function detectWeightDrift(user: UserConfig, weight: number): string | nu
  * 3. Multiple range matches → tiebreak by last_known_weight proximity, fallback config order
  * 4. No range match + has last_known_weight → closest
  * 5. No match → apply unknown_user strategy
+ *
+ * `opts.log: false` returns the same result, warning included, without writing
+ * any log line. It is for a caller that only needs the answer and asks for it
+ * on its own schedule, not for every weigh-in the processor attributes.
  */
 export function matchUserByWeight(
   users: UserConfig[],
   weight: number,
   strategy: UnknownUserStrategy,
+  opts: { log?: boolean } = {},
 ): MatchResult {
+  const quiet = opts.log === false;
+  const warn = (msg: string): void => {
+    if (!quiet) log.warn(msg);
+  };
   // Edge case: no users
   if (users.length === 0) {
     return { user: null, tier: 'strategy', warning: 'No users configured' };
@@ -93,7 +102,7 @@ export function matchUserByWeight(
     const warning = !inRange(weight, user)
       ? `Weight ${weight} kg is outside ${user.name}'s range [${user.weight_range.min}–${user.weight_range.max}]`
       : undefined;
-    if (warning) log.warn(warning);
+    if (warning) warn(warning);
     return { user, tier: 'exact', warning };
   }
 
@@ -114,14 +123,17 @@ export function matchUserByWeight(
         (a, b) => Math.abs(weight - a.last_known_weight!) - Math.abs(weight - b.last_known_weight!),
       );
       const best = withLastKnown[0];
-      log.info(`Multiple range matches — resolved to ${best.name} by last_known_weight proximity`);
+      if (!quiet)
+        log.info(
+          `Multiple range matches — resolved to ${best.name} by last_known_weight proximity`,
+        );
       return { user: best, tier: 'tiebreak' };
     }
 
     // No last_known_weight — fall back to config order
     const first = rangeMatches[0];
     const warning = `Multiple range matches for ${weight} kg — using ${first.name} (config order)`;
-    log.warn(warning);
+    warn(warning);
     return { user: first, tier: 'tiebreak', warning, ambiguous: true };
   }
 
@@ -133,7 +145,7 @@ export function matchUserByWeight(
     );
     const best = withLastKnown[0];
     const warning = `No range match for ${weight} kg — matched ${best.name} by last_known_weight`;
-    log.warn(warning);
+    warn(warning);
     return { user: best, tier: 'last_known', warning };
   }
 
@@ -146,13 +158,13 @@ export function matchUserByWeight(
       );
       const best = sorted[0];
       const warning = `No match for ${weight} kg — nearest user ${best.name} (midpoint ${rangeMidpoint(best)} kg)`;
-      log.warn(warning);
+      warn(warning);
       return { user: best, tier: 'strategy', warning };
     }
 
     case 'log': {
       const warning = `No match for ${weight} kg — logging and skipping (unknown_user: log)`;
-      log.warn(warning);
+      warn(warning);
       return { user: null, tier: 'strategy', warning };
     }
 

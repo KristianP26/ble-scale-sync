@@ -15,6 +15,7 @@ import {
   ar003CharsWithout,
 } from '../helpers/renpho-a-r003.js';
 import { ADVERT_501 } from '../fixtures/qn/cs10g-501.js';
+import { selectSessionAdapter } from '../../src/ble/session/runner.js';
 
 /**
  * Registry collision guard for #182.
@@ -61,6 +62,14 @@ const FIXTURES: Record<string, BleDeviceInfo> = {
     },
   },
   'Senssun Fat Scale': { localName: 'senssun fat', serviceUuids: [] },
+  // As the IF_B2 advertises (DEBUG logs, address rewritten, also in its
+  // manufacturer data echo); claimed on the exact name only.
+  'Senssun IF_B2': {
+    localName: 'IF_B2',
+    address: '02:00:00:00:00:01',
+    serviceUuids: [uuid16(0xffc0)],
+    manufacturerData: { id: 0x0100, data: Buffer.from('010301020000000001', 'hex') },
+  },
   'QN Scale': { localName: 'QN-Scale', serviceUuids: ['fff0'] },
   // #191: a real ES-WBE28 advertises SIG WSS/BCS (0x181D/0x181B) and no QN
   // vendor service, so QN now defers and it resolves to RenphoScaleAdapter.
@@ -252,6 +261,15 @@ describe('registry collision guard (#182)', () => {
       .filter(([, info]) => and!.matches(info))
       .map(([name]) => name);
     expect(claimed).toEqual(['A&D UC-352BLE']);
+  });
+
+  it('Senssun IF_B2 claims no fixture but its own', () => {
+    const ifB2 = adapters.find((a) => a.name === 'Senssun IF_B2');
+    expect(ifB2).toBeDefined();
+    const claimed = Object.entries(FIXTURES)
+      .filter(([, info]) => ifB2!.matches(info))
+      .map(([name]) => name);
+    expect(claimed).toEqual(['Senssun IF_B2']);
   });
 
   // #503: claimed by its exact name only; the FAA0 vendor service it shares
@@ -597,7 +615,48 @@ const AND_GATT = {
   ],
 };
 
+// Senssun IF_B2: the GATT tree of the DEBUG logs.
+const IF_B2_GATT = {
+  serviceUuids: [
+    uuid16(0x1800),
+    uuid16(0xfff0),
+    '000102030405060708090a0b0c0d1912',
+    uuid16(0x180a),
+  ],
+  characteristicUuids: [
+    ...[0x2a00, 0x2a01, 0x2a04, 0xfff1, 0xfff2].map(uuid16),
+    '000102030405060708090a0b0c0d2b12',
+    ...[0x2a29, 0x2a27, 0x2a26, 0x2a28].map(uuid16),
+  ],
+};
+
 const POST_DISCOVERY: PostDiscoveryCase[] = [
+  {
+    label: 'Senssun IF_B2 on node-ble (services unknown)',
+    advertised: { localName: 'IF_B2', serviceUuids: [] },
+    gatt: { ...IF_B2_GATT, advertisedServicesKnown: false },
+    expected: 'Senssun IF_B2',
+  },
+  {
+    label: 'Senssun IF_B2 on noble / proxy (advertised services known)',
+    advertised: { localName: 'IF_B2', serviceUuids: [uuid16(0xffc0)] },
+    gatt: IF_B2_GATT,
+    expected: 'Senssun IF_B2',
+  },
+  // Without its name the IF_B2 has nothing of its own; QN or Inlife take it
+  // after discovery whatever its priority. Pinned, not endorsed.
+  {
+    label: 'nameless IF_B2 GATT with its services',
+    advertised: { localName: '', serviceUuids: [uuid16(0xffc0)] },
+    gatt: IF_B2_GATT,
+    expected: 'QN Scale',
+  },
+  {
+    label: 'nameless IF_B2 GATT with no services discovered',
+    advertised: { localName: '', serviceUuids: [uuid16(0xffc0)] },
+    gatt: { characteristicUuids: IF_B2_GATT.characteristicUuids },
+    expected: 'Inlife',
+  },
   {
     label: 'A&D UC-352BLE on node-ble with scale_mac (services unknown)',
     advertised: {
@@ -880,6 +939,23 @@ const POST_DISCOVERY: PostDiscoveryCase[] = [
     expected: undefined,
   })),
 ];
+
+// The mqtt-proxy autonomous connect, with no advert to resolve, takes the
+// highest-priority adapter whose notify characteristic the device has; the
+// ESP32 sends UUIDs without dashes (_norm_uuid). The IF_B2 must not become
+// that fallback for unclassified FFF1 devices.
+describe('notify-char fallback with Senssun IF_B2 registered', () => {
+  const nameless = { localName: '', serviceUuids: [] };
+  it.each([
+    [['fff1'], 'Senssun Fat Scale'],
+    [['fff1', 'fff2', 'fff4'], 'Eufy Smart Scale P2/P2 Pro'],
+  ])('%j resolves to %s', (chars, expected) => {
+    const picked = selectSessionAdapter(nameless, { characteristicUuids: chars }, adapters, {
+      byNotifyChar: true,
+    });
+    expect(picked?.name).toBe(expected);
+  });
+});
 
 describe('post-discovery collision guard', () => {
   it.each(POST_DISCOVERY)('$label resolves to $expected', ({ advertised, gatt, expected }) => {
