@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
   matchUserByWeight,
   detectWeightDrift,
@@ -153,6 +153,53 @@ describe('matchUserByWeight', () => {
       const result = matchUserByWeight([ALICE, BOB], 100, 'nearest');
       expect(result.user).toBe(BOB);
       expect(result.tier).toBe('exact');
+    });
+  });
+
+  describe('log: false', () => {
+    afterEach(() => vi.restoreAllMocks());
+
+    function spyConsole() {
+      return [
+        vi.spyOn(console, 'log').mockImplementation(() => {}),
+        vi.spyOn(console, 'warn').mockImplementation(() => {}),
+        vi.spyOn(console, 'error').mockImplementation(() => {}),
+      ];
+    }
+
+    const BOB_LAST = { ...BOB, last_known_weight: 80 };
+    const CHARLIE_LAST = { ...CHARLIE, last_known_weight: 70 };
+    // One case per tier, each of which logs when called without opts.
+    const cases: Array<[string, UserConfig[], number, 'nearest' | 'log' | 'ignore']> = [
+      ['single user out of range', [ALICE], 120, 'nearest'],
+      ['tiebreak by last_known_weight', [BOB_LAST, CHARLIE_LAST], 77, 'nearest'],
+      ['tiebreak by config order', [BOB, CHARLIE], 77, 'nearest'],
+      ['last_known_weight fallback', [ALICE, BOB_LAST], 72, 'nearest'],
+      ['nearest strategy', [ALICE, BOB], 72, 'nearest'],
+      ['log strategy', [ALICE, BOB], 72, 'log'],
+    ];
+
+    it.each(cases)('%s: same result as the logging call, nothing logged', (_, users, w, s) => {
+      const spies = spyConsole();
+      const logged = matchUserByWeight(users, w, s);
+      expect(spies.some((spy) => spy.mock.calls.length > 0)).toBe(true);
+      for (const spy of spies) spy.mockClear();
+
+      const quiet = matchUserByWeight(users, w, s, { log: false });
+
+      expect(quiet).toEqual(logged);
+      for (const spy of spies) expect(spy).not.toHaveBeenCalled();
+    });
+
+    it('an exact match and ignore stay silent either way and agree', () => {
+      const spies = spyConsole();
+      expect(matchUserByWeight([ALICE, BOB], 60, 'nearest', { log: false })).toEqual(
+        matchUserByWeight([ALICE, BOB], 60, 'nearest'),
+      );
+      expect(matchUserByWeight([ALICE, BOB], 72, 'ignore', { log: false })).toEqual(
+        matchUserByWeight([ALICE, BOB], 72, 'ignore'),
+      );
+      for (const spy of spies) expect(spy).not.toHaveBeenCalled();
     });
   });
 });
