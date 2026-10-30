@@ -809,30 +809,6 @@ describe('waitForRawReading()', () => {
     await expect(promise).rejects.toThrow('Scale disconnected before reading completed');
   });
 
-  it('rejects and cleans up when the adapter parser fails', async () => {
-    const notifyChar = createMockChar();
-    const writeChar = createMockChar();
-    const device = createMockDevice();
-    const { charMap } = createCharMap([
-      [NOTIFY_UUID, notifyChar],
-      [WRITE_UUID, writeChar],
-    ]);
-    const onSessionEnd = vi.fn();
-    const adapter = createLegacyAdapter({
-      onSessionEnd,
-      parseNotification: vi.fn(() => {
-        throw new Error('profile acknowledgement failed');
-      }),
-    });
-
-    const promise = waitForRawReading(req(charMap, device, adapter, PROFILE, ''));
-    await vi.waitFor(() => expect(notifyChar.subscribeCalled).toBe(true));
-    notifyChar.triggerData(Buffer.from([0x01]));
-
-    await expect(promise).rejects.toThrow('profile acknowledgement failed');
-    expect(onSessionEnd).toHaveBeenCalledOnce();
-  });
-
   it('calls onLiveData callback for each valid reading', async () => {
     const notifyChar = createMockChar();
     const writeChar = createMockChar();

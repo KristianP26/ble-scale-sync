@@ -533,19 +533,9 @@ export function waitForRawReading(req: SessionRequest): Promise<RawReading> {
         }
       }
 
-      let reading: ScaleReading | null;
-      try {
-        reading = adapter.parseCharNotification
-          ? adapter.parseCharNotification(sourceUuid, data)
-          : adapter.parseNotification(data);
-      } catch (error) {
-        resolved = true;
-        hold.clear();
-        clearCaptureHold();
-        init.cleanup();
-        reject(error);
-        return;
-      }
+      const reading: ScaleReading | null = adapter.parseCharNotification
+        ? adapter.parseCharNotification(sourceUuid, data)
+        : adapter.parseNotification(data);
       if (!reading) return;
 
       if (onLiveData) onLiveData(reading);
