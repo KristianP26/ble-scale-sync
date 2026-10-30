@@ -57,13 +57,13 @@ const changedLive = liveFrame(725);
 const zeroLive = liveFrame(0);
 
 describe('Senssun IF_B2 protocol', () => {
-  it('decodes stable live kilograms, pounds, unit, and AA flag', () => {
+  it('decodes live kilograms, pounds, unit and control byte', () => {
     expect(decodeIfB2Frame(live)).toMatchObject({
       frameType: 'live_weight',
       weightKg: 72.6,
       weightLb: 160.1,
       unitCode: 0x01,
-      stable: true,
+      control: 0xaa,
     });
   });
   it('decodes zero live weight so it can clear a provisional candidate', () => {
@@ -78,7 +78,6 @@ describe('Senssun IF_B2 protocol', () => {
       frameType: 'live_weight',
       weightKg: 68.4,
       control: 0xa0,
-      stable: false,
     });
     expect(decodeIfB2Frame(alternateHealth)).toMatchObject({
       frameType: 'health_record',

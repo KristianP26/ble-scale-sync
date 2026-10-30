@@ -37,11 +37,14 @@ export const IF_B2_RECORD_WAIT_MS = 9_000;
 
 export interface IfB2LiveWeight {
   frameType: 'live_weight';
+  /** Bytes 7-8 / 10. */
   weightKg: number;
+  /** Bytes 9-10 / 10, the same weight in lb. */
   weightLb: number;
+  /** Byte 11; 0x01 in every logged frame, meaning unproven. */
   unitCode: number;
+  /** Byte 12; 0xa0 in every logged frame, settled or not, so it is no stable flag. */
   control: number;
-  stable: boolean;
   raw: string;
 }
 /**
@@ -158,7 +161,6 @@ export function decodeIfB2Frame(frame: Buffer): IfB2Frame | null {
       weightLb: u16(frame, 9) / 10,
       unitCode: frame[11],
       control: frame[12],
-      stable: frame[12] === 0xaa,
       raw: frame.toString('hex'),
     };
     return result;
