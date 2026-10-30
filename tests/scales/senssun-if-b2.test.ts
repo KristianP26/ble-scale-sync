@@ -5,6 +5,7 @@ import {
   buildCloudProfileCommand,
   decodeIfB2Frame,
   IF_B2_MAX_PROFILE_WRITES,
+  IF_B2_RECORD_WAIT_MS,
   type IfB2HealthRecord,
 } from '../../src/scales/senssun-if-b2.js';
 import { uuid16 } from '../../src/scales/body-comp-helpers.js';
@@ -491,7 +492,7 @@ describe('Senssun IF_B2 session state', () => {
     expect(writes).toHaveLength(1);
     await vi.advanceTimersByTimeAsync(201);
     expect(writes).toHaveLength(3);
-    expect(adapter.parseNotification(profileUpdated)).toBeNull();
+    expect(adapter.parseNotification(profileUpdated)).toMatchObject({ weight: 72.6 });
     await vi.advanceTimersByTimeAsync(1_000);
     expect(writes).toHaveLength(3);
     expect(
@@ -656,9 +657,32 @@ describe('Senssun IF_B2 session state', () => {
     expect(() => adapter.parseNotification(alternateLive)).not.toThrow();
     await vi.advanceTimersByTimeAsync(1_000);
     expect(rejected.write.mock.calls.length).toBeGreaterThan(1);
-    expect(adapter.parseNotification(profileUpdated)).toBeNull();
+    expect(adapter.parseNotification(profileUpdated)).toMatchObject({ weight: 72.6 });
     expect(adapter.parseNotification(health)).toMatchObject({ weight: 72.6 });
   });
+  it('returns the settled weight on the ack as a held, not final, reading', async () => {
+    const writes: Array<{ uuid: string; data: Buffer; withResponse: boolean }> = [];
+    const adapter = new SenssunIfB2Adapter();
+    await connect(adapter, writes);
+    await settleSelection(adapter);
+    const display = adapter.parseNotification(quietLive)!;
+    expect(adapter.isComplete(display)).toBe(false);
+
+    const held = adapter.parseNotification(profileUpdated)!;
+    expect(held).toEqual({ weight: 72.6, impedance: 0 });
+    expect(adapter.isComplete(held)).toBe(true);
+    expect(adapter.isFinal(held)).toBe(false);
+    expect(adapter.completionHoldMs).toBe(IF_B2_RECORD_WAIT_MS);
+
+    const count = writes.length;
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(writes).toHaveLength(count);
+
+    const record = adapter.parseNotification(health)!;
+    expect(adapter.isComplete(record)).toBe(true);
+    expect(adapter.isFinal(record)).toBe(true);
+  });
+
   it('ignores an in-flight write rejection after acknowledgement', async () => {
     let rejectWrite!: (error: Error) => void;
     const pendingWrite = new Promise<void>((_resolve, reject) => {
@@ -778,6 +802,20 @@ describe('Senssun IF_B2 session state', () => {
       lifecycle(adapter);
       await vi.advanceTimersByTimeAsync(2_000);
       expect(writes).toEqual([]);
+    });
+
+    it('stops the profile writes of a session that ends before the ack', async () => {
+      const writes: Array<{ uuid: string; data: Buffer; withResponse: boolean }> = [];
+      const adapter = new SenssunIfB2Adapter();
+      await connect(adapter, writes);
+      await settleSelection(adapter);
+      await vi.advanceTimersByTimeAsync(400);
+      const count = writes.length;
+      expect(count).toBeGreaterThan(0);
+
+      lifecycle(adapter);
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(writes).toHaveLength(count);
     });
 
     it('stops retries and clears the previous selection and acknowledgement', async () => {

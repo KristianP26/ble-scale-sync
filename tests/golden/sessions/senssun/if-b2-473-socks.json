@@ -1,10 +1,12 @@
 {
   "settled": {
-    "by": "error",
-    "atMs": 15247,
-    "error": "Scale disconnected before reading completed"
+    "by": "reading",
+    "atMs": 12020
   },
-  "reading": null,
+  "reading": {
+    "weight": 94.5,
+    "impedance": 0
+  },
   "history": [],
   "subscribes": [
     {
@@ -51,5 +53,17 @@
     }
   ],
   "rxDropped": 0,
-  "payload": null
+  "payload": {
+    "weight": 94.5,
+    "impedance": 0,
+    "bmi": 30.51,
+    "bodyFatPercent": 30.07,
+    "waterPercent": 51.05,
+    "boneMass": 2.78,
+    "muscleMass": 63.31,
+    "visceralFat": 15,
+    "physiqueRating": 1,
+    "bmr": 1840,
+    "metabolicAge": 47
+  }
 }

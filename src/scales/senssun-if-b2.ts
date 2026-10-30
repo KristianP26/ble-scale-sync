@@ -3,6 +3,7 @@ import type {
   BleDeviceInfo,
   BodyComposition,
   ConnectionContext,
+  HoldForComposition,
   ScaleAdapterCore,
   ScaleReading,
   UserProfile,
@@ -26,6 +27,13 @@ const SELECTION_QUIET_MS = 2_000;
  * ack came about 1.8 s after the first one.
  */
 export const IF_B2_MAX_PROFILE_WRITES = 15;
+/**
+ * How long the weight from the profile ack waits for the record. The barefoot
+ * record came 5.8 s after the ack; the socks session got no record and the
+ * scale dropped the link 12.2 s after it. A drop during the hold hands the
+ * weight on anyway (D047), so a longer wait would lose nothing.
+ */
+export const IF_B2_RECORD_WAIT_MS = 9_000;
 
 export interface IfB2LiveWeight {
   frameType: 'live_weight';
@@ -343,7 +351,7 @@ class IfB2Session {
   }
 }
 
-export class SenssunIfB2Adapter implements ScaleAdapterCore {
+export class SenssunIfB2Adapter implements ScaleAdapterCore, HoldForComposition {
   readonly name = 'Senssun IF_B2';
   readonly match: MatchDescriptor = { priority: 300, names: { exact: ['if_b2'] } };
   readonly serviceUuid = uuid16(0xfff0);
@@ -352,6 +360,15 @@ export class SenssunIfB2Adapter implements ScaleAdapterCore {
   /** From configure(): process lifetime, replaced on every config reload. */
   private profileForWeight: AdapterRuntimeConfig['profileForWeight'];
   private s = new IfB2Session();
+  /** The weight held from the ack until the record replaces it (process lifetime, per object). */
+  private readonly heldReadings = new WeakSet<ScaleReading>();
+  /** Readings built from a record: they end the session. */
+  private readonly recordReadings = new WeakSet<ScaleReading>();
+  /**
+   * Armed by the reading the ack returns. The record ends the session at once;
+   * without one, as in socks, the weight goes out after this hold.
+   */
+  readonly completionHoldMs = IF_B2_RECORD_WAIT_MS;
 
   matches(device: BleDeviceInfo): boolean {
     return matchesDescriptor(device, this.match);
@@ -457,11 +474,12 @@ export class SenssunIfB2Adapter implements ScaleAdapterCore {
     send();
   }
 
-  private onAck(s: IfB2Session, ack: IfB2ProfileAck): void {
+  /** The weight-only reading the session holds from a valid ack on, or null. */
+  private onAck(s: IfB2Session, ack: IfB2ProfileAck): ScaleReading | null {
     // A late ack, after the writes gave up, still answers one of them.
-    if (s.writes === 0 || s.acked || ack.profilePin !== '0001') {
+    if (s.writes === 0 || s.acked || s.completed || ack.profilePin !== '0001') {
       s.debugOnce('ack', 'Senssun IF_B2: ignoring a profile ack this session did not ask for');
-      return;
+      return null;
     }
     s.acked = true;
     this.stopWrites(s);
@@ -473,6 +491,9 @@ export class SenssunIfB2Adapter implements ScaleAdapterCore {
       bleLog.debug(
         `Senssun IF_B2: profile ack status 0x${ack.status.toString(16).padStart(2, '0')}`,
       );
+    const held: ScaleReading = { weight: s.stableWeight ?? 0, impedance: 0 };
+    this.heldReadings.add(held);
+    return held;
   }
 
   parseNotification(data: Buffer, profile?: UserProfile): ScaleReading | null {
@@ -491,7 +512,8 @@ export class SenssunIfB2Adapter implements ScaleAdapterCore {
       }
 
       if (decoded.frameType === 'profile_ack') {
-        this.onAck(s, decoded);
+        const held = this.onAck(s, decoded);
+        if (held) emitted = held;
         continue;
       }
 
@@ -517,13 +539,18 @@ export class SenssunIfB2Adapter implements ScaleAdapterCore {
         impedance: decoded.impedanceOhms,
         scaleComposition: { record: decoded, transmittedFatTenths: u16(frame, 12) },
       };
+      this.recordReadings.add(reading);
       emitted = reading;
     }
     return emitted;
   }
 
   isComplete(reading: ScaleReading): boolean {
-    return reading.weight > 0 && reading.impedance > 0;
+    return this.recordReadings.has(reading) || this.heldReadings.has(reading);
+  }
+
+  isFinal(reading: ScaleReading): boolean {
+    return this.recordReadings.has(reading);
   }
 
   computeMetrics(reading: ScaleReading, profile: UserProfile): BodyComposition {

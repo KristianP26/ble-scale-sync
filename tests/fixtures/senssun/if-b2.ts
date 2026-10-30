@@ -95,6 +95,13 @@ const traces: Record<string, Trace> = {
     // The log's first line after the scale dropped the link.
     disconnectAtMs: 15_247,
   },
+  'if-b2-473-socks-early-drop': {
+    provenance: 'derived',
+    source: 'the socks log above, the link dropped 3 s after the profile ack instead of 12.2 s',
+    advert: ADVERT,
+    steps: fromDebugLog(SOCKS),
+    disconnectAtMs: 6_020,
+  },
   'if-b2-473-record-first': {
     provenance: 'derived',
     source:
