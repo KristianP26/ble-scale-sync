@@ -4,6 +4,7 @@ import {
   encodeSigDateTime,
   parseSigDateTime,
   parseSigWeightMeasurement,
+  trustedScaleTime,
 } from '../../src/scales/sig-wss.js';
 import { BeurerBf720Adapter } from '../../src/scales/beurer-bf720.js';
 import { uuid16 } from '../../src/scales/body-comp-helpers.js';
@@ -160,6 +161,80 @@ describe('parseSigDateTime', () => {
     // notification rather than losing one timestamp.
     expect(() => parseSigDateTime(WSS_FRAME, WSS_FRAME.length - 1)).not.toThrow();
     expect(parseSigDateTime(WSS_FRAME, WSS_FRAME.length - 1)).toBeUndefined();
+  });
+});
+
+describe('parseSigDateTime on a scale clock that keeps UTC (#510)', () => {
+  /** The Date Time of the final #510 0x2A9D: 2026-10-31 13:47:19, in UTC. */
+  const STAMP_510 = Buffer.from('ea070a1f0d2f13', 'hex');
+  const AT_510 = Date.UTC(2026, 9, 31, 13, 47, 19);
+  /** The #267 capture's Date Time, 2026-07-04 12:26:06, in summer time. */
+  const STAMP_267 = Buffer.from('ea0707040c1a06', 'hex');
+
+  function inZone<T>(timeZone: string, fn: () => T): T {
+    const saved = process.env.TZ;
+    process.env.TZ = timeZone;
+    try {
+      return fn();
+    } finally {
+      if (saved === undefined) delete process.env.TZ;
+      else process.env.TZ = saved;
+    }
+  }
+
+  it.each(['UTC', 'Europe/Madrid', 'America/New_York', 'Asia/Kolkata'])(
+    'reads the same instant on a host in %s',
+    (timeZone) => {
+      expect(inZone(timeZone, () => parseSigDateTime(STAMP_510, 0, 'utc'))?.getTime()).toBe(AT_510);
+    },
+  );
+
+  it('still reads local time by default', () => {
+    expect(inZone('Europe/Madrid', () => parseSigDateTime(STAMP_510, 0))?.getTime()).toBe(
+      AT_510 - 60 * 60 * 1000,
+    );
+  });
+
+  // London is UTC in winter and an hour ahead in summer: the two readings part
+  // only while summer time is on.
+  it('parts from local time in London in summer, not in winter', () => {
+    inZone('Europe/London', () => {
+      expect(parseSigDateTime(STAMP_510, 0, 'utc')).toEqual(parseSigDateTime(STAMP_510, 0));
+      expect(parseSigDateTime(STAMP_267, 0, 'utc')?.getTime()).toBe(
+        Date.UTC(2026, 6, 4, 12, 26, 6),
+      );
+      expect(parseSigDateTime(STAMP_267, 0)?.getTime()).toBe(Date.UTC(2026, 6, 4, 11, 26, 6));
+    });
+  });
+
+  // 02:30 on 29 March 2026 does not exist in Madrid: the clocks jump from 02:00
+  // to 03:00. A local Date moved by the zone offset lands an hour off.
+  it("reads a time in the host's spring-forward gap", () => {
+    const gap = Buffer.from('ea07031d021e00', 'hex');
+    expect(inZone('Europe/Madrid', () => parseSigDateTime(gap, 0, 'utc'))?.getTime()).toBe(
+      Date.UTC(2026, 2, 29, 2, 30, 0),
+    );
+  });
+
+  it.each([
+    ['the "unknown" month', 'ea07000c123536'],
+    ['the "unknown" day', 'ea070500123536'],
+    ['31 April', 'ea07041f123536'],
+    ['a two-digit year', '1a00050c123536'],
+    ['24 h', 'ea07050c183536'],
+    ['60 min', 'ea07050c123c36'],
+    ['60 s', 'ea07050c12353c'],
+  ])('rejects %s as it does in local time', (_label, h) => {
+    expect(inZone('Europe/Madrid', () => parseSigDateTime(Buffer.from(h, 'hex'), 0, 'utc'))).toBe(
+      undefined,
+    );
+  });
+
+  // The firmware default of a scale whose clock was never set (D027).
+  it('reads the year 2000, which trustedScaleTime then refuses', () => {
+    const y2000 = parseSigDateTime(Buffer.from('d0070101000000', 'hex'), 0, 'utc');
+    expect(y2000?.getTime()).toBe(Date.UTC(2000, 0, 1));
+    expect(trustedScaleTime(y2000)).toBeUndefined();
   });
 });
 

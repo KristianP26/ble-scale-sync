@@ -1,40 +1,14 @@
 {
   "settled": {
-    "by": "disconnect",
-    "atMs": 15343
+    "by": "reading",
+    "atMs": 3327
   },
   "reading": {
     "weight": 59,
     "impedance": 0,
-    "timestamp": "2026-10-31T12:47:19.000Z"
+    "timestamp": "2026-10-31T13:47:19.000Z"
   },
-  "history": [
-    {
-      "weight": 59,
-      "impedance": 0,
-      "timestamp": "2026-10-31T12:51:24.000Z"
-    },
-    {
-      "weight": 59,
-      "impedance": 0,
-      "timestamp": "2026-10-31T12:51:24.000Z"
-    },
-    {
-      "weight": 59,
-      "impedance": 0,
-      "timestamp": "2026-10-31T12:51:24.000Z"
-    },
-    {
-      "weight": 59,
-      "impedance": 0,
-      "timestamp": "2026-10-31T12:51:24.000Z"
-    },
-    {
-      "weight": 59,
-      "impedance": 0,
-      "timestamp": "2026-10-31T12:51:24.000Z"
-    }
-  ],
+  "history": [],
   "subscribes": [
     {
       "seq": 0,

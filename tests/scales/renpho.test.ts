@@ -3,6 +3,7 @@ import { RenphoScaleAdapter } from '../../src/scales/renpho.js';
 import type { ConnectionContext } from '../../src/interfaces/scale-adapter.js';
 import { uuid16 } from '../../src/scales/body-comp-helpers.js';
 import { isHistoricalReading } from '../../src/interfaces/reading-time.js';
+import { bleLog } from '../../src/ble/types.js';
 import { QnScaleAdapter } from '../../src/scales/qn-scale/index.js';
 import {
   mockPeripheral,
@@ -23,6 +24,7 @@ import {
 } from '../helpers/renpho-a-r003.js';
 import { ADVERT_501 } from '../fixtures/qn/cs10g-501.js';
 import { session as ar003 } from '../fixtures/renpho/a-r003.js';
+import { session as wbe28510 } from '../fixtures/renpho/es-wbe28-510.js';
 import { replaySession } from '../helpers/replay/session.js';
 
 const CHR_WEIGHT = uuid16(0x2a9d);
@@ -51,6 +53,20 @@ const BCS_SINGLE_SIG = Buffer.from('0202f901ea0707040c1a08000d', 'hex');
 
 const hex = (h: string): Buffer => Buffer.from(h, 'hex');
 
+// Frames of the #510 DEBUG log (tests/fixtures/renpho/es-wbe28-510.ts), from a
+// scale clock on UTC: the 0x4E stamped 2026-10-31 13:51:24, the final 0x2E and
+// 0x2A9C packet 1 stamped 13:47:19.
+const WBE28_510 = {
+  measuring: hex('4e9c04ea070a1f0d3318aa00000000'),
+  final: hex('2e9c04ea070a1f0d2f13aaba00b200'),
+  bcsPacket1: hex('7e535b00ea070a1f0d2f13aaf8054b02fc033004'),
+};
+const MEASURING_510 = Date.UTC(2026, 9, 31, 13, 51, 24);
+const FINAL_510 = Date.UTC(2026, 9, 31, 13, 47, 19);
+/** When the first #510 0x4E arrived. */
+const RECEIVED_510 = Date.UTC(2026, 9, 31, 13, 46, 56, 47);
+const HOUR = 60 * 60 * 1000;
+
 function makeAdapter() {
   return new RenphoScaleAdapter();
 }
@@ -62,6 +78,18 @@ function atClock(now: Date | number, fn: () => void): void {
     fn();
   } finally {
     vi.useRealTimers();
+  }
+}
+
+/** Run on a host in `timeZone` at `now`; the suite runs in UTC. */
+function inZoneAt(timeZone: string, now: number, fn: () => void): void {
+  const saved = process.env.TZ;
+  process.env.TZ = timeZone;
+  try {
+    atClock(now, fn);
+  } finally {
+    if (saved === undefined) delete process.env.TZ;
+    else process.env.TZ = saved;
   }
 }
 
@@ -592,6 +620,182 @@ describe('RenphoScaleAdapter', () => {
         a.parseCharNotification(CHR_WEIGHT, hex(AR003_LIVE.empty));
         expect(a.isCompositionPending()).toBe(false);
       });
+    });
+  });
+
+  // #510: the ES-WBE28's clock keeps UTC, and read as local time in Madrid every
+  // live weigh-in was a stored record almost an hour old.
+  describe('scale clock', () => {
+    const at = (r: ReturnType<RenphoScaleAdapter['parseCharNotification']>) =>
+      r!.timestamp!.getTime();
+
+    it.each(['Europe/Madrid', 'UTC'])(
+      'replays the #510 weigh-in as live on a host in %s',
+      async (timeZone) => {
+        const trace = wbe28510.traces['wbe28-510-weigh-in'];
+        const r = await replaySession(makeAdapter(), trace, { ...wbe28510, timeZone });
+        expect(r.settled).toEqual({ by: 'reading', atMs: 3327 });
+        expect(r.history).toEqual([]);
+        expect(r.reading!.timestamp!.getTime()).toBe(FINAL_510);
+      },
+    );
+
+    it.each([
+      [900, 'UTC', MEASURING_510],
+      [901, 'local time', MEASURING_510 - HOUR],
+    ])('reads a 0x4E stamped %i s ahead of its receipt in Madrid as %s', (ahead, _as, ts) => {
+      inZoneAt('Europe/Madrid', MEASURING_510 - ahead * 1000, () => {
+        expect(at(makeAdapter().parseCharNotification(CHR_WEIGHT, WBE28_510.measuring))).toBe(ts);
+      });
+    });
+
+    it('reads a clock on UTC west of UTC too', () => {
+      inZoneAt('America/New_York', RECEIVED_510, () => {
+        expect(at(makeAdapter().parseCharNotification(CHR_WEIGHT, WBE28_510.measuring))).toBe(
+          MEASURING_510,
+        );
+      });
+    });
+
+    it('keeps a clock on local time local in Bratislava (A-R003 frames)', () => {
+      inZoneAt('Europe/Bratislava', Date.UTC(2026, 9, 28, 9, 53, 45), () => {
+        const a = makeAdapter();
+        for (let i = 0; i < 6; i++) {
+          a.parseCharNotification(CHR_WEIGHT, hex(AR003_WEIGH_IN.progress));
+        }
+        const reading = a.parseCharNotification(CHR_WEIGHT, hex(AR003_WEIGH_IN.final));
+        expect(at(reading)).toBe(Date.UTC(2026, 9, 28, 9, 53, 41));
+        expect(isHistoricalReading(reading!)).toBe(false);
+      });
+    });
+
+    it('does not place the clock on a 0x2E on its own', () => {
+      inZoneAt('Europe/Madrid', Date.UTC(2026, 9, 31, 13, 46, 58, 475), () => {
+        const reading = makeAdapter().parseCharNotification(CHR_WEIGHT, WBE28_510.final);
+        expect(at(reading)).toBe(FINAL_510 - HOUR);
+        expect(isHistoricalReading(reading!)).toBe(true);
+      });
+    });
+
+    it('does not place it on a 0x2E after another 0x2E', () => {
+      inZoneAt('Europe/Madrid', Date.UTC(2026, 9, 31, 13, 46, 58, 475), () => {
+        const a = makeAdapter();
+        a.parseCharNotification(CHR_WEIGHT, WBE28_510.final);
+        expect(at(a.parseCharNotification(CHR_WEIGHT, WBE28_510.final))).toBe(FINAL_510 - HOUR);
+      });
+    });
+
+    // The 0x4E stamp is 16 min ahead here, too far to place the clock.
+    it('places it on the 0x2E after a 0x4E that placed nothing', () => {
+      inZoneAt('Europe/Madrid', Date.UTC(2026, 9, 31, 13, 35), () => {
+        const a = makeAdapter();
+        expect(at(a.parseCharNotification(CHR_WEIGHT, WBE28_510.measuring))).toBe(
+          MEASURING_510 - HOUR,
+        );
+        const reading = a.parseCharNotification(CHR_WEIGHT, WBE28_510.final);
+        expect(at(reading)).toBe(FINAL_510);
+        expect(isHistoricalReading(reading!)).toBe(false);
+      });
+    });
+
+    // The A-R003 frames, stamped 2026-10-28 10:53:30, read as a clock on UTC.
+    const AR003_STAMP_UTC = Date.UTC(2026, 9, 28, 10, 53, 30);
+
+    it('does not place it on a 0x0E with a weight, and does on the 0x4E after it', () => {
+      inZoneAt('Europe/Madrid', AR003_STAMP_UTC + 5000, () => {
+        const a = makeAdapter();
+        expect(at(a.parseCharNotification(CHR_WEIGHT, hex(AR003_LIVE.settled)))).toBe(
+          AR003_STAMP_UTC - HOUR,
+        );
+        expect(at(a.parseCharNotification(CHR_WEIGHT, hex(AR003_LIVE.measuring)))).toBe(
+          AR003_STAMP_UTC,
+        );
+      });
+    });
+
+    it('places it on a 0 kg frame', () => {
+      inZoneAt('Europe/Madrid', AR003_STAMP_UTC + 5000, () => {
+        const a = makeAdapter();
+        expect(a.parseCharNotification(CHR_WEIGHT, hex(AR003_LIVE.empty))).toBeNull();
+        expect(at(a.parseCharNotification(CHR_WEIGHT, hex(AR003_LIVE.settled)))).toBe(
+          AR003_STAMP_UTC,
+        );
+      });
+    });
+
+    it('does not move a clock placed on local time', () => {
+      inZoneAt('Europe/Bratislava', AR003_STAMP_UTC - HOUR + 5000, () => {
+        const a = makeAdapter();
+        const progress = hex(AR003_WEIGH_IN.progress);
+        expect(at(a.parseCharNotification(CHR_WEIGHT, progress))).toBe(AR003_STAMP_UTC - HOUR);
+        // An hour later the stamp would fit a clock on UTC.
+        vi.setSystemTime(AR003_STAMP_UTC + 5000);
+        expect(at(a.parseCharNotification(CHR_WEIGHT, progress))).toBe(AR003_STAMP_UTC - HOUR);
+      });
+    });
+
+    // The runtime has routed it by then; dated anew, a stored record could turn live (D027).
+    it('keeps the time a stored record was read with before the clock was placed', () => {
+      inZoneAt('Europe/Madrid', RECEIVED_510, () => {
+        const a = makeAdapter();
+        const stored = a.parseCharNotification(CHR_WEIGHT, WSS_FRAME);
+        expect(isHistoricalReading(stored!)).toBe(true);
+        expect(at(a.parseCharNotification(CHR_WEIGHT, WBE28_510.measuring))).toBe(MEASURING_510);
+        expect(stored!.timestamp).toEqual(new Date(2026, 6, 4, 12, 26, 6));
+      });
+    });
+
+    it('starts every session with the clock not placed', () => {
+      inZoneAt('Europe/Madrid', Date.UTC(2026, 9, 31, 13, 46, 58, 475), () => {
+        const a = makeAdapter();
+        expect(at(a.parseCharNotification(CHR_WEIGHT, WBE28_510.measuring))).toBe(MEASURING_510);
+        a.onSessionStart();
+        expect(at(a.parseCharNotification(CHR_WEIGHT, WBE28_510.final))).toBe(FINAL_510 - HOUR);
+      });
+    });
+
+    it('reads the 0x2A9C Time Stamp on the clock placed', () => {
+      inZoneAt('Europe/Madrid', Date.UTC(2026, 9, 31, 13, 46, 58, 520), () => {
+        const a = makeAdapter();
+        a.parseCharNotification(CHR_WEIGHT, WBE28_510.measuring);
+        a.parseCharNotification(CHR_WEIGHT, WSS_NO_TIME);
+        expect(at(a.parseCharNotification(CHR_BODYCOMP, WBE28_510.bcsPacket1))).toBe(FINAL_510);
+      });
+    });
+
+    it('logs the clock placed, and once a frame that placed nothing, without the weight', () => {
+      const debug = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+      const lines = (): string[] =>
+        debug.mock.calls.map((c) => String(c[0])).filter((l) => l.includes('scale clock'));
+      try {
+        inZoneAt('UTC', RECEIVED_510, () => {
+          const a = makeAdapter();
+          a.parseCharNotification(CHR_WEIGHT, WBE28_510.measuring);
+          a.parseCharNotification(CHR_WEIGHT, WBE28_510.measuring);
+        });
+        expect(lines()).toEqual([
+          'Renpho ES-WBE28: scale clock not placed by this frame ' +
+            '(stamp +268 s from now read as UTC, +268 s as local time)',
+        ]);
+        debug.mockClear();
+        inZoneAt('Europe/Madrid', RECEIVED_510, () => {
+          makeAdapter().parseCharNotification(CHR_WEIGHT, WBE28_510.measuring);
+        });
+        expect(lines()).toEqual([
+          'Renpho ES-WBE28: the scale clock keeps UTC ' +
+            '(stamp +268 s from now read as UTC, -3332 s as local time)',
+        ]);
+        debug.mockClear();
+        inZoneAt('Europe/Madrid', MEASURING_510 - HOUR, () => {
+          makeAdapter().parseCharNotification(CHR_WEIGHT, WBE28_510.measuring);
+        });
+        expect(lines()).toEqual([
+          'Renpho ES-WBE28: the scale clock keeps local time ' +
+            '(stamp +3600 s from now read as UTC, +0 s as local time)',
+        ]);
+      } finally {
+        debug.mockRestore();
+      }
     });
   });
 
