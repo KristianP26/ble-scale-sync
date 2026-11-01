@@ -22,7 +22,7 @@ RUN npm run build
 # boards). python:3.12-slim-bookworm is a self-contained Python 3.12 built
 # against bookworm's glibc *and* does publish arm/v7, so copy just the
 # interpreter across instead of changing the base OS.
-FROM python:3.12-slim-bookworm@sha256:54c85f3c47607a77f32adec749d3c81d1348bf25833671f512b26a9b6d778cb3 AS python
+FROM python:3.12-slim-bookworm@sha256:e697c81897302a4c4333bade000d98038fbb21eb064f8ee1fd42d02ebcd9d337 AS python
 
 # ── Native stage: compile dependencies for the target platform ───────
 # The native BLE modules (node-gyp) and the Python packages without a wheel
