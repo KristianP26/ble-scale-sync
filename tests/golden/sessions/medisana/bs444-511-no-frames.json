@@ -8,6 +8,11 @@
   "history": [],
   "subscribes": [
     {
+      "seq": 0,
+      "atMs": 0,
+      "uuid": "8a22"
+    },
+    {
       "seq": 1,
       "atMs": 0,
       "uuid": "8a21"
@@ -15,7 +20,7 @@
   ],
   "writes": [
     {
-      "seq": 0,
+      "seq": 2,
       "atMs": 0,
       "uuid": "8a81",
       "hex": "0267809c1e",

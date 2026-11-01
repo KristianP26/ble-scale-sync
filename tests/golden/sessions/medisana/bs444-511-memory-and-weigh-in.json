@@ -1,12 +1,27 @@
 {
   "settled": {
-    "by": "error",
-    "atMs": 742,
-    "error": "Scale disconnected before reading completed"
+    "by": "disconnect",
+    "atMs": 742
   },
-  "reading": null,
+  "reading": {
+    "weight": 82.15,
+    "impedance": 0,
+    "timestamp": "2026-04-11T03:09:20.000Z",
+    "scaleComposition": {
+      "bmr": 1680,
+      "fat": 24.5,
+      "water": 53.6,
+      "muscle": 40.3,
+      "bone": 3.4
+    }
+  },
   "history": [],
   "subscribes": [
+    {
+      "seq": 0,
+      "atMs": 0,
+      "uuid": "8a22"
+    },
     {
       "seq": 1,
       "atMs": 0,
@@ -15,13 +30,25 @@
   ],
   "writes": [
     {
-      "seq": 0,
+      "seq": 2,
       "atMs": 0,
       "uuid": "8a81",
       "hex": "0267809c1e",
       "withResponse": true
     }
   ],
-  "rxDropped": 30,
-  "payload": null
+  "rxDropped": 0,
+  "payload": {
+    "weight": 82.15,
+    "impedance": 0,
+    "bmi": 24.53,
+    "bodyFatPercent": 24.5,
+    "waterPercent": 53.6,
+    "boneMass": 3.4,
+    "muscleMass": 33.11,
+    "visceralFat": 11,
+    "physiqueRating": 5,
+    "bmr": 1680,
+    "metabolicAge": 31
+  }
 }

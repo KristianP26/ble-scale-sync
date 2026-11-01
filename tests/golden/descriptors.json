@@ -643,9 +643,28 @@
     },
     "charNotifyUuid": "00008a2100001000800000805f9b34fb",
     "charWriteUuid": "00008a8100001000800000805f9b34fb",
+    "characteristics": [
+      {
+        "uuid": "00008a2200001000800000805f9b34fb",
+        "type": "notify"
+      },
+      {
+        "uuid": "00008a2100001000800000805f9b34fb",
+        "type": "notify"
+      },
+      {
+        "uuid": "00008a8100001000800000805f9b34fb",
+        "type": "write"
+      }
+    ],
+    "completionHoldMs": 5000,
     "hooks": [
       "onConnected",
-      "onSessionStart"
+      "onSessionStart",
+      "parseCharNotification",
+      "isFinal",
+      "dedupMark",
+      "restoreDedupMark"
     ]
   },
   {
