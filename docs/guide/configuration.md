@@ -212,7 +212,7 @@ The request sends only the User-Agent `ble-scale-sync/<version> (<platform>; <ar
 
 ## Live Config Reload
 
-In continuous mode the app reloads `config.yaml` when the file changes and applies it before the next scan cycle, on Linux, macOS and Windows. An invalid file is not applied: the previous config stays and the log says why. A change to a key that needs a restart is logged with `Restart required for this field to take effect.`
+In continuous mode the app reloads `config.yaml` when the file changes and applies it before the next scan cycle, on Linux, macOS and Windows. The proxy transports have no scan cycle: they apply a change after the next weigh-in, so restart the app when the change must hold for the next one, such as `dry_run`. An invalid file is not applied: the previous config stays and the log says why. A change to a key that needs a restart is logged with `Restart required for this field to take effect.`
 
 | Key | Applies | Note |
 | --- | ------- | ---- |
