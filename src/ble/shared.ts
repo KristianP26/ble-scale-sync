@@ -630,19 +630,10 @@ export function waitForRawReading(req: SessionRequest): Promise<RawReading> {
         }
         return finishWith(held);
       }
-      if (history.length > 0) {
-        resolved = true;
-        init.cleanup();
-        const latest = history.popLatest()!;
-        process.stdout.write('\r' + ' '.repeat(80) + '\r');
-        bleLog.info(
-          `${cause} after cache replay (${history.length + 1} historical reading(s)); ` +
-            `no live frame.`,
-        );
-        const raw: RawReading = { reading: latest, adapter, history: history.snapshot() };
-        resolve(raw);
-        return raw;
-      }
+      // The live reading of a capture run, before the stored records: capture
+      // mode skips the hold, so with the history branch first a scale that
+      // replays its memory resolved with the newest stored record and the live
+      // weigh-in was lost (#511). The records still go out as history.
       const r = lastCaptureReading;
       if (capture.enabled && r) {
         // Common capture exit: the scale powered off after sending its trailing
@@ -653,7 +644,20 @@ export function waitForRawReading(req: SessionRequest): Promise<RawReading> {
         process.stdout.write('\r' + ' '.repeat(80) + '\r');
         const why = cause === DISCONNECTED ? 'scale disconnected' : cause;
         bleLog.info(`Capture mode: ${why}; recorded frames above. Returning reading.`);
-        const raw: RawReading = { reading: r, adapter, history: undefined };
+        const raw: RawReading = { reading: r, adapter, history: history.snapshot() };
+        resolve(raw);
+        return raw;
+      }
+      if (history.length > 0) {
+        resolved = true;
+        init.cleanup();
+        const latest = history.popLatest()!;
+        process.stdout.write('\r' + ' '.repeat(80) + '\r');
+        bleLog.info(
+          `${cause} after cache replay (${history.length + 1} historical reading(s)); ` +
+            `no live frame.`,
+        );
+        const raw: RawReading = { reading: latest, adapter, history: history.snapshot() };
         resolve(raw);
         return raw;
       }
