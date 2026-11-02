@@ -1057,7 +1057,9 @@
     "hooks": [
       "onConnected",
       "onSessionStart",
-      "parseCharNotification"
+      "parseCharNotification",
+      "dedupMark",
+      "restoreDedupMark"
     ]
   },
   {

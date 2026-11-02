@@ -49,8 +49,27 @@ const WEIGHT_OFFSET = 5;
 const WEIGHT_BYTES = 3;
 const WEIGHT_DIV = 1000;
 
+// Healthkeep S11 (same FFB0 family, Fitdays app) never sends an A3 frame. Its
+// final result is a 35-byte A7 record on FFB3, split over three 20-byte
+// packets whose byte 2 is the packet index (00, 01, 02). The first packet is
+//   [seq][23][00][a7][unix ts u32 BE][1 byte][weight u24 BE grams][...]
+// (the same layout as the Speediance FG2211WBF record). The record is never
+// acknowledged, so the scale resends it every 10 s and can offer the record of
+// an earlier weigh-in right after connecting. An A7 is therefore taken only
+// when its weight equals the settled A2 weight of this session, and never when
+// its stamp (the scale's real clock) equals the last one exported.
+const A7_STAMP_OFFSET = 4;
+const A7_WEIGHT_OFFSET = 9;
+// A2 live frames: [seq][07][00][a2][state][00][weight u24 BE grams][...] (#248).
+// State 01 while the weight settles, 03 once it is settled, 00 after stepping off.
+const A2_STATE_OFFSET = 4;
+const A2_STATE_SETTLED = 0x03;
+const A2_WEIGHT_OFFSET = 6;
+
 /** One weigh-in's state, replaced whole in onSessionStart (#394, SCALES.md). */
 class RobiS9Session {
+  /** Weight of the last settled A2 live frame, in grams (0 = none yet). */
+  liveGrams = 0;
   cachedWeight = 0;
   cachedImpedance = 0;
   final = false;
@@ -95,6 +114,14 @@ export class RobiS9Adapter implements ScaleAdapterCore, GattWiring, MultiCharNot
   ];
 
   private s = new RobiS9Session();
+
+  /**
+   * Stamp of the last A7 record exported. De-duplication state, not session
+   * state: it outlives sessions, and the runtime persists it through
+   * {@link dedupMark} so it also outlives a restart. Compared for equality only,
+   * so a scale whose clock was reset cannot block new readings.
+   */
+  private lastA7Stamp = 0;
 
   matches(device: BleDeviceInfo): boolean {
     const name = (device.localName || '').toLowerCase();
@@ -154,6 +181,35 @@ export class RobiS9Adapter implements ScaleAdapterCore, GattWiring, MultiCharNot
       }
     }
 
+    if (
+      data[3] === 0xa2 &&
+      data[A2_STATE_OFFSET] === A2_STATE_SETTLED &&
+      data.length >= A2_WEIGHT_OFFSET + WEIGHT_BYTES
+    ) {
+      const grams = data.readUIntBE(A2_WEIGHT_OFFSET, WEIGHT_BYTES);
+      if (grams > 0) this.s.liveGrams = grams;
+    }
+
+    // Healthkeep S11: final result as the first packet of the A7 record.
+    if (data[3] === 0xa7 && data.length >= A7_WEIGHT_OFFSET + WEIGHT_BYTES) {
+      const grams = data.readUIntBE(A7_WEIGHT_OFFSET, WEIGHT_BYTES);
+      const stamp = data.readUInt32BE(A7_STAMP_OFFSET);
+      if (stamp !== 0 && stamp === this.lastA7Stamp) {
+        bleLog.debug(`Robi S9: A7 record ${stamp} was already exported, ignoring it`);
+      } else if (grams === 0 || grams !== this.s.liveGrams) {
+        bleLog.debug(
+          `Robi S9: A7 record (${grams} g) does not match this weigh-in (${this.s.liveGrams} g), ignoring it`,
+        );
+      } else {
+        this.lastA7Stamp = stamp;
+        this.s.cachedWeight = grams / WEIGHT_DIV;
+        // The second A7 packet carries what look like per-segment impedances
+        // (8-electrode scale), not decoded yet: BMI fallback as for A3.
+        this.s.cachedImpedance = 0;
+        this.s.final = true;
+      }
+    }
+
     if (this.s.final && this.s.cachedWeight > 0) {
       return { weight: this.s.cachedWeight, impedance: this.s.cachedImpedance };
     }
@@ -167,6 +223,20 @@ export class RobiS9Adapter implements ScaleAdapterCore, GattWiring, MultiCharNot
 
   isComplete(reading: ScaleReading): boolean {
     return reading.weight > 0 && this.s.final;
+  }
+
+  /** The stamp of the last exported A7 record, for the runtime to persist. */
+  dedupMark(): number | undefined {
+    return this.lastA7Stamp || undefined;
+  }
+
+  /**
+   * Restore a stamp persisted by an earlier process. Only a value that can be a
+   * u32 A7 stamp is taken; anything else is ignored.
+   */
+  restoreDedupMark(mark: number): void {
+    if (!Number.isInteger(mark) || mark <= 0 || mark > 0xffffffff) return;
+    this.lastA7Stamp = mark;
   }
 
   computeMetrics(reading: ScaleReading, profile: UserProfile): BodyComposition {
