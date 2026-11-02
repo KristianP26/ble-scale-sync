@@ -54,14 +54,17 @@ const WEIGHT_DIV = 1000;
 // packets whose byte 2 is the packet index (00, 01, 02). The first packet is
 //   [seq][23][00][a7][unix ts u32 BE][1 byte][weight u24 BE grams][...]
 // (the same layout as the Speediance FG2211WBF record). The record is never
-// acknowledged, so the scale resends it every 10 s and can offer the record of
-// an earlier weigh-in right after connecting. An A7 is therefore taken only
-// when its weight equals the settled A2 weight of this session, and never when
-// its stamp (the scale's real clock) equals the last one exported.
+// acknowledged, so the scale resends it every 10 s. It may also offer the
+// record of an earlier weigh-in right after connecting (not seen in a log yet).
+// An A7 is therefore taken only when its weight equals the settled A2 weight of
+// this session, and never when its stamp (the scale's real clock) equals the
+// last one exported.
 const A7_STAMP_OFFSET = 4;
 const A7_WEIGHT_OFFSET = 9;
 // A2 live frames: [seq][07][00][a2][state][00][weight u24 BE grams][...] (#248).
-// State 01 while the weight settles, 03 once it is settled, 00 after stepping off.
+// On the S11 the state is 01 while the weight settles, 03 once it is settled and
+// 00 after stepping off. The Robi S9 in #248 sends 02 after its 01 frames, which
+// does not matter here because it sends its result as A3.
 const A2_STATE_OFFSET = 4;
 const A2_STATE_SETTLED = 0x03;
 const A2_WEIGHT_OFFSET = 6;

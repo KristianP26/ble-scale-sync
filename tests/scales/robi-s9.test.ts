@@ -137,8 +137,8 @@ describe('RobiS9Adapter', () => {
     });
 
     it('does not export the same S11 A7 record twice', () => {
-      // The scale is still awake at the next connection and offers the same
-      // record with its A2 frames still on that weight.
+      // Guards a possible replay: the scale still awake at the next connection,
+      // offering the same record with its A2 frames still on that weight.
       const adapter = makeAdapter();
       adapter.onSessionStart();
       feed(adapter, 0xffb2, S11_A2_2);
