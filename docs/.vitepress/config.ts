@@ -113,7 +113,7 @@ export default defineConfig({
 
     footer: {
       message: 'Released under the GPL-3.0 License.',
-      copyright: 'Copyright &copy; 2026 Kristi\u00e1n Partl',
+      copyright: 'Copyright &copy; 2026 <a href="https://partl.dev">Kristi\u00e1n Partl</a>',
     },
   },
 });

@@ -4,6 +4,7 @@
 garminconnect==0.3.20
 python-dotenv==1.2.4
 pyyaml==6.0.3
-# Transitive (garminconnect). Pinned as well: it has no linux/arm/v7 wheel and
-# is compiled from source there, so an unannounced release can break that build.
-curl_cffi==0.16.3
+# Transitive (garminconnect). Pinned as well: its cffi dependency has no
+# linux/arm/v7 wheel and is compiled from source there, so an unannounced
+# release can break that build.
+curl_cffi==0.17.0

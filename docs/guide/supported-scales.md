@@ -42,12 +42,12 @@ _Weight only_ means the weight is read and body composition is estimated from BM
 | A&D UC-352BLE                                                          | Weight only      | Experimental; Linux (BlueZ) only, needs `ble.scale_mac` and a one-time pairing |
 | Huawei CH100 / AH100                                                   | Yes              | Experimental; not on macOS; see [Known Limitations](#huawei-ch100-ah100) |
 | Soehnle Shape200 / Shape100 / Shape50 / Style100                       | Yes              | Needs user slot 1 in the vendor app |
-| Medisana BS430 / BS440 / BS444                                         | Yes              |       |
+| Medisana BS430 / BS440 / BS444                                         | Yes              | From the second session on, weigh-ins stored while the app was off go to [exporters that can record a past measurement](/exporters#historical-readings); a stored weigh-in older than the last one exported is skipped, which can happen with several people on the scale |
 | Active Era BS-06 and other `AC 27` scales                              | Yes              | Detected by manufacturer id `0x27AC`; wake it before stepping on |
 | Senssun Fat                                                            | Yes              | Model A only |
 | MGB (Swan / Icomon / YG)                                               | Yes              |       |
 | Hutbit 218008 / WL292                                                  | Yes              | Also sold under stock `SWAN` branding |
-| Robi S9                                                                | Weight only      |       |
+| Robi S9, Healthkeep S11 (`HEALTHKEEP-S11`)                             | Weight only      |       |
 | Speediance Smart Scale FG2211WBF                                       | Yes              | Lefu/Icomon sibling of the Robi S9 |
 | Digoo DG-SO38H (Mengii)                                                | Yes              |       |
 | Excelvan CF369                                                         | Yes              |       |

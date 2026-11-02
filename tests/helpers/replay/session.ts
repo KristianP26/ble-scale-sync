@@ -35,6 +35,11 @@ export interface ReplayOptions {
   chars?: string[];
   /** Wall clock (ms since the epoch) at the session start. */
   now?: number;
+  /**
+   * IANA zone the host runs in (`TZ`) for the session. Default the suite's
+   * UTC, where a scale clock on local time and one on UTC read the same.
+   */
+  timeZone?: string;
 }
 
 /** What a module under tests/fixtures/ exports as `session` to have its traces replayed and pinned. */
@@ -102,16 +107,18 @@ function startSession(
 /**
  * Replay a trace through the real waitForRawReading under fake timers: each
  * `rx` step is delivered at its time, and what the session wrote, subscribed
- * and settled with is returned. Owns the clock: fake timers are on for the
- * call only.
+ * and settled with is returned. Owns the clock: fake timers, and the host
+ * zone when the options give one, are set for the call only.
  */
 export async function replaySession(
   adapter: ScaleAdapter,
   trace: Trace,
   o: ReplayOptions = {},
 ): Promise<SessionResult> {
-  vi.useFakeTimers({ now: o.now ?? DEFAULT_NOW });
+  const tz = process.env.TZ;
   try {
+    if (o.timeZone) process.env.TZ = o.timeZone;
+    vi.useFakeTimers({ now: o.now ?? DEFAULT_NOW });
     const t0 = Date.now();
     const at = (): number => Date.now() - t0;
     let seq = 0;
@@ -193,6 +200,8 @@ export async function replaySession(
     return r;
   } finally {
     vi.useRealTimers();
+    if (tz === undefined) delete process.env.TZ;
+    else process.env.TZ = tz;
   }
 }
 

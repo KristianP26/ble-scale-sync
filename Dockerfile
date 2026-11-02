@@ -4,7 +4,7 @@
 # digests; keep the three node:22 references (build, native and runtime
 # stages) in step when bumping by hand.
 ARG BUILDPLATFORM
-FROM --platform=$BUILDPLATFORM node:22-bookworm-slim@sha256:de170b39439eb0e5a3444ad7d60b015614a381e10fecae2e30ec9e735122f38d AS build
+FROM --platform=$BUILDPLATFORM node:22-bookworm-slim@sha256:4b150b48b4116e2a22f2c39cc27025fbf4f153e2078fd3b14d159fdb5c7279da AS build
 
 WORKDIR /app
 
@@ -22,14 +22,14 @@ RUN npm run build
 # boards). python:3.12-slim-bookworm is a self-contained Python 3.12 built
 # against bookworm's glibc *and* does publish arm/v7, so copy just the
 # interpreter across instead of changing the base OS.
-FROM python:3.12-slim-bookworm@sha256:54c85f3c47607a77f32adec749d3c81d1348bf25833671f512b26a9b6d778cb3 AS python
+FROM python:3.12-slim-bookworm@sha256:e697c81897302a4c4333bade000d98038fbb21eb064f8ee1fd42d02ebcd9d337 AS python
 
 # ── Native stage: compile dependencies for the target platform ───────
 # The native BLE modules (node-gyp) and the Python packages without a wheel
 # for the target are compiled here, so the compiler and the -dev headers stay
 # out of the runtime image. Only node_modules and the Python tree go across.
 # Same base as the runtime stage: the compiled code links against its glibc.
-FROM node:22-bookworm-slim@sha256:de170b39439eb0e5a3444ad7d60b015614a381e10fecae2e30ec9e735122f38d AS native
+FROM node:22-bookworm-slim@sha256:4b150b48b4116e2a22f2c39cc27025fbf4f153e2078fd3b14d159fdb5c7279da AS native
 
 # build-essential: node-gyp needs gcc/g++/make for the native BLE modules.
 # libffi-dev + libssl-dev + libcurl4-openssl-dev: cffi/cryptography/curl_cffi
@@ -70,7 +70,7 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 
 # ── Runtime stage ────────────────────────────────────────────────────
-FROM node:22-bookworm-slim@sha256:de170b39439eb0e5a3444ad7d60b015614a381e10fecae2e30ec9e735122f38d
+FROM node:22-bookworm-slim@sha256:4b150b48b4116e2a22f2c39cc27025fbf4f153e2078fd3b14d159fdb5c7279da
 
 # OCI labels
 ARG VERSION=local

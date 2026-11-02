@@ -91,7 +91,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
           bleLog.info(
             `Matched: ${gr.adapter.name} (${address}), weight only, no impedance within ${IMPEDANCE_GRACE_MS / 1000}s`,
           );
-          bleLog.info(`Broadcast reading: ${gr.reading.weight} kg`);
+          bleLog.info(`Broadcast reading: ${gr.reading.weight.toFixed(2)} kg`);
           resolve(gr);
         });
         graceBox.grace = g;
@@ -141,7 +141,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
           if (decision.kind === 'complete') {
             g.cancel(address);
             bleLog.info(`Matched: ${adapter.name} (${address})`);
-            bleLog.info(`Broadcast reading: ${decision.reading.weight} kg`);
+            bleLog.info(`Broadcast reading: ${decision.reading.weight.toFixed(2)} kg`);
             resolve({ reading: decision.reading, adapter });
             return;
           }

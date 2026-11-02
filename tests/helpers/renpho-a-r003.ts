@@ -12,6 +12,10 @@ import { uuid16 } from '../../src/scales/body-comp-helpers.js';
  * - The weigh-in frames (AR003_WEIGH_IN) come from a private DEBUG log (#507,
  *   2026-10-28) and are derived from it; their comments list every byte that
  *   differs from the log.
+ * - The frames after them follow the shape of three more private DEBUG logs
+ *   (#507, 2026-10-29). Flags, field layout, the scale clock and user 170 are
+ *   as logged; the body composition, the profile echo and the weights are
+ *   made up, as each constant says.
  *
  * Rewritten: the scale's address is the fake 02:00:00:00:00:01 here, in the
  * address and in its echo at [9..14] of the manufacturer data, which therefore
@@ -149,3 +153,69 @@ export const AR003_WEIGH_IN = {
 
 /** A clock 4 s after the weigh-in, so its frames read as live in any zone. */
 export const AR003_WEIGH_IN_NOW = new Date(2026, 9, 28, 10, 53, 45).getTime();
+
+/**
+ * Two 0x2A9C packets that carry a body composition, for the fixture profile
+ * (defaultProfile: 183 cm, 30 years, male) at 82.30 kg. Flags, Time Stamp and
+ * user 170 of packet 1 are as logged, like AR003_WEIGH_IN.bcsPacket1; the
+ * layout of packet 2 is the logged one. Every value is made up, chosen to keep
+ * the relations both logged weigh-ins (#507, 2026-10-28 and 2026-10-29) show
+ * between the fields:
+ *
+ * - packet 1: body fat 18.6 % (`ba 00`), BMR 1817 kcal (`19 07`, 370 + 21.6 x
+ *   the fat-free mass), muscle percentage 52.6 % (`0e 02`, 0.68 x muscle mass
+ *   over weight), muscle mass 63.65 kg (`f9 04`, 0.05 kg) and fat-free mass
+ *   67.00 kg (`3c 05`, 82.30 x 0.814 to 0.05 kg).
+ * - packet 2: water 58.8 % (`4c 02`, 0.722 x (100 - fat)), resistances 480 and
+ *   476 as in bcsPacket2, bone 3.35 kg (`43 00`, fat-free mass minus muscle
+ *   mass), visceral fat 7, subcutaneous fat 16.4 % (`a4 00`, 0.88 x fat),
+ *   protein 18.5 % (`b9 00`, 100 - fat - water - bone %), 30 at [13..14] (the
+ *   age the fixture profile sends, as both logs show for theirs), score 84.1
+ *   and body type 5. Read as SIG flags, [0..1] is 0x024C: no bit 12, and the
+ *   fields it claims fill 11 bytes, not 19.
+ */
+export const AR003_COMPOSITION = {
+  bcsPacket1: '7e53ba00ea070a1c0a3529aa19070e02f9043c05',
+  bcsPacket2: '4c02e001dc01430007a400b9001e0049030500',
+} as const;
+
+/**
+ * Packet 2 of a weigh-in whose packet 1 has no body composition (the zeroed
+ * AR003_WEIGH_IN.bcsPacket1): 19 zero bytes, as logged on 2026-10-29.
+ */
+export const AR003_NO_COMPOSITION_PACKET2 = '00'.repeat(19);
+
+/**
+ * AR003_WEIGH_IN.final as the scale would send it after computing for another
+ * profile: height 170 cm (`aa 00`) and BMI 28.5 (`1d 01`, 82.30 / 1.70^2).
+ * Made up.
+ */
+export const AR003_OTHER_PROFILE_FINAL = '2e6e06ea070a1c0a3529aa1d01aa00';
+
+/**
+ * AR003_WEIGH_IN.final with the fixture profile's 183 cm but a BMI of 25.0
+ * (`fa 00`), 0.43 off 82.30 / 1.83^2. Made up.
+ */
+export const AR003_BMI_MISFIT_FINAL = '2e6e06ea070a1c0a3529aafa00b700';
+
+/**
+ * 0x2A9D frames of a weigh-in that starts after the connection (2026-10-29
+ * log): flags 0x0E while nobody stands on the scale (0 kg) and while the
+ * weight rises and settles, then 0x4E while the scale measures. Flags and
+ * shape as logged; the weights are rewritten to a path to 82.30 kg, and the
+ * scale clock is the one of AR003_WEIGH_IN.progress.
+ */
+export const AR003_LIVE = {
+  empty: '0e0000ea070a1c0a351eaa00000000',
+  /** 0.30 kg, the first weight above 0. */
+  stepOn: '0e0600ea070a1c0a351eaa00000000',
+  /** 40.00, 80.00, 83.00 and 82.50 kg. */
+  rising: [
+    '0e2003ea070a1c0a351eaa00000000',
+    '0e4006ea070a1c0a351eaa00000000',
+    '0e7c06ea070a1c0a351eaa00000000',
+    '0e7206ea070a1c0a351eaa00000000',
+  ],
+  settled: '0e6e06ea070a1c0a351eaa00000000',
+  measuring: AR003_WEIGH_IN.progress,
+} as const;

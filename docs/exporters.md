@@ -507,7 +507,7 @@ A notification is about now, and the MQTT topic holds one retained state, the la
 Historical reading (2026-09-07T06:12:44.000Z): skipping non-back-date exporters [mqtt, ntfy]
 ```
 
-The adapters that pass the recorded time on include the Beurer BF720 family, the Renpho ES-26BB and [QN scales](/guide/scales/qn) with a 19-byte scale-info frame, or an 18-byte one with `ble.qn_user_key` set. On an 18-byte QN scale, a weigh-in marked as stored is a past measurement even if its time is recent. Salter scales send stored records as ordinary live readings. With [`runtime.no_reading_rescan_delay`](/guide/configuration#runtime) set, a weigh-in made during the wait can arrive more than 5 minutes late and is then a past measurement too.
+The adapters that pass the recorded time on include the Beurer BF720 family, the Renpho ES-26BB and [QN scales](/guide/scales/qn) with a 19-byte scale-info frame, or an 18-byte one with `ble.qn_user_key` set. On an 18-byte QN scale, a weigh-in marked as stored is a past measurement even if its time is recent. On a Medisana BS430 / BS440 / BS444, every record but the newest one within a minute of now is a past measurement. Salter scales send stored records as ordinary live readings. With [`runtime.no_reading_rescan_delay`](/guide/configuration#runtime) set, a weigh-in made during the wait can arrive more than 5 minutes late and is then a past measurement too.
 
 ### Replay Check
 

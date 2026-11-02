@@ -103,7 +103,7 @@ export class ReadingWatcher implements Watcher {
     bleLog.info(
       `Matched: ${gr.adapter.name} (${address}), weight only, no impedance within ${IMPEDANCE_GRACE_MS / 1000}s`,
     );
-    bleLog.info(`Reading: ${gr.reading.weight} kg`);
+    bleLog.info(`Reading: ${gr.reading.weight.toFixed(2)} kg`);
     registerScaleMac(this.config, address, gr.adapter).catch(() => {});
     this.queue.push(gr);
   });
@@ -784,7 +784,7 @@ export class ReadingWatcher implements Watcher {
       registerScaleMac(this.config, data.address, adapter).catch(() => {});
       this.postReading.noteReading(data.address);
       bleLog.info(
-        `Autonomous GATT reading complete: ${raw.reading.weight} kg from ${data.address}`,
+        `Autonomous GATT reading complete: ${raw.reading.weight.toFixed(2)} kg from ${data.address}`,
       );
       this.queue.push(raw);
     } finally {
