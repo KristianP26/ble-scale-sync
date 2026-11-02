@@ -4,15 +4,15 @@
     "atMs": 742
   },
   "reading": {
-    "weight": 82.15,
+    "weight": 104.7,
     "impedance": 0,
-    "timestamp": "2026-04-11T03:09:20.000Z",
+    "timestamp": "2026-11-01T06:27:01.000Z",
     "scaleComposition": {
-      "bmr": 1680,
-      "fat": 24.5,
-      "water": 53.6,
-      "muscle": 40.3,
-      "bone": 3.4
+      "bmr": 1967,
+      "fat": 29.3,
+      "water": 53.2,
+      "muscle": 34.7,
+      "bone": 3.5
     }
   },
   "history": [],
@@ -33,22 +33,22 @@
       "seq": 2,
       "atMs": 0,
       "uuid": "8a81",
-      "hex": "0267809c1e",
+      "hex": "02bca0a91f",
       "withResponse": true
     }
   ],
   "rxDropped": 0,
   "payload": {
-    "weight": 82.15,
+    "weight": 104.7,
     "impedance": 0,
-    "bmi": 24.53,
-    "bodyFatPercent": 24.5,
-    "waterPercent": 53.6,
-    "boneMass": 3.4,
-    "muscleMass": 33.11,
-    "visceralFat": 11,
-    "physiqueRating": 5,
-    "bmr": 1680,
+    "bmi": 31.26,
+    "bodyFatPercent": 29.3,
+    "waterPercent": 53.2,
+    "boneMass": 3.5,
+    "muscleMass": 36.33,
+    "visceralFat": 14,
+    "physiqueRating": 1,
+    "bmr": 1967,
     "metabolicAge": 31
   }
 }

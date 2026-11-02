@@ -8,7 +8,7 @@ import type { ConnectionContext, ScaleReading } from '../../src/interfaces/scale
 import { bleLog } from '../../src/ble/types.js';
 import { isHistoricalReading } from '../../src/interfaces/reading-time.js';
 import { fromDebugLog } from '../helpers/replay/trace.js';
-import { DERIVED_511 } from '../fixtures/medisana/bs444-511.js';
+import { CAPTURED_511 } from '../fixtures/medisana/bs444-511.js';
 import {
   mockPeripheral,
   defaultProfile,
@@ -136,7 +136,7 @@ describe('MedisanaBs44xAdapter', () => {
   });
 });
 
-// #511: the frames of a BS444 session, derived from the reporter's log
+// #511: the frames of a BS444 session from the reporter's log
 // (tests/fixtures/medisana/bs444-511.ts). The scale sends its whole memory,
 // one 0x8A21 + 0x8A22 pair per record, oldest first; the last record is the
 // weigh-in of the session.
@@ -146,12 +146,12 @@ interface Frame {
   uuid: string;
   data: Buffer;
 }
-const STEPS: Frame[] = fromDebugLog(DERIVED_511).map((s) => ({
+const STEPS: Frame[] = fromDebugLog(CAPTURED_511).map((s) => ({
   uuid: s.uuid ?? '',
   data: Buffer.from(s.hex, 'hex'),
 }));
 /** The receipt time of the last frame of the memory. */
-const END_MS = Date.UTC(2026, 3, 11, 3, 9, 28, 416);
+const END_MS = Date.UTC(2026, 10, 1, 6, 27, 9, 416);
 const END_SEC = Math.floor(END_MS / 1000);
 /** Raw stamp of each record, in memory order. */
 const RAWS = STEPS.filter((s) => s.uuid === W).map((s) => s.data.readUInt32LE(5));
