@@ -4,6 +4,29 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.39.0](https://github.com/KristianP26/ble-scale-sync/compare/v1.38.0...v1.39.0) (2026-11-02)
+
+
+### Added
+
+* **robi-s9:** read the Healthkeep S11 A7 result record ([6be979e](https://github.com/KristianP26/ble-scale-sync/commit/6be979e7fb4447aba96c91394462c64ff2fce082))
+
+
+### Fixed
+
+* **ble:** hand over the live reading of a capture run before stored records ([d8790ed](https://github.com/KristianP26/ble-scale-sync/commit/d8790edd010ed13ebb026d257550a8899d3315e8)), closes [#511](https://github.com/KristianP26/ble-scale-sync/issues/511)
+* **ble:** round the weight in the reading log lines ([7fea3d6](https://github.com/KristianP26/ble-scale-sync/commit/7fea3d67afafdcb57071096cdd0df46502428696))
+* **medisana:** read the BS444 weight and composition from their own characteristics ([2bde007](https://github.com/KristianP26/ble-scale-sync/commit/2bde007d69a703a401dbcb4d638abc1f36b2b3ad)), closes [#511](https://github.com/KristianP26/ble-scale-sync/issues/511)
+* **renpho:** keep the link open while the scale is still measuring ([f460712](https://github.com/KristianP26/ble-scale-sync/commit/f46071271d98fd30edf59c5fbe1bb8fe2c130180)), closes [#507](https://github.com/KristianP26/ble-scale-sync/issues/507)
+* **renpho:** read the scale clock as UTC when its live frames say so ([d4d6f36](https://github.com/KristianP26/ble-scale-sync/commit/d4d6f3634e40ecc5f909360c02877ba1a3070141)), closes [#510](https://github.com/KristianP26/ble-scale-sync/issues/510)
+
+
+### Docs
+
+* **config:** say a reload on the proxy transports waits for the next weigh-in ([cab707c](https://github.com/KristianP26/ble-scale-sync/commit/cab707cde727cf221ccaec79ae32463fbda6f297))
+* **renpho:** tip for the R-MSC04 reconnecting after a weigh-in ([0468bfa](https://github.com/KristianP26/ble-scale-sync/commit/0468bfa5921a00f420b1ac886539d8d947288367))
+* **site:** link the copyright name to partl.dev ([8786abf](https://github.com/KristianP26/ble-scale-sync/commit/8786abf7a9bd5f70b4f8b24587f53ef657a038f6))
+
 ## [1.38.0](https://github.com/KristianP26/ble-scale-sync/compare/v1.37.0...v1.38.0) (2026-10-29)
 
 
