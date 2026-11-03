@@ -253,6 +253,35 @@ const B1_501 = Buffer.from(
 );
 
 /**
+ * #501, parts 2 and 3 of a CS10G 0xB1 (45 and 39 bytes), byte for byte from
+ * the 23:22 session of the same public log; that session's first part never
+ * reached the host. Read from [5] as a first part is, part 3 gives 6.99 kg,
+ * inside the weight range, so it is the frame that guards the part index.
+ */
+const B1_501_PART2 = Buffer.from(
+  'b12d030200b60000000001000000000000000000000000000000000000000000000000c8674f01a0684f0150c1',
+  'hex',
+);
+const B1_501_PART3 = Buffer.from(
+  'b127030308bb027d674f01c4654f011e5c4f01fe5c4f011c077103c75b4f01c7594f01940901db',
+  'hex',
+);
+
+/**
+ * #331, a 20-byte Arboleaf CS10E over an ESPHome proxy (v1.39.0): its live
+ * 0x10 and its 0xB1, byte for byte from the reporter's public comment, both
+ * checksums valid. The 0xB1 comes in one part of 119 bytes ([2] 01, [3] 01):
+ * user slot 1, 93.15 kg, the weight the live frame streams.
+ */
+const LIVE_CS10E_331 = Buffer.from('10140100112463000000000000000000000000bd', 'hex');
+const B1_CS10E_331 = Buffer.from(
+  'b17701010163247b0d0c0c110db20b3f0a0f09140ae3080901e800290dc50b2b0dd30b410a250910' +
+    '0aef080301e100ee00000019012602d4020a296e07ae00002600fa02d000ec01c602079c839301b3' +
+    '8393011e0a7c018c669301a3649301ad75930140769301c7087b01755b930154599301fc0a0158',
+  'hex',
+);
+
+/**
  * #463, the Physiq's acceptance of the profile frame for user slot 1 and its
  * stored record of 2026-10-13: 71.55 kg at 17:59:38Z, slot 1; the record's
  * [16..17] zeroed, [19] recomputed.
@@ -1290,6 +1319,18 @@ describe('QnScaleAdapter', () => {
       } finally {
         debug.mockRestore();
       }
+    });
+
+    it('reads a 0xB1 the scale sends in one part (#331)', async () => {
+      const adapter = await extendedAdapter();
+      expect(adapter.parseNotification(LIVE_CS10E_331)).toBeNull();
+      expect(adapter.parseNotification(B1_CS10E_331)).toEqual({ weight: 93.15, impedance: 0 });
+    });
+
+    it('reads no weight from the 0xB1 parts after the first (#501)', async () => {
+      const adapter = await extendedAdapter();
+      expect(adapter.parseNotification(B1_501_PART2)).toBeNull();
+      expect(adapter.parseNotification(B1_501_PART3)).toBeNull();
     });
 
     it('does not decode result frames on a non-extended dialect', async () => {

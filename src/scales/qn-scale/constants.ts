@@ -489,6 +489,10 @@ export const VISIT_ANSWER_TIMEOUT_MS = 1000;
  * the handshake succeeded end to end yet nothing ever reached the exporters:
  *
  *   0xB1 .. 03 01 : live sweep record, 44 bytes. THE weight source.
+ *       [2]     how many parts the record came in, [3] which part this is:
+ *               03 01 here, one 119-byte part 01 01 on a 20-byte CS10E over
+ *               an ESPHome proxy (#331). The fields below are the first part's.
+ *       [4]     user slot (#501)
  *       [5-6]   weight, LE uint16, /100 kg
  *       [7..]   impedance channels
  *   0xB4 .. 04 01 : stored history record, 44 bytes. Weight only when fresh.
@@ -512,7 +516,7 @@ export const VISIT_ANSWER_TIMEOUT_MS = 1000;
  * opened), since a genuinely current record is the scale's own averaged figure.
  * That is deliberately stricter than the backward-looking window the 0x23
  * stored records use (MAX_STORED_RECORD_AGE_SEC): see the 0xB4 branch in
- * index.ts for why. Anything older is left to the stored-record path.
+ * dialects/ext20.ts for why. Anything older is left to the stored-record path.
  *
  * @hedoric hardware-verified the live values against the scale's own display:
  * 75.20 kg, BMI 20.2 in the 0xB1 03 03 tail, cross-checked as
