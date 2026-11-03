@@ -9,10 +9,12 @@ import type {
 } from '../../src/interfaces/scale-adapter.js';
 import type { MqttProxyConfig } from '../../src/config/schema.js';
 import { adapters as realAdapters } from '../../src/scales/index.js';
+import { MiScale2Adapter } from '../../src/scales/mi-scale-2.js';
 import { applyForcedAdapter } from '../../src/scales/force.js';
 import { bleLog, POST_READING_RECONNECT_MS, SessionTimeoutError } from '../../src/ble/types.js';
 import { bleFailureKind } from '../../src/ble/failure-kind.js';
 import { M1690_PROTOCOL_VERSION_REPLY } from '../helpers/yunmai-m1690.js';
+import { MI2_LIGHT_STABLE, MI2_WEIGH_IN } from '../helpers/mi-scale-2-422.js';
 import { AR003_ADDRESS, AR003_MSD, ar003MqttChars } from '../helpers/renpho-a-r003.js';
 
 // Suppress log output during tests
@@ -1586,6 +1588,53 @@ describe('handler-mqtt-proxy', () => {
         (c: unknown[]) => c[0] === `${PREFIX}/config`,
       );
       expect(configCalls).toHaveLength(0);
+    });
+  });
+
+  describe('a stable Mi Scale 2 frame of 10 kg or less (#526)', () => {
+    const entry = (hex: string) => ({
+      address: 'AA:BB:CC:DD:EE:FF',
+      name: '',
+      rssi: -50,
+      services: [],
+      service_data: [{ uuid: '181b', data: hex }],
+    });
+
+    it('does not replace the weigh-in the watcher holds', async () => {
+      vi.useFakeTimers({
+        toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'],
+      });
+      try {
+        const watcher = new ReadingWatcher(MQTT_PROXY_CONFIG, [new MiScale2Adapter()]);
+        await watcher.start();
+
+        for (const hex of [MI2_WEIGH_IN, MI2_LIGHT_STABLE]) {
+          mockClient._simulateMessage(`${PREFIX}/scan/results`, JSON.stringify([entry(hex)]));
+        }
+        const { IMPEDANCE_GRACE_MS } = await import('../../src/ble/types.js');
+        await vi.advanceTimersByTimeAsync(IMPEDANCE_GRACE_MS + 100);
+
+        const raw = await watcher.nextReading();
+        expect(raw.reading).toEqual({ weight: 97.8, impedance: 0 });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('is not a reading for the single-shot scan, which connects to nothing', async () => {
+      wireBroadcastFlow([entry(MI2_LIGHT_STABLE)]);
+
+      await expect(
+        scanAndReadRaw({
+          adapters: [new MiScale2Adapter()],
+          profile: PROFILE,
+          mqttProxy: MQTT_PROXY_CONFIG,
+        }),
+      ).rejects.toThrow();
+      const connects = (mockClient.publishAsync as ReturnType<typeof vi.fn>).mock.calls.filter(
+        (c: unknown[]) => c[0] === `${PREFIX}/connect`,
+      );
+      expect(connects).toHaveLength(0);
     });
   });
 

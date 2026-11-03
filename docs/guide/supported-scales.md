@@ -117,6 +117,10 @@ Read from the broadcast, without a connection, as kg; if your display shows lb o
 
 A Mini 2 (M1690) that advertises no name needs `ble.scale_mac` on the default Linux transport. The body fat the scale sends is computed for the profile the vendor app stored, so with several users it can belong to the profile the scale picked rather than to the matched person.
 
+### Xiaomi Mi Scale 2 (MIBCS / MIBFS / XMTZC05HM)
+
+The app ignores a reading of 10 kg or less, so it cannot record a small child or a pet.
+
 ### Xiaomi Mi Smart Scale 2 (XMTZC04HM)
 
 Its advertisement carries no impedance, so body composition is estimated from BMI.
