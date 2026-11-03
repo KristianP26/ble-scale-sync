@@ -34,8 +34,8 @@ FROM node:22-bookworm-slim@sha256:4b150b48b4116e2a22f2c39cc27025fbf4f153e2078fd3
 # build-essential: node-gyp needs gcc/g++/make for the native BLE modules.
 # libffi-dev + libssl-dev + libcurl4-openssl-dev: cffi/cryptography/curl_cffi
 # build from source on architectures without pre-built wheels, e.g.
-# linux/arm/v7 (curl_cffi is a transitive dep of garminconnect 0.3.x and has
-# no armv7 wheel on PyPI).
+# linux/arm/v7 (curl_cffi 0.17.0, a transitive dep of garminconnect 0.3.x, ships
+# armv7 wheels, but its cffi dependency does not).
 RUN apt-get update && apt-get install -y --no-install-recommends \
       build-essential \
       libbluetooth-dev \
