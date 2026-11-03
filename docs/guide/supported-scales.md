@@ -123,7 +123,7 @@ The app ignores a reading of 10 kg or less, so it cannot record a small child or
 
 ### Xiaomi Mi Smart Scale 2 (XMTZC04HM)
 
-Its advertisement carries no impedance, so body composition is estimated from BMI.
+Its advertisement carries no impedance, so body composition is estimated from BMI. The app ignores a reading of 10 kg or less, so it cannot record a small child or a pet.
 
 ### Xiaomi Body Composition Scale S400 (MJTZC01YM)
 
