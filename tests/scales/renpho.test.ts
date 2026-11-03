@@ -612,6 +612,18 @@ describe('RenphoScaleAdapter', () => {
       });
     });
 
+    // A 0 kg frame with bit 6 still set must end the wait as well. No capture has
+    // one: the frame is AR003_LIVE.empty with the flags byte set to 0x4e.
+    it('is not pending after a 0 kg frame that still has the measuring flag', () => {
+      atAr003Time(() => {
+        const a = makeAdapter();
+        a.parseCharNotification(CHR_WEIGHT, hex(AR003_LIVE.measuring));
+        expect(a.isCompositionPending()).toBe(true);
+        a.parseCharNotification(CHR_WEIGHT, hex('4e' + AR003_LIVE.empty.slice(2)));
+        expect(a.isCompositionPending()).toBe(false);
+      });
+    });
+
     it('is not pending once the user steps off while the scale measures', () => {
       atAr003Time(() => {
         const a = makeAdapter();
