@@ -7,6 +7,16 @@
 The add-on version always matches the application version, so every entry below
 applies to this add-on.
 
+## [1.39.1](https://github.com/KristianP26/ble-scale-sync/compare/v1.39.0...v1.39.1) (2026-11-04)
+
+
+### Fixed
+
+* **config:** say a reload waits for the next weigh-in on the proxy transports ([57be4ee](https://github.com/KristianP26/ble-scale-sync/commit/57be4ee7d15ac16acc7b619113737410c25ed131))
+* **mi-scale:** ignore a stable Mi Scale 2 frame of 10 kg or less ([85f66b2](https://github.com/KristianP26/ble-scale-sync/commit/85f66b29410c3557daf0973e16eafead3ea2238f)), closes [#526](https://github.com/KristianP26/ble-scale-sync/issues/526)
+* **mi-scale:** ignore a stable XMTZC04HM frame of 10 kg or less ([140466f](https://github.com/KristianP26/ble-scale-sync/commit/140466f5f15b63ffac1ed4a003f3dc0134f080be)), closes [#526](https://github.com/KristianP26/ble-scale-sync/issues/526)
+* **qn:** read the 20-byte dialect's 0xB1 result when it comes in one part ([d96b1cb](https://github.com/KristianP26/ble-scale-sync/commit/d96b1cb2e30c73cb5f2627b764a5cbdfd41a0991)), closes [#331](https://github.com/KristianP26/ble-scale-sync/issues/331)
+
 ## [1.39.0](https://github.com/KristianP26/ble-scale-sync/compare/v1.38.0...v1.39.0) (2026-11-02)
 
 
