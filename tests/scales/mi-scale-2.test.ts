@@ -1,4 +1,6 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
+import { evaluateAdvertisement } from '../../src/ble/advertisement.js';
+import { bleLog } from '../../src/ble/types.js';
 import { MiScale2Adapter } from '../../src/scales/mi-scale-2.js';
 import { XiaomiS400Adapter } from '../../src/scales/xiaomi-s400.js';
 import { buildPayload } from '../../src/scales/body-comp-helpers.js';
@@ -7,6 +9,7 @@ import {
   defaultProfile,
   assertPayloadRanges,
 } from '../helpers/scale-test-utils.js';
+import { MI2_LIGHT_STABLE, MI2_WEIGH_IN } from '../helpers/mi-scale-2-422.js';
 
 function makeAdapter() {
   return new MiScale2Adapter();
@@ -271,6 +274,63 @@ describe('MiScale2Adapter', () => {
       const adapter = makeAdapter();
       const buf = makeFrame({ weightRaw: 16000, stable: false });
       expect(adapter.parseServiceData('181b', buf)).toBeNull();
+    });
+  });
+
+  // Moving the scale can leave a stable frame of a few kg. Refused by
+  // isComplete() alone it would be held as a weight-only weigh-in and exported
+  // once the grace runs out (#526), so the parser refuses it.
+  describe('a stable frame of 10 kg or less (#526)', () => {
+    const light = Buffer.from(MI2_LIGHT_STABLE, 'hex');
+
+    it('ignores the stable 1.60 kg frame on every path', () => {
+      const adapter = makeAdapter();
+      expect(adapter.parseServiceData('181b', light)).toBeNull();
+      expect(adapter.parseNotification(light)).toBeNull();
+      expect(
+        evaluateAdvertisement(adapter, {
+          localName: '',
+          serviceUuids: [],
+          serviceData: [{ uuid: '181b', data: light }],
+        }),
+      ).toEqual({ kind: 'wait' });
+    });
+
+    it('still reads the weigh-in of the same unit', () => {
+      const adapter = makeAdapter();
+      expect(adapter.parseServiceData('181b', Buffer.from(MI2_WEIGH_IN, 'hex'))).toEqual({
+        weight: 97.8,
+        impedance: 0,
+      });
+    });
+
+    it('refuses 10.00 kg and reads anything above it, in every unit', () => {
+      const adapter = makeAdapter();
+      const parse = (frame: Buffer) => adapter.parseServiceData('181b', frame);
+      expect(parse(makeFrame({ weightRaw: 2000 }))).toBeNull();
+      expect(parse(makeFrame({ weightRaw: 2001 }))?.weight).toBeCloseTo(10.005);
+      // 22.04 lb is 9.997 kg, 22.05 lb is 10.002 kg.
+      expect(parse(makeFrame({ isLbs: true, weightRaw: 2204 }))).toBeNull();
+      expect(parse(makeFrame({ isLbs: true, weightRaw: 2205 }))?.weight).toBeCloseTo(10.002);
+      // 20.00 jin is 10.00 kg.
+      expect(parse(makeFrame({ isCatty: true, weightRaw: 2000 }))).toBeNull();
+      expect(parse(makeFrame({ isCatty: true, weightRaw: 2001 }))?.weight).toBeCloseTo(10.005);
+    });
+
+    it('logs a repeated frame once', () => {
+      const debug = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+      try {
+        const adapter = makeAdapter();
+        adapter.parseServiceData('181b', light);
+        adapter.parseServiceData('181b', light);
+        const lines = debug.mock.calls.map((c) => String(c[0]));
+        expect(lines).toEqual([
+          `Xiaomi Mi Scale 2: ignoring a stable 1.60 kg frame, 10 kg or less is not a ` +
+            `weigh-in (frame=${MI2_LIGHT_STABLE})`,
+        ]);
+      } finally {
+        debug.mockRestore();
+      }
     });
   });
 

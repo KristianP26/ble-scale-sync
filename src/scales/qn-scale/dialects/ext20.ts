@@ -13,10 +13,12 @@ import { hasValidSumChecksum } from '../frames.js';
 import type { QnSession } from '../session.js';
 
 /**
- * The 20-byte extended dialect (GE CS 10 G, #235). The scale never streams
- * 0x10 after a full body-composition weigh-in, it sends these 0xB4/0xB1
- * result frames instead. The burst's non-weight parts (repeated 0xB4s, the
- * 0xB1 03 02/03 records) come back null, so they are not logged as ignored.
+ * The 20-byte extended dialect (GE CS 10 G #235, Arboleaf CS10G #501 and a
+ * 20-byte CS10E #331). The 20-byte live 0x10 reached this adapter from the
+ * CS10E but never from the GE or the CS10G, and stays undecoded either way:
+ * the weight comes from these 0xB1/0xB4 result frames. The burst's non-weight
+ * parts (repeated 0xB4s, the 0xB1 parts after the first) come back null, so
+ * they are not logged as ignored.
  */
 export const ext20: QnDialectHandler = {
   frame(q, data) {
@@ -30,10 +32,10 @@ export const ext20: QnDialectHandler = {
 /**
  * Decode an extended-dialect completed-weigh-in result frame (#235).
  *
- * Accepts the consolidated 0xB4 (weight at [11]) or, as a fallback, the first
- * multi-part 0xB1 03 01 record (weight at [5]). Returns a weight-only reading
- * (impedance 0 — see RESULT_OPCODE_* for why the raw channels are not used
- * yet), or null when the frame is not a recognised result frame, fails its
+ * Accepts the consolidated 0xB4 (weight at [11]) or the first part of the
+ * 0xB1, however many parts it came in (weight at [5]). Returns a weight-only
+ * reading (impedance 0, see RESULT_OPCODE_* for why the raw channels are not
+ * used yet), or null when the frame is not a recognised result frame, fails its
  * trailing sum checksum, carries an out-of-range weight, or a reading was
  * already emitted this session.
  */
@@ -46,7 +48,13 @@ function resultFrame(s: QnSession, data: Buffer): ScaleReading | null {
   if (!hasValidSumChecksum(data)) return null;
 
   let rawWeight: number | null = null;
-  if (data[0] === RESULT_OPCODE_B1 && data.length >= 7 && data[2] === 0x03 && data[3] === 0x01) {
+  // [2] is how many parts the scale split the record into and [3] which part
+  // this is. The count varies with the connection: three parts on the GE
+  // (#235) and on the CS10G over the ESP32 proxy (#501), one 119-byte part on
+  // the same CS10G with its iPhone app and on a 20-byte CS10E over an ESPHome
+  // proxy (#331). Only the first part carries the slot and the weight: read
+  // from [5], the CS10G's third part gives 6.99 kg.
+  if (data[0] === RESULT_OPCODE_B1 && data.length >= 7 && data[3] === 0x01) {
     // Live sweep record.
     rawWeight = data.readUInt16LE(5);
   } else if (
@@ -56,6 +64,9 @@ function resultFrame(s: QnSession, data: Buffer): ScaleReading | null {
     data[3] === 0x01
   ) {
     // History record: usable only when it was written DURING this session.
+    // Read in the GE's split only (04 01, #235). The CS10G's 03 01 (#501) and
+    // the CS10E's 01 01 (#331) came with a 0xB1 that holds the weigh-in, and
+    // the CS10E's 0xB4 was a record for no user (0xf0) with another weight.
     //
     // Deliberately stricter than the 0x23 stored-record window, which accepts
     // a record from the minute or so before the connect. These scales keep

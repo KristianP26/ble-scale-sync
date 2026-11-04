@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { evaluateAdvertisement } from '../../src/ble/advertisement.js';
+import { bleLog } from '../../src/ble/types.js';
 import { buildPayload } from '../../src/scales/body-comp-helpers.js';
 import { XiaomiMiScaleLegacyAdapter } from '../../src/scales/xiaomi-mi-scale-legacy.js';
 import { defaultProfile } from '../helpers/scale-test-utils.js';
@@ -76,6 +77,40 @@ describe('XiaomiMiScaleLegacyAdapter', () => {
   it('ignores unstable and removed frames', () => {
     expect(adapter.parseServiceData('181d', legacyFrame(0x03, 20110))).toBeNull();
     expect(adapter.parseServiceData('181d', legacyFrame(0xa3, 20110))).toBeNull();
+  });
+
+  // Refused by isComplete() alone, a light stable frame would be held and
+  // exported weight only once the grace runs out (#526).
+  it('ignores a stable frame of 10 kg or less instead of holding it', () => {
+    const light = legacyFrame(0x22, 160); // 0.80 kg
+    expect(adapter.parseServiceData('181d', light)).toBeNull();
+    expect(
+      evaluateAdvertisement(new XiaomiMiScaleLegacyAdapter(), {
+        localName: 'MI SCALE2',
+        serviceUuids: ['181d'],
+        manufacturerData: HUAMI_MANUFACTURER,
+        serviceData: [{ uuid: '181d', data: light }],
+      }),
+    ).toEqual({ kind: 'wait' });
+
+    expect(adapter.parseServiceData('181d', legacyFrame(0x22, 2000))).toBeNull();
+    expect(adapter.parseServiceData('181d', legacyFrame(0x22, 2001))?.weight).toBeCloseTo(10.005);
+  });
+
+  it('logs a repeated light frame once', () => {
+    const debug = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+    try {
+      const fresh = new XiaomiMiScaleLegacyAdapter();
+      const light = legacyFrame(0x22, 160);
+      fresh.parseServiceData('181d', light);
+      fresh.parseServiceData('181d', light);
+      expect(debug.mock.calls.map((c) => String(c[0]))).toEqual([
+        'Xiaomi Mi Smart Scale 2 (XMTZC04HM): ignoring a stable 0.80 kg frame, 10 kg or less ' +
+          'is not a weigh-in (frame=22a000ea070818103913)',
+      ]);
+    } finally {
+      debug.mockRestore();
+    }
   });
 
   it('emits a stable frame immediately instead of starting the impedance grace period', () => {

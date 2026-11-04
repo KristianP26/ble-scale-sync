@@ -6,12 +6,19 @@ import type {
   ScaleReading,
   UserProfile,
 } from '../interfaces/scale-adapter.js';
+import { bleLog } from '../ble/types.js';
 import { buildPayload, normalizeServiceUuid, uuid16 } from './body-comp-helpers.js';
+import { LogKey } from './device-state.js';
 import type { MatchDescriptor } from './match-descriptor.js';
 
 const SVC_WEIGHT_SCALE = uuid16(0x181d);
 const HUAMI_COMPANY_ID = 0x0157;
 const FRAME_LENGTH = 10;
+/**
+ * A stable frame at or below this is not a weigh-in, so the parser refuses it:
+ * left to isComplete(), it would be held and exported weight only if nothing
+ * completes it (#526).
+ */
 const WEIGHT_MIN = 10;
 /** Advertised local name, upper-cased. Exact: 'MI SCALE' prefixes belong to MiScale2Adapter. */
 const LOCAL_NAME = 'MI SCALE2';
@@ -35,6 +42,9 @@ export class XiaomiMiScaleLegacyAdapter implements ScaleAdapterCore, BroadcastSo
     manufacturerId: HUAMI_COMPANY_ID,
   };
   readonly preferPassive = true;
+
+  /** The last light frame logged, so a scale repeating it logs it once. */
+  private readonly lightLog = new LogKey();
 
   matches(device: BleDeviceInfo): boolean {
     // BlueZ exposes neither service data nor manufacturer data before a
@@ -78,6 +88,17 @@ export class XiaomiMiScaleLegacyAdapter implements ScaleAdapterCore, BroadcastSo
       : isCatty
         ? (rawWeight / 100) * 0.5
         : rawWeight / 200;
+
+    if (weight <= WEIGHT_MIN) {
+      const hex = data.toString('hex');
+      if (this.lightLog.first(hex, performance.now())) {
+        bleLog.debug(
+          `${this.name}: ignoring a stable ${weight.toFixed(2)} kg frame, ${WEIGHT_MIN} kg ` +
+            `or less is not a weigh-in (frame=${hex})`,
+        );
+      }
+      return null;
+    }
 
     // Bytes 3..9 contain the Weight Scale Service timestamp. The scale puts it
     // on live frames too, while ScaleReading.timestamp means a historical cache

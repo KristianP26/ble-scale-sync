@@ -603,6 +603,11 @@ export interface BroadcastSource {
    * True if this adapter prefers passive advertisement scanning over a GATT
    * connection. When set, broadcastScan is used even for connectable devices.
    * Adapters that set this must implement parseServiceData or parseBroadcast.
+   *
+   * Their parser must return null for a frame that is not a weigh-in (a light
+   * stable frame, say). A reading isComplete() refuses is held as partial: it
+   * can replace the reading already held, and it is exported weight only if
+   * nothing completes it (#526).
    */
   readonly preferPassive?: boolean;
 

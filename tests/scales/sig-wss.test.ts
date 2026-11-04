@@ -195,6 +195,17 @@ describe('parseSigDateTime on a scale clock that keeps UTC (#510)', () => {
     );
   });
 
+  // Near midnight the host's local date is not the stamp's date, so the round
+  // trip must compare UTC fields.
+  it.each([
+    ['Europe/Madrid', 'ea070701171e00', Date.UTC(2026, 6, 1, 23, 30, 0)],
+    ['America/New_York', 'ea070702001e00', Date.UTC(2026, 6, 2, 0, 30, 0)],
+  ])('reads a stamp whose local date differs on a host in %s', (timeZone, h, at) => {
+    expect(
+      inZone(timeZone, () => parseSigDateTime(Buffer.from(h, 'hex'), 0, 'utc'))?.getTime(),
+    ).toBe(at);
+  });
+
   // London is UTC in winter and an hour ahead in summer: the two readings part
   // only while summer time is on.
   it('parts from local time in London in summer, not in winter', () => {

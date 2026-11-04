@@ -307,6 +307,7 @@ describe('MedisanaBs44xAdapter memory (#511)', () => {
       { uuid: F, data: featureFrame(earlier) },
     ]);
     expect(readings.map((r) => r.fromMemory === true)).toEqual([false, true]);
+    expect(adapter.dedupMark()).toBe(secOf(LAST));
   });
 
   it('says so when a record before any live one is between 60 s and 5 min old', () => {
@@ -345,6 +346,20 @@ describe('MedisanaBs44xAdapter memory (#511)', () => {
     f[0] = 0x70;
     adapter.parseCharNotification(W, weightFrame(raw + 1));
     expect(adapter.parseCharNotification(F, f)).toBeNull();
+  });
+
+  it('ignores frames too short to hold a stamp or the composition, without throwing', () => {
+    const adapter = session(secOf(LAST) - 600);
+    for (const len of [1, 5, 8]) {
+      const w = Buffer.alloc(len);
+      w[0] = 0x1d;
+      expect(adapter.parseCharNotification(W, w)).toBeNull();
+    }
+    for (const len of [1, 5, 15]) {
+      const f = Buffer.alloc(len);
+      f[0] = 0x6f;
+      expect(adapter.parseCharNotification(F, f)).toBeNull();
+    }
   });
 
   it('drops a record stamped before 2015 (clock never set) and says so', () => {

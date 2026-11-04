@@ -43,5 +43,11 @@ export const adverts: AdvertFixture = {
         { atMs: 3000, mfr: HUAMI, svc: { '181d': 'a38e4eea070818103913' } },
       ],
     },
+    'legacy-light-frame': {
+      provenance: 'characterization',
+      source: 'PR #353 timestamp with flags 0x22 and 0.80 kg: a stable frame that is no weigh-in',
+      device: { localName: 'MI SCALE2' },
+      adverts: [{ atMs: 0, mfr: HUAMI, svc: { '181d': '22a000ea070818103913' } }],
+    },
   },
 };

@@ -7,6 +7,7 @@ import type {
   BodyComposition,
 } from '../../src/interfaces/scale-adapter.js';
 import { makeBodyComposition } from '../helpers/scale-test-utils.js';
+import { MI2_LIGHT_STABLE, MI2_WEIGH_IN } from '../helpers/mi-scale-2-422.js';
 
 // Suppress log output during tests.
 vi.spyOn(console, 'log').mockImplementation(() => {});
@@ -539,5 +540,70 @@ describe('handler-node-ble broadcastScanNodeBle with the Silvergear 108 (#357)',
     await vi.advanceTimersByTimeAsync(200);
     const result = await promise;
     expect(result.reading).toEqual({ weight: 108.48, impedance: 0 });
+  });
+});
+
+// ─── Mi Scale 2 through the real adapter (#526) ──────────────────────────────
+
+describe('handler-node-ble broadcastScanNodeBle with the Mi Scale 2 (#526)', () => {
+  const frame = (hex: string): Record<string, { value: Buffer }> => ({
+    '0000181b-0000-1000-8000-00805f9b34fb': { value: Buffer.from(hex, 'hex') },
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useFakeTimers({
+      toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'],
+    });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  async function start(abortSignal?: AbortSignal) {
+    const { MiScale2Adapter } = await import('../../src/scales/mi-scale-2.js');
+    const device = makeDevice();
+    const state: { settled: boolean; ok?: boolean; r?: unknown } = { settled: false };
+    const outcome = _internals
+      .broadcastScanNodeBle(
+        new MiScale2Adapter() as unknown as ScaleAdapter,
+        makeAdapter() as never,
+        device as never,
+        'AA:BB:CC:DD:EE:FF',
+        { abortSignal },
+      )
+      .then(
+        (r) => Object.assign(state, { settled: true, ok: true, r }),
+        () => Object.assign(state, { settled: true, ok: false }),
+      );
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+    return { device, state, outcome };
+  }
+
+  it('a stable 1.60 kg frame is not held, so the grace exports nothing', async () => {
+    const ac = new AbortController();
+    const { device, state, outcome } = await start(ac.signal);
+
+    device.helper.emit('PropertiesChanged', { ServiceData: frame(MI2_LIGHT_STABLE) });
+    await vi.advanceTimersByTimeAsync(IMPEDANCE_GRACE_MS + 100);
+    expect(state.settled).toBe(false);
+
+    ac.abort(new Error('shutdown'));
+    await outcome;
+    expect(state.ok).toBe(false);
+  });
+
+  it('a light frame after the weigh-in does not replace the held weight', async () => {
+    const { device, state, outcome } = await start();
+
+    device.helper.emit('PropertiesChanged', { ServiceData: frame(MI2_WEIGH_IN) });
+    device.helper.emit('PropertiesChanged', { ServiceData: frame(MI2_LIGHT_STABLE) });
+    await vi.advanceTimersByTimeAsync(IMPEDANCE_GRACE_MS + 100);
+    await outcome;
+
+    expect(state.ok).toBe(true);
+    expect((state.r as { reading: ScaleReading }).reading).toEqual({ weight: 97.8, impedance: 0 });
   });
 });

@@ -1,11 +1,15 @@
 import type { AdvertFixture } from '../../helpers/replay/broadcast.js';
 import type { SessionFixture } from '../../helpers/replay/session.js';
+import { MI2_422_STEP_OFF, MI2_LIGHT_STABLE, MI2_WEIGH_IN } from '../../helpers/mi-scale-2-422.js';
 
 /**
  * Xiaomi Mi Scale 2 (MIBCS / MIBFS): read from its 0x181B service data
  * (preferPassive), with a GATT path the transports no longer open for it
  * (#422). The only real frames are the two "load removed" adverts and the
- * GATT unlock echoes from #422 (no MAC in any of them); everything else is
+ * GATT unlock echoes from #422 (no MAC in any of them). The `derived` traces of
+ * #526 clear bits of [1] in those two (tests/helpers/mi-scale-2-422.ts): bit 7
+ * of the 1.60 kg step-off gives a stable light frame, bits 7 and 1 of the idle
+ * frame a stable 97.80 kg weigh-in without impedance. Everything else is
  * `characterization`: 13-byte frames built to the layout in mi-scale-2.ts
  * (control bytes, date 2026-01-01 12:00:00, impedance LE, weight LE), as the
  * adapter's tests build theirs.
@@ -56,6 +60,27 @@ export const adverts: AdvertFixture = {
       adverts: [
         { atMs: 0, svc: { [BCS]: '02a6b207010402371b4a02684c' } },
         { atMs: 1000, svc: { [BCS]: '06a4b207010403032200004001' } },
+      ],
+    },
+    'mi2-light-stable-frame': {
+      provenance: 'derived',
+      source:
+        '#526: the #422 (comment 5961349470) step-off advert with the removed bit cleared (stable 1.60 kg), ' +
+        'repeated, then the real step-off; nameless (proxy path); times assumed',
+      adverts: [
+        { atMs: 0, svc: { [BCS]: MI2_LIGHT_STABLE }, repeat: { count: 2, everyMs: 500 } },
+        { atMs: 1500, svc: { [BCS]: MI2_422_STEP_OFF } },
+      ],
+    },
+    'mi2-step-off-while-held': {
+      provenance: 'derived',
+      source:
+        '#526: a held 97.80 kg weigh-in without impedance (#422 comment 5961349470 idle advert), then the stable 1.60 kg frame and ' +
+        'the real step-off; the grace exports the weigh-in; times assumed',
+      adverts: [
+        { atMs: 0, svc: { [BCS]: MI2_WEIGH_IN }, repeat: { count: 1, everyMs: 500 } },
+        { atMs: 1000, svc: { [BCS]: MI2_LIGHT_STABLE }, repeat: { count: 1, everyMs: 500 } },
+        { atMs: 2000, svc: { [BCS]: MI2_422_STEP_OFF } },
       ],
     },
   },
