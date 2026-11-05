@@ -330,6 +330,31 @@ describe('add-on option qn_user_slot', () => {
   });
 });
 
+// The algorithm byte of the QN profile frame (#331): text, validated 0 to 255
+// like qn_protocol_byte, and it opens the ble block on its own.
+describe('add-on option qn_algorithm', () => {
+  it('is an add-on option, unset by default, validated as text', () => {
+    const { schema } = parse(lf(readFileSync('ble-scale-sync-addon/config.yaml', 'utf8'))) as {
+      schema: Record<string, unknown>;
+    };
+    expect(MANIFEST.options).toHaveProperty('qn_algorithm', '');
+    expect(schema).toHaveProperty('qn_algorithm', 'str?');
+    expect(TRANSLATIONS.configuration).toHaveProperty('qn_algorithm');
+  });
+
+  it('is named as ignored in custom config mode', () => {
+    expect(customConfigBranch()).toMatch(/for _qn in [^;]*\bqn_algorithm\b[^;]*; do/);
+  });
+
+  it('is validated as one byte with the protocol and report bytes', () => {
+    expect(RUN_SH).toMatch(/for _qn in QN_PROTOCOL_BYTE QN_REPORT_BYTE QN_ALGORITHM; do/);
+  });
+
+  it('opens the ble block on its own', () => {
+    expect(RUN_SH).toMatch(/\[ -n "\$QN_ALGORITHM" \] \|\|/);
+  });
+});
+
 // A text option like the other QN switches, so that unset stays unset (#331).
 describe('add-on option qn_result_ack', () => {
   it('is an add-on option, unset by default, validated as text', () => {

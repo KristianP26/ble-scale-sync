@@ -2932,6 +2932,81 @@ describe('AE02 dispatch (#75, #235)', () => {
         }
       });
 
+      describe('ble.qn_algorithm (#331)', () => {
+        // A made-up profile, so the lines below name nobody's.
+        const p170 = (extra: Partial<UserProfile> = {}): UserProfile =>
+          defaultProfile({ age: 30, height: 170, lastKnownWeight: 74.05, ...extra });
+
+        it('sends it on the 19-byte dialect with qn_weight_ack alone', async () => {
+          const debug = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+          try {
+            const adapter = makeAdapter();
+            adapter.configure({ qnWeightAck: true, qnAlgorithm: 7 });
+            const writes = await driveHandshake(adapter, ARBOLEAF_2A_INFO, p170(), arboleaf2a);
+            expect(profileFrames(writes)).toEqual([
+              buildUserProfileFrame(30, 170, 'male', { algorithm: 7 }),
+            ]);
+            expect(debug.mock.calls.map((c) => String(c[0]))).toContain(
+              'QN: A00D profile frame with age 30, height 1700 mm, sex male, algorithm 7 ' +
+                '(ble.qn_weight_ack, 19-byte dialect, #331)',
+            );
+          } finally {
+            debug.mockRestore();
+          }
+        });
+
+        it('replaces the athlete step on the 18-byte dialect', async () => {
+          const adapter = makeAdapter();
+          adapter.configure({ qnUserKey: 1000, qnAlgorithm: 4 });
+          const writes = await driveHandshake(adapter, INFO_461, p170({ isAthlete: true }), physiq);
+          // 04, not the athlete's 0e.
+          expect(profileFrames(writes)).toEqual([buildUserProfileFrame(30, 170, 'male')]);
+        });
+
+        it("is not sent with openScale's profile frame, and the log says so", async () => {
+          const debug = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+          try {
+            const adapter = makeAdapter();
+            adapter.configure({ qnAlgorithm: 7 });
+            const writes = await driveHandshake(adapter, INFO_461, p170(), physiq);
+            expect(profileFrames(writes)).toEqual([OPENSCALE_PROFILE]);
+            const lines = debug.mock.calls.map((c) => String(c[0]));
+            expect(lines).toContain(
+              "QN: ble.qn_algorithm 7 is not sent: this session sends openScale's profile " +
+                'frame, which keeps its own algorithm byte (#331)',
+            );
+          } finally {
+            debug.mockRestore();
+          }
+        });
+
+        it.each([
+          [{ qnAlgorithm: 7 }, 1],
+          [{ qnAlgorithm: 7, qnUserKey: 1000 }, 0],
+          [{ qnAlgorithm: 7, qnWeightAck: true }, 0],
+          [{ qnAlgorithm: 7, qnWeightAck: false }, 1],
+          [{ qnUserKey: 1000 }, 0],
+        ])('warns at configure() when it can never be sent: %o', (opts, count) => {
+          const warn = vi.spyOn(bleLog, 'warn').mockImplementation(() => {});
+          try {
+            makeAdapter().configure(opts);
+            const lines = warn.mock.calls
+              .map((c) => String(c[0]))
+              .filter((l) => l.startsWith('QN: ble.qn_algorithm is set'));
+            expect(lines).toHaveLength(count);
+            if (count) {
+              expect(lines[0]).toBe(
+                'QN: ble.qn_algorithm is set (7) but never sent: only the vendor-app profile ' +
+                  'frame carries it, which needs ble.qn_user_key (on the 19-byte dialect ' +
+                  'ble.qn_weight_ack: true also sends it) (#331).',
+              );
+            }
+          } finally {
+            warn.mockRestore();
+          }
+        });
+      });
+
       // #501: the CS10G app sends the profile frame with key 1000 on this
       // dialect, no A2 at ready time, and its 0x22 and A2 only after the
       // scale's answer to the profile frame.
@@ -2945,6 +3020,7 @@ describe('AE02 dispatch (#75, #235)', () => {
         async function driveTimed(
           adapter: QnScaleAdapter,
           steps: Array<{ frame?: Buffer; advance: number }>,
+          profile: UserProfile = P180,
         ): Promise<{ at: number; data: number[] }[]> {
           vi.useFakeTimers();
           try {
@@ -2956,7 +3032,7 @@ describe('AE02 dispatch (#75, #235)', () => {
               },
               read: async () => Buffer.alloc(0),
               subscribe: async () => {},
-              profile: P180,
+              profile,
               deviceAddress: '',
               availableChars: new Set<string>(),
             } as unknown as ConnectionContext;
@@ -3103,6 +3179,61 @@ describe('AE02 dispatch (#75, #235)', () => {
           } finally {
             vi.useRealTimers();
           }
+        });
+
+        // ble.qn_algorithm (#331): [10] of the profile frame, snapshot in
+        // visitSent for the scale's own composition.
+        it('sends ble.qn_algorithm at [10] of the profile frame', async () => {
+          const debug = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+          try {
+            const adapter = makeAdapter();
+            adapter.configure({ qnUserKey: 1000, qnAlgorithm: 7 });
+            // A made-up profile, so the line below names nobody's.
+            const p170 = defaultProfile({ age: 30, height: 170, gender: 'female' });
+            const writes = await driveTimed(
+              adapter,
+              [...HANDSHAKE_501, { frame: REFUSED_501, advance: 500 }],
+              p170,
+            );
+            const visit = buildUserProfileFrame(30, 170, 'female', { key: 1000, algorithm: 7 });
+            expect(visit[10]).toBe(0x07);
+            expect(profileFrames(writes.map((w) => w.data))).toEqual([visit]);
+            expect(adapter.s.visitSent).toEqual({
+              slot: 1,
+              frame: visit,
+              algorithmFromOption: true,
+            });
+            expect(debug.mock.calls.map((c) => String(c[0]))).toContain(
+              'QN: A00D profile frame with key 1000, age 30, height 1700 mm, sex female, ' +
+                'athlete no, algorithm 7 (ble.qn_user_key, 20-byte dialect, #463)',
+            );
+          } finally {
+            debug.mockRestore();
+          }
+        });
+
+        it('keeps visitSent without the algorithm flag when the option is unset', async () => {
+          const adapter = makeAdapter();
+          adapter.configure({ qnUserKey: 1000 });
+          await driveTimed(adapter, [...HANDSHAKE_501, { frame: REFUSED_501, advance: 500 }]);
+          expect(adapter.s.visitSent).not.toBeNull();
+          expect(Object.keys(adapter.s.visitSent!)).toEqual(['slot', 'frame']);
+          expect(adapter.s.visitSent!.frame[10]).toBe(0x04);
+        });
+
+        // The frame is built when it is sent, so an option set after that
+        // changes nothing in it.
+        it('reads ble.qn_algorithm when the profile frame goes out', async () => {
+          const adapter = makeAdapter();
+          adapter.configure({ qnUserKey: 1000 });
+          await driveTimed(adapter, [
+            ...HANDSHAKE_501.slice(0, 2),
+            { frame: CONFIG_REQ_501, advance: 250 },
+            { frame: REFUSED_501, advance: 0 },
+          ]);
+          adapter.configure({ qnUserKey: 1000, qnAlgorithm: 7 });
+          expect(adapter.s.visitSent!.frame[10]).toBe(0x04);
+          expect(adapter.s.visitSent!.algorithmFromOption).toBeUndefined();
         });
 
         // #331: the CS10E answers the profile frame with seven bytes, its own
@@ -4869,6 +5000,22 @@ describe('buildUserProfileFrame (#331)', () => {
     expect(buildUserProfileFrame(26, 193)).toEqual([
       0xa0, 0x0d, 0x02, 0x01, 0x03, 0xe8, 0x00, 0x1a, 0x07, 0x8a, 0x04, 0x02, 0x4c,
     ]);
+  });
+
+  // ble.qn_algorithm (#331): [10] as given, without the athlete step.
+  it('puts the algorithm option at [10] in place of the default and the athlete step', () => {
+    const plain = buildUserProfileFrame(51, 182);
+    for (const athlete of [false, true]) {
+      const set = buildUserProfileFrame(51, 182, 'male', { athlete, algorithm: 7 });
+      expect(set[10]).toBe(0x07);
+      expect([...set.slice(0, 10), ...set.slice(11, 12)]).toEqual([
+        ...plain.slice(0, 10),
+        ...plain.slice(11, 12),
+      ]);
+      expect(hasValidSumChecksum(set)).toBe(true);
+    }
+    expect(buildUserProfileFrame(51, 182, 'male', { algorithm: 4 })).toEqual(plain);
+    expect(buildUserProfileFrame(51, 182, 'male', { algorithm: 0 })[10]).toBe(0x00);
   });
 
   // [6] is the sex per the vendor's published SDK (0 male, 1 female). Both

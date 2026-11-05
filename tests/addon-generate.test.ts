@@ -392,6 +392,7 @@ describe.skipIf(!HARNESS)(
             qn_weight_ack: 'yes',
             qn_user_key: ' 01000 ',
             qn_user_slot: ' 02 ',
+            qn_algorithm: '7',
             qn_a4_prelude: 'true',
             qn_time_sync_long: 'off',
             qn_config_long: '1',
@@ -420,6 +421,7 @@ describe.skipIf(!HARNESS)(
           qn_weight_ack: true
           qn_user_key: 1000
           qn_user_slot: 2
+          qn_algorithm: 7
           qn_a4_prelude: true
           qn_time_sync_long: false
           qn_config_long: true
@@ -609,6 +611,33 @@ describe.skipIf(!HARNESS)(
         expectLoads(r);
         expect(r.text).not.toContain('qn_user_slot');
         expect(r.stdout).not.toContain('qn_user_slot');
+      });
+    });
+
+    // One byte, normalised like qn_protocol_byte (#331).
+    describe('qn_algorithm', () => {
+      it('writes it in decimal on its own, opening the ble block', () => {
+        const r = generate({ options: { ...DEFAULTS, qn_algorithm: ' 007 ' } });
+        const config = expectLoads(r);
+        expect(config.ble?.qn_algorithm).toBe(7);
+        expect(r.text).toContain(`ble:
+  qn_algorithm: 7
+`);
+      });
+
+      it.each(['256', '-1', '7a', '0x07', '1000'])('drops %s with a warning', (value) => {
+        const r = generate({ options: { ...DEFAULTS, qn_algorithm: value } });
+        const config = expectLoads(r);
+        expect(config.ble?.qn_algorithm).toBeUndefined();
+        expect(r.text).not.toContain('qn_algorithm');
+        expect(r.stdout).toContain(
+          `WARNING: Invalid qn_algorithm '${value}' (expected 0 to 255). Ignoring.`,
+        );
+      });
+
+      it('writes 0, which is a value', () => {
+        const r = generate({ options: { ...DEFAULTS, qn_algorithm: '0' } });
+        expect(expectLoads(r).ble?.qn_algorithm).toBe(0);
       });
     });
 
@@ -1086,6 +1115,15 @@ describe.skipIf(!HARNESS)('run.sh custom_config and the transport options', () =
       "WARNING: custom_config is enabled, so the 'qn_user_slot' option is ignored.",
     );
     expect(r.stdout).toContain("Set 'ble.qn_user_slot' in");
+  });
+
+  it('names qn_algorithm as ignored when it is set', () => {
+    const r = run({ ...CUSTOM, qn_algorithm: '7' });
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain(
+      "WARNING: custom_config is enabled, so the 'qn_algorithm' option is ignored.",
+    );
+    expect(r.stdout).toContain("Set 'ble.qn_algorithm' in");
   });
 
   it('names qn_result_ack as ignored when it is set', () => {

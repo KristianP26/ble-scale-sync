@@ -61,6 +61,7 @@ options:
   qn_weight_ack: ''
   qn_user_key: ''
   qn_user_slot: ''
+  qn_algorithm: ''
   qn_a4_prelude: ''
   qn_time_sync_long: ''
   qn_config_long: ''
@@ -123,6 +124,7 @@ schema:
   qn_weight_ack: str?
   qn_user_key: str?
   qn_user_slot: str?
+  qn_algorithm: str?
   qn_a4_prelude: str?
   qn_time_sync_long: str?
   qn_config_long: str?

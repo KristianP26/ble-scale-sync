@@ -477,6 +477,11 @@ export interface UserProfileFrameOptions {
   key?: number;
   /** Add VISIT_ATHLETE_STEP to the algorithm byte at [10]. */
   athlete?: boolean;
+  /**
+   * The algorithm byte at [10] as given (`ble.qn_algorithm`, #331), in place
+   * of VISIT_ALGORITHM and the athlete step.
+   */
+  algorithm?: number;
 }
 
 /**
@@ -508,7 +513,8 @@ export function buildUserProfileFrame(
   opts: UserProfileFrameOptions = {},
 ): number[] {
   const key = opts.key ?? VENDOR_APP_USER_KEY;
-  const algorithm = opts.athlete ? VISIT_ALGORITHM + VISIT_ATHLETE_STEP : VISIT_ALGORITHM;
+  const algorithm =
+    opts.algorithm ?? (opts.athlete ? VISIT_ALGORITHM + VISIT_ATHLETE_STEP : VISIT_ALGORITHM);
   const a = Number.isFinite(age)
     ? Math.min(0xff, Math.max(1, Math.round(age)))
     : OPENSCALE_PROFILE_AGE;
@@ -526,7 +532,7 @@ export function buildUserProfileFrame(
     a,
     (mm >> 8) & 0xff,
     mm & 0xff,
-    algorithm,
+    algorithm & 0xff,
     0x02,
   ];
   return [...cmd, cmd.reduce((s, b) => s + b, 0) & 0xff];

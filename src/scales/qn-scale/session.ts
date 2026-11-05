@@ -119,7 +119,12 @@ export class QnSession {
    */
   live20Block: Buffer[] = [];
   live20C15: Buffer | null = null;
-  visitSent: { slot: number; frame: readonly number[] } | null = null;
+  /**
+   * `algorithmFromOption`: [10] came from `ble.qn_algorithm`, snapshot at send
+   * time so a reload during the weigh-in does not change what the frame
+   * carried. Present only then (#331).
+   */
+  visitSent: { slot: number; frame: readonly number[]; algorithmFromOption?: true } | null = null;
   visitReply: { slot: number; ok: boolean } | null = null;
 
   /** The user slot of the profile frame this session sent, 1 if none (`ble.qn_user_slot`, #501). */

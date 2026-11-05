@@ -61,7 +61,7 @@ export interface ScaleCompositionPin {
   result: EightResult;
   composition: VaComposition;
   /** The profile frame this session sent and its user slot; null if none. */
-  visit: { slot: number; frame: readonly number[] } | null;
+  visit: { slot: number; frame: readonly number[]; algorithmFromOption?: true } | null;
   /** The scale's answer to it: `a1 <len> 02 <slot> <1 accepted | 0> .. <cs>`. */
   reply: { slot: number; ok: boolean } | null;
   /** Bit 0 of the ready frame's [3]: 1 when muscle and bone are percentages. */

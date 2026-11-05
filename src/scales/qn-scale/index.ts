@@ -117,6 +117,7 @@ function qnOptions(o: QnRuntimeOptions) {
     weightAck: o.qnWeightAck ?? null,
     userKey: o.qnUserKey ?? null,
     userSlot: o.qnUserSlot ?? null,
+    algorithm: o.qnAlgorithm ?? null,
     a4Prelude: o.qnA4Prelude === true,
     configLong: o.qnConfigLong === true,
     timeSyncLong: o.qnTimeSyncLong === true,
@@ -314,6 +315,17 @@ export class QnScaleAdapter
             'user slot 1 (#501).',
         );
       }
+    }
+    if (
+      this.opts.algorithm !== null &&
+      this.opts.userKey === null &&
+      this.opts.weightAck !== true
+    ) {
+      bleLog.warn(
+        `QN: ble.qn_algorithm is set (${this.opts.algorithm}) but never sent: only the ` +
+          'vendor-app profile frame carries it, which needs ble.qn_user_key (on the 19-byte ' +
+          'dialect ble.qn_weight_ack: true also sends it) (#331).',
+      );
     }
     this.userWeights = opts.userWeights ?? [];
   }
@@ -1385,7 +1397,8 @@ export class QnScaleAdapter
     // them: the 19-byte dialect with `ble.qn_weight_ack` (#331, D033), and the
     // 18-, 19- and 20-byte ones with `ble.qn_user_key`, which also sets the user
     // key at [4..5] (#463, D055, #501). The athlete step in [10] is the Feelfit
-    // app's on the 18-byte dialect only; see VISIT_ALGORITHM.
+    // app's on the 18-byte dialect only; see VISIT_ALGORITHM. `ble.qn_algorithm`
+    // replaces [10] whole, athlete step included (#331).
     let msg2 = withChecksum([
       0xa0, 0x0d, 0x02, 0x01, 0x00, 0x08, 0x00, 0x21, 0x06, 0xb8, 0x04, 0x02,
     ]);
@@ -1395,23 +1408,34 @@ export class QnScaleAdapter
       const athlete =
         this.s.kind === 'va18' && profile.isAthlete && profile.age >= VISIT_ATHLETE_MIN_AGE;
       const slot = this.configuredSlot() ?? 1;
+      const algorithm = this.opts.algorithm;
       msg2 = buildUserProfileFrame(profile.age, profile.height, profile.gender, {
         slot,
         key,
         athlete,
+        ...(algorithm !== null ? { algorithm } : {}),
       });
-      this.s.visitSent = { slot: msg2[3], frame: msg2 };
+      // The flag only when set, so a session without the option pins what it
+      // always has (#331).
+      this.s.visitSent = {
+        slot: msg2[3],
+        frame: msg2,
+        ...(algorithm !== null ? { algorithmFromOption: true as const } : {}),
+      };
       const sent =
         `age ${msg2[7]}, height ${(msg2[8] << 8) | msg2[9]} mm, ` +
         `sex ${msg2[6] === 0x01 ? 'female' : 'male'}`;
+      const algorithmPart = algorithm === null ? '' : `, algorithm ${msg2[10]}`;
       // The slot is named only with ble.qn_user_slot, so a slot-1 line reads
       // as it always has.
       const slotPart = this.configuredSlot() === null ? '' : `user slot ${slot}, `;
       bleLog.debug(
         this.opts.userKey === null
-          ? `QN: A00D profile frame with ${sent} (ble.qn_weight_ack, 19-byte dialect, #331)`
+          ? `QN: A00D profile frame with ${sent}${algorithmPart} (ble.qn_weight_ack, 19-byte ` +
+              'dialect, #331)'
           : `QN: A00D profile frame with key ${key}, ${slotPart}${sent}, athlete ` +
-              `${athlete ? 'yes' : 'no'} (ble.qn_user_key, ${this.dialectBytes()}-byte dialect, #463)`,
+              `${athlete ? 'yes' : 'no'}${algorithmPart} (ble.qn_user_key, ` +
+              `${this.dialectBytes()}-byte dialect, #463)`,
       );
     } else if (!appProfile && this.opts.userKey !== null && !this.wantsAppProfileSequence()) {
       // A 0x12 of 18 bytes or longer that came after the decision has its own
@@ -1419,6 +1443,12 @@ export class QnScaleAdapter
       bleLog.debug(
         "QN: ble.qn_user_key is not used on this dialect, sending openScale's profile frame " +
           '(18-, 19- and 20-byte scale-info frames only, #463)',
+      );
+    }
+    if (!appProfile && this.opts.algorithm !== null) {
+      bleLog.debug(
+        `QN: ble.qn_algorithm ${this.opts.algorithm} is not sent: this session sends ` +
+          "openScale's profile frame, which keeps its own algorithm byte (#331)",
       );
     }
     await this.writeCmd(msg2);

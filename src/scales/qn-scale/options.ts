@@ -92,6 +92,24 @@ export const QN_BLE_OPTIONS = {
    */
   qn_user_slot: z.number().int().min(1).max(8).optional().nullable(),
   /**
+   * Algorithm byte [10] of the QN profile frame, 0 to 255 (#331).
+   * Experimental.
+   *
+   * Per the vendor's published SDK the scale does not report this byte: the
+   * app picks a body-fat method from its own settings for the scale model,
+   * and an 8-electrode scale without such a setting gets 7. The scale then
+   * computes its own body composition with that method. ble-scale-sync sends
+   * 4 (14 for an athlete aged 18 or older on the 18-byte dialect), and nothing
+   * in the frames tells which value a unit expects.
+   *
+   * Set, it goes into the profile frame as given, without the athlete step,
+   * wherever the vendor-app profile frame is sent: with `qn_user_key` on the
+   * 18-, 19- and 20-byte dialects, and with `qn_weight_ack` on the 19-byte one.
+   * Elsewhere openScale's frame goes out and this is not sent. Left unset it
+   * changes nothing.
+   */
+  qn_algorithm: z.number().int().min(0).max(255).optional().nullable(),
+  /**
    * Send the two 0xA4 0x0F frames an Arboleaf vendor app sends between START
    * and the first live 0x10 weight frame (#331).
    *

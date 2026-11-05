@@ -225,13 +225,17 @@ export const USER_DELETE_SUBCOMMAND = 0x04;
 export const VENDOR_APP_USER_KEY = 0x03e8;
 
 /**
- * Algorithm byte at [10] of the profile frame. Per the vendor's published SDK
- * the app derives it from the scale's algorithm type (type 5 maps to 4) and
- * adds VISIT_ATHLETE_STEP for an athlete, and only for a user older than 17
- * (VISIT_ATHLETE_MIN_AGE). The Feelfit capture on the 18-byte Physiq carries
- * 0x0e for an athlete (#463). The 19-byte dialect keeps 0x04 for everyone: that
- * is what the Arboleaf capture carries, and an athlete value there is untested
- * (D047).
+ * Algorithm byte at [10] of the profile frame, the default when
+ * `ble.qn_algorithm` is unset. Per the vendor's published SDK the scale never
+ * reports it: the app picks a body-fat method from its own settings for the
+ * scale model and maps it to this byte (method 5 maps to 4), adding
+ * VISIT_ATHLETE_STEP for an athlete older than 17 (VISIT_ATHLETE_MIN_AGE).
+ * For an 8-electrode scale whose settings name no method the SDK sends 7.
+ * The Feelfit capture on the 18-byte Physiq carries 0x0e for an athlete
+ * (#463); the GE and Arboleaf (19-byte) app frames in frames.ts carry 0x04. The
+ * 19-byte dialect keeps 0x04 for everyone: an athlete value there is untested
+ * (D047). Nothing in the frames tells which value a unit expects, so this
+ * stays the default and the option sets another one (#331, D095).
  */
 export const VISIT_ALGORITHM = 0x04;
 export const VISIT_ATHLETE_STEP = 10;

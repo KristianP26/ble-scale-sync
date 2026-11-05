@@ -83,6 +83,18 @@ ble:
   qn_user_slot: 2
 ```
 
+## Algorithm Byte {#algorithm-byte}
+
+The profile frame tells the scale which body-fat method to compute with. The scale never reports which one it expects: the vendor app picks it from its own settings for the scale model, and per the vendor's published SDK an 8-electrode scale without such a setting gets 7. ble-scale-sync sends 4, or 14 for an athlete aged 18 or older on the 18-byte dialect.
+
+`qn_algorithm` (Experimental, 0 to 255) sends another value. It goes into the profile frame as given, with no athlete step, wherever the vendor-app profile frame goes out: with `qn_user_key` on the 18-, 19- and 20-byte dialects, and with `qn_weight_ack: true` on the 19-byte dialect. Without either, a warning says it is never sent. The debug log names it:
+
+```text
+QN: A00D profile frame with key 1000, age 30, height 1700 mm, sex female, athlete no, algorithm 7 (ble.qn_user_key, 20-byte dialect, #463)
+```
+
+The scale computes its own body composition with the method this byte names. If you try a value, report on [#331](https://github.com/KristianP26/ble-scale-sync/issues/331) whether the scale's results changed.
+
 ## Arboleaf Scales (19-Byte Dialect)
 
 Set `qn_weight_ack: true` and `qn_time_sync_long: true` from the start and keep `qn_a4_prelude` off.
