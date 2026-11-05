@@ -7,7 +7,7 @@ const log = createLogger('UserMatch');
 
 export interface MatchResult {
   user: UserConfig | null;
-  tier: 'exact' | 'tiebreak' | 'last_known' | 'strategy';
+  tier: 'slot' | 'exact' | 'tiebreak' | 'last_known' | 'strategy';
   warning?: string;
   /**
    * True when several users fit and nothing about them decided between them,
@@ -20,6 +20,20 @@ export interface MatchResult {
 }
 
 // --- Helpers ---
+
+/**
+ * The one user whose `beurer_user_index` is the frame's scale user slot, or
+ * null when the frame names no slot, nobody claims it, or several users claim
+ * it (a config error: the caller then falls back to weight matching).
+ *
+ * The slot byte is authoritative when present: two people can sit close in
+ * weight, and weight alone then picks the wrong one.
+ */
+export function ownerOfSlot(users: UserConfig[], userIndex: number | undefined): UserConfig | null {
+  if (userIndex === undefined) return null;
+  const owners = users.filter((u) => u.beurer_user_index === userIndex);
+  return owners.length === 1 ? owners[0] : null;
+}
 
 function inRange(weight: number, user: UserConfig): boolean {
   return weight >= user.weight_range.min && weight <= user.weight_range.max;

@@ -9,7 +9,13 @@ import type {
 import type { WeightUnit, UserConfig } from '../config/schema.js';
 import type { AppContext } from './context.js';
 import { resolveUserProfile } from '../config/resolve.js';
-import { matchUserByWeight, detectWeightDrift, isOutOfRange } from '../config/user-matching.js';
+import {
+  matchUserByWeight,
+  ownerOfSlot,
+  detectWeightDrift,
+  isOutOfRange,
+  type MatchResult,
+} from '../config/user-matching.js';
 import { updateLastKnownWeight } from '../config/write.js';
 import { dispatchExports, type ExportAttempt } from '../orchestrator.js';
 import { createLogger } from '../logger.js';
@@ -638,11 +644,12 @@ async function processMultiUser(
   }
 
   if (latestLive) {
-    const match = matchUserByWeight(
-      ctx.config.users,
-      latestLive.reading.weight,
-      ctx.config.unknown_user,
-    );
+    // The frame's own user slot decides when one user claims it. Weight is only
+    // the fallback for a frame that names no slot, or a slot nobody claims.
+    const slotOwner = ownerOfSlot(ctx.config.users, latestLive.reading.userIndex);
+    const match: MatchResult = slotOwner
+      ? { user: slotOwner, tier: 'slot' }
+      : matchUserByWeight(ctx.config.users, latestLive.reading.weight, ctx.config.unknown_user);
     if (!match.user) {
       // matchUserByWeight has already logged its warning, if it has one.
       ctx.display?.beep(600, 150, 3);
