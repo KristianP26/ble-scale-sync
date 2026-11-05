@@ -87,6 +87,7 @@ import { ext20 } from './dialects/ext20.js';
 import { unknown } from './dialects/unknown.js';
 import * as va18 from './dialects/va18.js';
 import * as va19 from './dialects/va19.js';
+import { scaleCompositionPayload, type ScaleCompositionPin } from './own-composition.js';
 import { QnLedger } from './stored-ledger.js';
 import { QnSession } from './session.js';
 
@@ -1652,9 +1653,9 @@ export class QnScaleAdapter
 
   computeMetrics(reading: ScaleReading, profile: UserProfile): BodyComposition {
     // The 19-byte dialect's own results, when they belong to this user (#331).
-    const pin = reading.scaleComposition as va19.ScaleCompositionPin | undefined;
+    const pin = reading.scaleComposition as ScaleCompositionPin | undefined;
     if (pin) {
-      const payload = va19.scaleCompositionPayload(pin, reading, profile);
+      const payload = scaleCompositionPayload(pin, reading, profile);
       if (payload) return payload;
     }
 
