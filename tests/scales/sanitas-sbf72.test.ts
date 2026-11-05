@@ -265,6 +265,24 @@ describe('SanitasSbf72Adapter: 0x2A9D and the SIG time stamp', () => {
     }
   });
 
+  // The 0x2A9D frame names user slot 1, the slot this adapter always consents
+  // as, so it says nothing about who is on the scale.
+  it('does not pass the slot of its fixed consent on as userIndex', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 4, 12, 18, 54, 0));
+    try {
+      const parse = charParser(makeAdapter());
+      const weight = parse(CHR_WSS, WSS);
+      expect(weight).not.toBeNull();
+      expect(weight!.userIndex).toBeUndefined();
+      const reading = parse(CHR_BCS, BCS);
+      expect(reading).not.toBeNull();
+      expect(reading!.userIndex).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('keeps the SIG time stamp, so a stored record is not exported as today', () => {
     const reading = charParser(makeAdapter())(CHR_WSS, WSS);
     expect(reading!.timestamp).toEqual(new Date(2026, 4, 12, 18, 53, 54));

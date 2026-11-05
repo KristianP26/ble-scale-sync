@@ -105,7 +105,8 @@ export interface ScaleReading<C = unknown> {
    * byte). In multi-user mode it attributes the reading, live or stored, before
    * weight matching is tried (D027, D094): it is matched against
    * `users[].beurer_user_index`. Leave undefined when the frame does not carry
-   * one; never default it, or every weigh-in lands on the user of that slot.
+   * one, or when it is the fixed slot the adapter signs in as for everyone;
+   * never default it, or every weigh-in lands on the user of that slot.
    */
   userIndex?: number;
   /**
