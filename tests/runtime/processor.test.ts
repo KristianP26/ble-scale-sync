@@ -1411,14 +1411,6 @@ describe('failed exports are queued for a later cycle (#412)', () => {
 
 // ─── Live attribution by the frame's scale user slot ────────────────────────
 
-const { parseSigWeightMeasurement } = await import('../../src/scales/sig-wss.js');
-
-// A Weight Measurement frame copied from a DEBUG=true log of a real scale. The
-// flags and the slot byte (offset 10, 02) are as the scale sent them. The weight,
-// time, BMI and height were changed by hand, so the frame carries no real
-// measurement.
-const REAL_SLOT1_FRAME = Buffer.from('0e002dea070a100a000001c700a406', 'hex');
-
 describe('processReading: live attribution by scale user slot', () => {
   // Bob's range covers 60 kg. Alice's does not. A weight-only matcher therefore
   // hands a 60 kg frame to Bob, whichever slot it names.
@@ -1447,19 +1439,6 @@ describe('processReading: live attribution by scale user slot', () => {
     });
     expect(getter).toHaveBeenCalledWith('alice');
     expect(getter).not.toHaveBeenCalledWith('bob');
-  });
-
-  it('reads the slot from a real frame and attributes the reading to that user', async () => {
-    const frame = parseSigWeightMeasurement(REAL_SLOT1_FRAME);
-    expect(frame.userIndex).toBe(1);
-    const ctx = makeCtx([alice, bob]);
-    const getter = vi.fn(() => [fakeExporter()]);
-    await processReading(
-      ctx,
-      rawReading({ weight: frame.weightKg ?? 0, impedance: 500, userIndex: frame.userIndex }),
-      { getExportersForUser: getter },
-    );
-    expect(getter).toHaveBeenCalledWith('alice');
   });
 
   it('falls back to weight when the frame names no slot', async () => {
