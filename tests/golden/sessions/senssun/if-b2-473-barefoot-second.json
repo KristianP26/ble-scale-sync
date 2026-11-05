@@ -1,0 +1,117 @@
+{
+  "settled": {
+    "by": "reading",
+    "atMs": 3897
+  },
+  "reading": {
+    "weight": 94.3,
+    "impedance": 0,
+    "scaleComposition": {
+      "fat": 27.9,
+      "recordInRange": true,
+      "sent": {
+        "gender": "male",
+        "height": 176,
+        "age": 42,
+        "isAthlete": false,
+        "birthDate": null,
+        "clamped": false
+      },
+      "multiUser": null
+    }
+  },
+  "history": [],
+  "subscribes": [
+    {
+      "seq": 0,
+      "atMs": 0,
+      "uuid": "fff1"
+    }
+  ],
+  "writes": [
+    {
+      "seq": 1,
+      "atMs": 2000,
+      "uuid": "fff2",
+      "hex": "100000c51303010000000101b02a0000005e51",
+      "withResponse": true
+    },
+    {
+      "seq": 2,
+      "atMs": 2200,
+      "uuid": "fff2",
+      "hex": "100000c51303010000000101b02a0000005e51",
+      "withResponse": true
+    },
+    {
+      "seq": 3,
+      "atMs": 2400,
+      "uuid": "fff2",
+      "hex": "100000c51303010000000101b02a0000005e51",
+      "withResponse": true
+    },
+    {
+      "seq": 4,
+      "atMs": 2600,
+      "uuid": "fff2",
+      "hex": "100000c51303010000000101b02a0000005e51",
+      "withResponse": true
+    },
+    {
+      "seq": 5,
+      "atMs": 2800,
+      "uuid": "fff2",
+      "hex": "100000c51303010000000101b02a0000005e51",
+      "withResponse": true
+    },
+    {
+      "seq": 6,
+      "atMs": 3000,
+      "uuid": "fff2",
+      "hex": "100000c51303010000000101b02a0000005e51",
+      "withResponse": true
+    },
+    {
+      "seq": 7,
+      "atMs": 3200,
+      "uuid": "fff2",
+      "hex": "100000c51303010000000101b02a0000005e51",
+      "withResponse": true
+    },
+    {
+      "seq": 8,
+      "atMs": 3400,
+      "uuid": "fff2",
+      "hex": "100000c51303010000000101b02a0000005e51",
+      "withResponse": true
+    },
+    {
+      "seq": 9,
+      "atMs": 3600,
+      "uuid": "fff2",
+      "hex": "100000c51303010000000101b02a0000005e51",
+      "withResponse": true
+    },
+    {
+      "seq": 10,
+      "atMs": 3800,
+      "uuid": "fff2",
+      "hex": "100000c51303010000000101b02a0000005e51",
+      "withResponse": true
+    }
+  ],
+  "rxDropped": 0,
+  "payload": {
+    "weight": 94.3,
+    "impedance": 0,
+    "bmi": 30.44,
+    "bodyFatPercent": 27.9,
+    "waterPercent": 52.63,
+    "boneMass": 2.86,
+    "muscleMass": 65.13,
+    "visceralFat": 14,
+    "physiqueRating": 1,
+    "bmr": 1838,
+    "metabolicAge": 47
+  }
+}

@@ -112,7 +112,7 @@ On firmware that sends it, the body fat the scale computed itself is used, and w
 
 ### Scales That Compute Their Own Composition {#arboleaf-and-other-8-electrode-qn-scales-19-byte-dialect}
 
-<span id="renpho-r-msc04-morphoscan-nova"></span>The Arboleaf and other 19-byte QN scales, the Renpho R-MSC04 and the Huawei CH100 / AH100 (body fat only) compute body composition themselves for a profile ble-scale-sync sends them. Their values are used only when that profile matches the user the weigh-in goes to; see [QN Scales](/guide/scales/qn), [Renpho Scales](/guide/scales/renpho) and [Huawei CH100 / AH100](/guide/supported-scales#huawei-ch100-ah100).
+<span id="renpho-r-msc04-morphoscan-nova"></span>The Arboleaf and other 19-byte QN scales, the Renpho R-MSC04, and the Huawei CH100 / AH100 and Senssun IF_B2 (body fat only) compute body composition themselves for a profile ble-scale-sync sends them. Their values are used only when that profile matches the user the weigh-in goes to; see [QN Scales](/guide/scales/qn), [Renpho Scales](/guide/scales/renpho), [Huawei CH100 / AH100](/guide/supported-scales#huawei-ch100-ah100) and [Senssun IF_B2](/guide/supported-scales#senssun-if-b2).
 
 ## References
 

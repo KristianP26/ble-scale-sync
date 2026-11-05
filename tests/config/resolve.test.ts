@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
   resolveDisplayUnit,
   resolveUserProfile,
@@ -501,7 +501,11 @@ describe('buildAdapterRuntimeConfig (X-06)', () => {
 
   it.each(cases)('$name', ({ config, scaleMac, expected }) => {
     const out = buildAdapterRuntimeConfig(config, scaleMac);
-    expect(out).toStrictEqual({ ...expected, userWeights: config.users });
+    expect(out).toStrictEqual({
+      ...expected,
+      userWeights: config.users,
+      profileForWeight: expect.any(Function),
+    });
     // The live entries, not copies: the processor moves last_known_weight on them.
     expect(out.userWeights).toBe(config.users);
   });
@@ -531,5 +535,81 @@ describe('buildAdapterRuntimeConfig (X-06)', () => {
       const out = buildAdapterRuntimeConfig(config, undefined) as Record<string, unknown>;
       expect(out[field], `${key} -> ${field}`).toBe(value);
     }
+  });
+
+  describe('profileForWeight', () => {
+    afterEach(() => vi.restoreAllMocks());
+
+    const ALICE: UserConfig = {
+      ...USER,
+      name: 'Alice',
+      slug: 'alice',
+      height: 165,
+      birth_date: '1980-02-01',
+      gender: 'female',
+      is_athlete: false,
+      weight_range: { min: 50, max: 70 },
+    };
+    const BOB: UserConfig = {
+      ...USER,
+      name: 'Bob',
+      slug: 'bob',
+      weight_range: { min: 75, max: 100 },
+    };
+    const lookup = (users: UserConfig[], over: Partial<AppConfig> = {}) => {
+      const fn = buildAdapterRuntimeConfig(
+        { ...BASE_CONFIG, users, ...over },
+        undefined,
+      ).profileForWeight;
+      expect(fn).toBeTypeOf('function');
+      return fn!;
+    };
+    const silence = () => [
+      vi.spyOn(console, 'log').mockImplementation(() => {}),
+      vi.spyOn(console, 'warn').mockImplementation(() => {}),
+    ];
+
+    it('gives a single user out of range their profile, without a log line', () => {
+      const spies = silence();
+      expect(lookup([USER])(150)).toEqual(resolveUserProfile(USER, SCALE_CM));
+      for (const spy of spies) expect(spy).not.toHaveBeenCalled();
+    });
+
+    it('picks the user whose range holds the weight', () => {
+      const fn = lookup([ALICE, BOB]);
+      expect(fn(60)).toEqual(resolveUserProfile(ALICE, SCALE_CM));
+      expect(fn(80)).toEqual(resolveUserProfile(BOB, SCALE_CM));
+    });
+
+    it('breaks an overlap by last_known_weight, else by config order, silently', () => {
+      const spies = silence();
+      const wide = { ...BOB, weight_range: { min: 60, max: 100 } };
+      expect(lookup([ALICE, wide])(65)).toEqual(resolveUserProfile(ALICE, SCALE_CM));
+      const wideNear = { ...wide, last_known_weight: 66 };
+      const aliceFar = { ...ALICE, last_known_weight: 52 };
+      expect(lookup([aliceFar, wideNear])(65)).toEqual(resolveUserProfile(wideNear, SCALE_CM));
+      for (const spy of spies) expect(spy).not.toHaveBeenCalled();
+    });
+
+    it.each(['ignore', 'log'] as const)('returns undefined when %s matches nobody', (strategy) => {
+      const spies = silence();
+      expect(lookup([ALICE, BOB], { unknown_user: strategy })(72)).toBeUndefined();
+      for (const spy of spies) expect(spy).not.toHaveBeenCalled();
+    });
+
+    it('converts height_unit: in to cm', () => {
+      const tall = { ...USER, height: 70 };
+      const profile = lookup([tall], { scale: SCALE_IN })(80);
+      expect(profile?.height).toBeCloseTo(177.8, 5);
+    });
+
+    it('sees a last_known_weight moved after the closure was built', () => {
+      const alice = { ...ALICE, last_known_weight: 52 };
+      const bob = { ...BOB, weight_range: { min: 60, max: 100 }, last_known_weight: 90 };
+      const fn = lookup([alice, bob]);
+      expect(fn(65)?.gender).toBe('female');
+      bob.last_known_weight = 66;
+      expect(fn(65)).toEqual(resolveUserProfile(bob, SCALE_CM));
+    });
   });
 });
