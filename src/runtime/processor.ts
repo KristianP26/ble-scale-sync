@@ -11,7 +11,7 @@ import type { AppContext } from './context.js';
 import { resolveUserProfile } from '../config/resolve.js';
 import {
   matchUserByWeight,
-  ownerOfSlot,
+  slotClaimants,
   detectWeightDrift,
   isOutOfRange,
   type MatchResult,
@@ -584,18 +584,16 @@ function attributeStored(ctx: AppContext, frame: Frame): UserConfig | null {
   const { weight, userIndex } = frame.reading;
   const users = ctx.config.users;
 
-  if (userIndex !== undefined) {
-    const owners = users.filter((u) => u.beurer_user_index === userIndex);
-    if (owners.length === 1) return owners[0];
-    if (owners.length > 1) {
-      log.warn(
-        `${tag} Dropping a stored record of scale user ${userIndex}: ` +
-          `${owners.map((u) => u.name).join(' and ')} all claim that slot (beurer_user_index).`,
-      );
-      return null;
-    }
-    // Nobody claims the slot: the weight is the only evidence left.
+  const owners = slotClaimants(users, userIndex);
+  if (owners.length === 1) return owners[0];
+  if (owners.length > 1) {
+    log.warn(
+      `${tag} Dropping a stored record of scale user ${userIndex}: ` +
+        `${owners.map((u) => u.name).join(' and ')} all claim that slot (beurer_user_index).`,
+    );
+    return null;
   }
+  // No slot, or nobody claims it: the weight is the only evidence left.
 
   const match = matchUserByWeight(users, weight, ctx.config.unknown_user);
   if (!match.user) {
@@ -612,6 +610,21 @@ function attributeStored(ctx: AppContext, frame: Frame): UserConfig | null {
     return null;
   }
   return match.user;
+}
+
+/**
+ * The user a live weigh-in belongs to in multi-user mode.
+ *
+ * The scale's own user slot decides when exactly one user claims it: two
+ * people can weigh about the same, and weight alone then hands one person's
+ * weigh-in, and a body composition computed from the wrong profile, to the
+ * other. Weight matching stays the fallback for a frame that names no slot, or
+ * a slot nobody claims.
+ */
+function matchLive(ctx: AppContext, reading: ScaleReading): MatchResult {
+  const owners = slotClaimants(ctx.config.users, reading.userIndex);
+  if (owners.length === 1) return { user: owners[0], tier: 'slot' };
+  return matchUserByWeight(ctx.config.users, reading.weight, ctx.config.unknown_user);
 }
 
 async function processMultiUser(
@@ -644,12 +657,7 @@ async function processMultiUser(
   }
 
   if (latestLive) {
-    // The frame's own user slot decides when one user claims it. Weight is only
-    // the fallback for a frame that names no slot, or a slot nobody claims.
-    const slotOwner = ownerOfSlot(ctx.config.users, latestLive.reading.userIndex);
-    const match: MatchResult = slotOwner
-      ? { user: slotOwner, tier: 'slot' }
-      : matchUserByWeight(ctx.config.users, latestLive.reading.weight, ctx.config.unknown_user);
+    const match = matchLive(ctx, latestLive.reading);
     if (!match.user) {
       // matchUserByWeight has already logged its warning, if it has one.
       ctx.display?.beep(600, 150, 3);

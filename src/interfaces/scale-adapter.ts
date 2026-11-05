@@ -102,10 +102,10 @@ export interface ScaleReading<C = unknown> {
   /**
    * The scale's own user slot for this reading, when the frame says which
    * profile on the scale it was taken for (a SIG User Index, a vendor user
-   * byte). Used to attribute a stored record in multi-user mode before falling
-   * back to weight matching (D027): it is matched against
+   * byte). In multi-user mode it attributes the reading, live or stored, before
+   * weight matching is tried (D027, D094): it is matched against
    * `users[].beurer_user_index`. Leave undefined when the frame does not carry
-   * one; never default it.
+   * one; never default it, or every weigh-in lands on the user of that slot.
    */
   userIndex?: number;
   /**

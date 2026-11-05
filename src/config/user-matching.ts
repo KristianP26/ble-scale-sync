@@ -22,17 +22,19 @@ export interface MatchResult {
 // --- Helpers ---
 
 /**
- * The one user whose `beurer_user_index` is the frame's scale user slot, or
- * null when the frame names no slot, nobody claims it, or several users claim
- * it (a config error: the caller then falls back to weight matching).
+ * The users whose `beurer_user_index` is the frame's scale user slot, in config
+ * order, or none when the frame names no slot.
  *
- * The slot byte is authoritative when present: two people can sit close in
- * weight, and weight alone then picks the wrong one.
+ * Only a user who SET `beurer_user_index` claims a slot. The consent code falls
+ * back to slot 1 when the key is unset, but that default is not a claim: a user
+ * without the key would otherwise own every slot-1 weigh-in.
+ *
+ * More than one claimant is a config error, and what to do about it differs by
+ * frame, so the caller decides.
  */
-export function ownerOfSlot(users: UserConfig[], userIndex: number | undefined): UserConfig | null {
-  if (userIndex === undefined) return null;
-  const owners = users.filter((u) => u.beurer_user_index === userIndex);
-  return owners.length === 1 ? owners[0] : null;
+export function slotClaimants(users: UserConfig[], userIndex: number | undefined): UserConfig[] {
+  if (userIndex === undefined) return [];
+  return users.filter((u) => u.beurer_user_index === userIndex);
 }
 
 function inRange(weight: number, user: UserConfig): boolean {
