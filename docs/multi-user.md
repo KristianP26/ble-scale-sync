@@ -5,12 +5,12 @@ description: How BLE Scale Sync decides who stepped on the scale, warns about we
 
 # Multi-User Support
 
-With several users configured, the app picks the person on the scale by the measured weight and uses that person's profile and exporters. The [setup wizard](/guide/configuration#setup-wizard-recommended) adds users and their weight ranges.
+With several users configured, the app picks the person on the scale by the scale's user slot, when the scale sends one and exactly one user claims it, or else by the measured weight, and uses that person's profile and exporters. The [setup wizard](/guide/configuration#setup-wizard-recommended) adds users and their weight ranges.
 
 ## How It Works
 
 1. Someone steps on the scale.
-2. The app matches the weight to a user by the users' weight ranges.
+2. The app picks the user who claims the scale's user slot. When no single user claims it, it matches the weight to a user by the users' weight ranges.
 3. Body composition is calculated from that user's profile (height, age, gender, athlete mode).
 4. The reading goes to that user's exporters.
 5. The user's `last_known_weight` in `config.yaml` is updated, which helps the next match.
@@ -29,9 +29,27 @@ users:
 
 Only the fields that matter for matching are shown. Every user also needs `slug`, `height`, `birth_date`, `gender` and `is_athlete`, and the file needs `version: 1`; see the [config.yaml reference](/guide/configuration#config-yaml-reference).
 
+## Scale User Slot
+
+Experimental. The Beurer BF720, BF105, BF500, BF788, BF915 and BF950 send their user slot with each weigh-in; other scales are matched by weight. When exactly one user has that slot as `beurer_user_index`, the weigh-in goes to that user without weight matching, and the log shows `[Alice] Matched (tier: slot)`:
+
+```yaml
+users:
+  - name: Alice
+    beurer_user_index: 1 # slot 1 on the scale
+  - name: Bob
+    beurer_user_index: 2
+```
+
+The app signs in as the first user's slot. If every weigh-in goes to the first user and that slot is 1, leave out the first user's `beurer_user_index`; weight matching then decides.
+
+- Only a value set in `config.yaml` counts. The consent code uses slot 1 when the key is unset, but that does not make the user the owner of slot 1.
+- The slot owner's `weight_range` still applies: with `out_of_range: skip`, a weigh-in outside it is dropped even when another user's range covers it. `unknown_user` does not apply.
+- When two or more users claim the same slot, the live weigh-in is matched by its weight and the log names the users.
+
 ## Weight Matching
 
-The first rule that applies decides:
+When no user slot decides, the first rule that applies picks the user:
 
 | Order | Condition                                        | Result                                                                          |
 | ----- | ------------------------------------------------ | ------------------------------------------------------------------------------- |
@@ -51,7 +69,7 @@ The first rule that applies decides:
 
 So once any user has a `last_known_weight`, a reading outside every range is still assigned to someone. To drop such readings instead, set `out_of_range: skip` ([Out-of-range readings](/guide/configuration#out-of-range-readings)). The setup wizard writes `out_of_range: skip` when it saves a config with more than one user.
 
-A scale that sends weigh-ins stored in its memory has each one assigned by its own weight, or by the scale's user slot when it sends one, not to the person on the scale now. A stored weigh-in that matches nobody, or that several users fit equally, is dropped and logged.
+A scale that sends weigh-ins stored in its memory has each one assigned by its own user slot or weight, as above, not to the person on the scale now. A stored weigh-in that matches nobody, that several users fit equally, or whose slot two or more users claim, is dropped and logged.
 
 ## Drift Detection
 

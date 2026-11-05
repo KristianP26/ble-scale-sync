@@ -77,6 +77,8 @@ users:
     beurer_user_index: 1 # the slot the code belongs to
 ```
 
+With several users on a BF720-family scale, a set `beurer_user_index` assigns the weigh-ins of that slot to its user, see [Scale user slot](/multi-user#scale-user-slot).
+
 ### Restore a Scale That Lost Its Users
 
 Removing the batteries can wipe every user slot and its code on the BF7xx models; the user-slot digit is then gone from the display. A BF915 keeps its slots across a battery change. On an empty scale:

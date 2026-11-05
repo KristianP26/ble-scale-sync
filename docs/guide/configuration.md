@@ -128,7 +128,7 @@ out_of_range: skip
 
 | Key            | Default | Description |
 | -------------- | ------- | ----------- |
-| `out_of_range` | `warn`  | What happens to a reading no user's `weight_range` covers. `warn` logs and exports it; `skip` logs it and stops before the exporters and the `last_known_weight` update. `skip` suits a household with several users. See [Multi-User](/multi-user). |
+| `out_of_range` | `warn`  | What happens to a reading outside the `weight_range` of the user it goes to. `warn` logs and exports it; `skip` logs it and stops before the exporters and the `last_known_weight` update. `skip` suits a household with several users. See [Multi-User](/multi-user). |
 
 ### Users
 
@@ -158,7 +158,7 @@ users:
 | `exporters`                 | (none)  | Exporters for this user only. See [per-user exporters](/multi-user#per-user-exporters). |
 | `estimate_body_composition` | `true`  | `false`: a weigh-in without measured body composition exports no body fat, water, bone mass, muscle mass, visceral fat or physique rating instead of an estimate. See [Exporters](/exporters#weigh-ins-without-body-composition). |
 | `beurer_pin`                | (none)  | Beurer and Sanitas scales with a consent code, 0 to 9999. Read from the first user. See [Beurer and Sanitas](./scales/beurer). |
-| `beurer_user_index`         | `1`     | User slot on the scale that the consent code belongs to. |
+| `beurer_user_index`         | `1`     | User slot on the scale that the consent code belongs to, read from the first user like `beurer_pin`. With several users, a set value also assigns that slot's weigh-ins to this user. See [Scale user slot](/multi-user#scale-user-slot). |
 | `beurer_provision`          | `false` | Write this profile into a Beurer scale that has no stored user. |
 | `beurer_register_new_user`  | `false` | Create a new user record on the scale, once. See [Beurer and Sanitas](./scales/beurer). |
 

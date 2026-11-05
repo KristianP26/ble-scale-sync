@@ -79,7 +79,7 @@ scale:
 #   "ignore"  = silently skip the measurement
 unknown_user: nearest
 
-# What to do with a reading no user's weight_range covers.
+# What to do with a reading outside the weight_range of the user it goes to.
 #   "warn" (default) = log it and export it anyway (the behaviour before
 #                      this option existed)
 #   "skip"           = log it and stop: no export, and last_known_weight is
@@ -89,6 +89,8 @@ out_of_range: warn
 # --- Users ---
 # At least one user is required. For multi-user setups,
 # define weight_range so the app can identify who stepped on the scale.
+# When the scale sends its user slot, the user with that beurer_user_index
+# gets the weigh-in first.
 
 users:
   - name: Alice
@@ -103,7 +105,8 @@ users:
 
     # Beurer BF7xx / BF9xx only (consent-gated SIG scales):
     # beurer_pin: 1234                    # code the scale was paired with; 0 on a wiped scale
-    # beurer_user_index: 1                # scale user slot the code belongs to
+    # beurer_user_index: 1                # scale user slot the code belongs to; with several
+    #                                     # users, that slot's weigh-ins go to this user
     # beurer_provision: false             # write this profile into a scale that has none stored
 
     # Per-user exporters (optional). They are added to global_exporters; a type
