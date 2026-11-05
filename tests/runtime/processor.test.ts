@@ -1504,6 +1504,26 @@ describe('processReading: live attribution by scale user slot', () => {
     expect(getter).toHaveBeenCalledWith('bob');
   });
 
+  // Two users with one beurer_user_index is a config error. A stored record of
+  // that slot is dropped; a live weigh-in still goes by weight, with a warning.
+  it('falls back to weight, with a warning, when two users claim the named slot', async () => {
+    const ctx = makeCtx([alice, { ...bob, beurer_user_index: 1 }]);
+    const getter = vi.fn(() => [fakeExporter()]);
+    await processReading(ctx, rawReading({ weight: 60, impedance: 500, userIndex: 1 }), {
+      getExportersForUser: getter,
+    });
+    expect(getter).toHaveBeenCalledWith('bob');
+    expect(getter).not.toHaveBeenCalledWith('alice');
+    expect(
+      warned().some((l) =>
+        l.includes(
+          'Matching the weigh-in of scale user 1 by its weight: Alice and Bob all claim ' +
+            'that slot (beurer_user_index).',
+        ),
+      ),
+    ).toBe(true);
+  });
+
   it('falls back to weight when no user claims the named slot', async () => {
     const ctx = makeCtx([alice, bob]);
     const getter = vi.fn(() => [fakeExporter()]);

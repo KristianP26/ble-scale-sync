@@ -435,7 +435,8 @@ function recordLiveWeight(ctx: AppContext, user: UserConfig, weight: number, anc
 }
 
 /**
- * Stop a reading nobody's `weight_range` vouches for, when asked to.
+ * Stop a reading outside the `weight_range` of the user it was attributed to,
+ * when asked to.
  *
  * `weight_range` was only ever a MATCHING input. A weight outside every range
  * still resolves to somebody, through the single-user tier that always matches
@@ -620,10 +621,21 @@ function attributeStored(ctx: AppContext, frame: Frame): UserConfig | null {
  * weigh-in, and a body composition computed from the wrong profile, to the
  * other. Weight matching stays the fallback for a frame that names no slot, or
  * a slot nobody claims.
+ *
+ * A slot that several users claim falls back to weight too, with a warning,
+ * where a stored record of that slot is dropped (attributeStored). It is the
+ * same split as for an ambiguous weight match (D027): the person on the scale
+ * sees where the live weigh-in went, and nobody watches a stored record land.
  */
 function matchLive(ctx: AppContext, reading: ScaleReading): MatchResult {
   const owners = slotClaimants(ctx.config.users, reading.userIndex);
   if (owners.length === 1) return { user: owners[0], tier: 'slot' };
+  if (owners.length > 1) {
+    log.warn(
+      `Matching the weigh-in of scale user ${reading.userIndex} by its weight: ` +
+        `${owners.map((u) => u.name).join(' and ')} all claim that slot (beurer_user_index).`,
+    );
+  }
   return matchUserByWeight(ctx.config.users, reading.weight, ctx.config.unknown_user);
 }
 
