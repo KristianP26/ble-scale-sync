@@ -78,7 +78,7 @@ export class QnSession {
   appProfileSequence: boolean | null = null;
 
   /**
-   * Settled by the scale's answer to the profile frame, `a1 06 02 ..`, whatever
+   * Settled by the scale's answer to the profile frame, `a1 <len> 02 ..`, whatever
    * it says (`answerVisit`, from onProfileAnswer). The extended dialect's
    * vendor sequence waits for it before its 0x22 START (#501).
    */

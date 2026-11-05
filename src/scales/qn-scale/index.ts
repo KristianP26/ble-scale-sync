@@ -732,8 +732,8 @@ export class QnScaleAdapter
     }
 
     // 0xA1, 0xA3: acknowledgment frames, nothing to answer. The answer to the
-    // profile frame, `a1 06 02 <slot> <1 accepted | 0>`, is kept: the scale's
-    // own composition is only for a profile it accepted (#331).
+    // profile frame, `a1 <len> 02 <slot> <1 accepted | 0> .. <cs>`, is kept:
+    // the scale's own composition is only for a profile it accepted (#331).
     if (opcode === 0xa1 || opcode === 0xa3) {
       this.onProfileAnswer(data);
       return null;
@@ -801,9 +801,17 @@ export class QnScaleAdapter
     void this.handleScaleInfo();
   }
 
-  /** The scale's answer to the profile frame, `a1 06 02 <slot> <1 accepted | 0>`. */
+  /**
+   * The scale's answer to the profile frame, `a1 <len> 02 <slot> <1 accepted |
+   * 0> .. <cs>`, with its own length at [1]. Six bytes on most scales; the
+   * 20-byte CS10E sends seven (`a1 07 02 01 01 07 b3`, #331). The vendor's
+   * published SDK reads only [2..4] of it, so the bytes after [4] are logged
+   * and not read.
+   */
   private onProfileAnswer(data: Buffer): void {
-    if (data[0] !== 0xa1 || data.length !== 6 || data[1] !== 0x06 || data[2] !== 0x02) return;
+    if (data[0] !== 0xa1 || data.length < 6 || data[1] !== data.length || data[2] !== 0x02) {
+      return;
+    }
     if (!hasValidSumChecksum(data)) return;
     this.s.visitReply = { slot: data[3], ok: data[4] === 0x01 };
     this.s.answerVisit();
@@ -814,6 +822,13 @@ export class QnScaleAdapter
       `QN: the scale ${this.s.visitReply.ok ? 'accepted' : 'did not accept'} the profile ` +
         `for user slot ${data[3]} (#331)`,
     );
+    if (data.length > 6) {
+      const extra = data.subarray(5, -1);
+      bleLog.debug(
+        `QN: the answer to the profile frame has ${extra.length} more byte(s), ` +
+          `${hex(extra)}, not decoded (#331)`,
+      );
+    }
     // The vendor's published SDK asks for the stored weigh-ins as soon as
     // the scale accepts the profile, and the Feelfit capture shows it. The
     // handshake's own 0x22 comes about 125 ms later, and in two logs the

@@ -282,6 +282,23 @@ const B1_CS10E_331 = Buffer.from(
 );
 
 /**
+ * #331, the same CS10E on 2026-11-04 (v1.39.1, ESPHome proxy), byte for byte
+ * from the reporter's public DEBUG log apart from the MAC (as for #461 above):
+ * its 0x12, ready frame, config request and its seven-byte acceptance of the
+ * profile frame for user slot 1, the first two sessions of that log alike.
+ */
+const INFO_CS10E_1104 = Buffer.from('1214ff010000000002220f5100080503e06febf4', 'hex');
+const READY_CS10E_1104 = Buffer.from('140fff01000100006401fd08010190', 'hex');
+const CONFIG_REQ_CS10E_1104 = Buffer.from('2107ff01612cb5', 'hex');
+const VISIT_OK_CS10E_1104 = Buffer.from('a10702010107b3', 'hex');
+/**
+ * Derived from VISIT_OK_CS10E_1104: a seven-byte refusal ([4] 00), and the
+ * acceptance with [1] 06, so [1] no longer gives its length.
+ */
+const VISIT_REFUSED_CS10E = derive(VISIT_OK_CS10E_1104, { 4: 0x00 });
+const VISIT_OK_CS10E_NOT_ITS_LENGTH = derive(VISIT_OK_CS10E_1104, { 1: 0x06 });
+
+/**
  * #463, the Physiq's acceptance of the profile frame for user slot 1 and its
  * stored record of 2026-10-13: 71.55 kg at 17:59:38Z, slot 1; the record's
  * [16..17] zeroed, [19] recomputed.
@@ -322,6 +339,8 @@ const DERIVED: [string, Buffer, Buffer, number[]][] = [
   ['ACCEPTED_SLOT8', ACCEPTED_SLOT8, VISIT_OK_463, [3]],
   ['REFUSED_SLOT2', REFUSED_SLOT2, REFUSED_501, [3]],
   ['RECORD_463_SLOT2', RECORD_463_SLOT2, RECORD_463, [5]],
+  ['VISIT_REFUSED_CS10E', VISIT_REFUSED_CS10E, VISIT_OK_CS10E_1104, [4]],
+  ['VISIT_OK_CS10E_NOT_ITS_LENGTH', VISIT_OK_CS10E_NOT_ITS_LENGTH, VISIT_OK_CS10E_1104, [1]],
 ];
 
 /** Build a fake AABB broadcast buffer with the given weight and stability. */
@@ -3084,6 +3103,97 @@ describe('AE02 dispatch (#75, #235)', () => {
           } finally {
             vi.useRealTimers();
           }
+        });
+
+        // #331: the CS10E answers the profile frame with seven bytes, its own
+        // length at [1]. Read as the six-byte form only, the answer was lost
+        // and START waited the whole VISIT_ANSWER_TIMEOUT_MS.
+        describe("the CS10E's seven-byte answer (#331)", () => {
+          const HANDSHAKE_CS10E = [
+            { frame: INFO_CS10E_1104, advance: 300 },
+            { frame: READY_CS10E_1104, advance: 300 },
+            { frame: CONFIG_REQ_CS10E_1104, advance: 500 },
+          ];
+          const answerAt = 1100;
+          const keyed = (): QnScaleAdapter => {
+            const adapter = makeAdapter();
+            adapter.configure({ qnUserKey: 1000 });
+            return adapter;
+          };
+
+          it("sends START and the anchor pair on the scale's answer", async () => {
+            const adapter = keyed();
+            const writes = await driveTimed(adapter, [
+              ...HANDSHAKE_CS10E,
+              { frame: VISIT_OK_CS10E_1104, advance: 1500 },
+            ]);
+            const visitAt = writes.find((w) => w.data[0] === 0xa0)!.at;
+            expect(answerAt - visitAt).toBeLessThan(1000);
+            expect(writes.filter((w) => w.at > visitAt)).toEqual([
+              { at: answerAt, data: START },
+              { at: answerAt, data: ANCHOR_78 },
+              { at: answerAt + 150, data: ANCHOR_78 },
+            ]);
+            expect(adapter.s.visitAccepted).toBe(true);
+          });
+
+          it('logs the acceptance and the bytes it does not read', async () => {
+            const debug = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+            try {
+              await driveTimed(keyed(), [
+                ...HANDSHAKE_CS10E,
+                { frame: VISIT_OK_CS10E_1104, advance: 1500 },
+              ]);
+              const lines = debug.mock.calls.map((c) => String(c[0]));
+              expect(lines).toContain('QN: the scale accepted the profile for user slot 1 (#331)');
+              expect(lines).toContain(
+                'QN: the answer to the profile frame has 1 more byte(s), 07, not decoded (#331)',
+              );
+              expect(lines.filter((l) => l.includes('no answer to the profile frame'))).toEqual([]);
+            } finally {
+              debug.mockRestore();
+            }
+          });
+
+          // Guard, not a regression test: these were never answers, and the
+          // longer form must not make them one.
+          it.each([
+            ['a bad checksum', Buffer.from([...VISIT_OK_CS10E_1104.subarray(0, -1), 0xb4])],
+            ['[1] that is not its length', VISIT_OK_CS10E_NOT_ITS_LENGTH],
+          ])('does not read a seven-byte frame with %s as the answer', async (_what, frame) => {
+            const adapter = keyed();
+            const writes = await driveTimed(adapter, [
+              ...HANDSHAKE_CS10E,
+              { frame, advance: 1500 },
+            ]);
+            const visitAt = writes.find((w) => w.data[0] === 0xa0)!.at;
+            expect(writes.find((w) => w.data[0] === 0x22)!.at).toBe(visitAt + 1000);
+            expect(adapter.s.visitReply).toBeNull();
+          });
+
+          it('says a seven-byte refusal is a refusal', async () => {
+            const info = vi.spyOn(bleLog, 'info').mockImplementation(() => {});
+            try {
+              const adapter = keyed();
+              const writes = await driveTimed(adapter, [
+                ...HANDSHAKE_CS10E,
+                { frame: VISIT_REFUSED_CS10E, advance: 1500 },
+              ]);
+              expect(writes.find((w) => w.data[0] === 0x22)!.at).toBe(answerAt);
+              expect(adapter.s.visitAccepted).toBe(false);
+              const lines = info.mock.calls.map((c) => String(c[0]));
+              expect(
+                lines.filter((l) =>
+                  l.startsWith(
+                    'QN: the scale refused the profile frame sent with ble.qn_user_key 1000 ' +
+                      'for user slot 1.',
+                  ),
+                ),
+              ).toHaveLength(1);
+            } finally {
+              info.mockRestore();
+            }
+          });
         });
 
         it("keeps openScale's frames and their timing without the key", async () => {

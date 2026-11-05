@@ -472,7 +472,7 @@ export const POST_START_ANCHOR_DELAY_MS = 75;
  * with `ble.qn_user_key` (#501).
  *
  * The Arboleaf CS10G app sends both only once the scale has answered the
- * profile frame (`a1 06 02 ..`), as the vendor's published SDK does, and the
+ * profile frame (`a1 <len> 02 ..`), as the vendor's published SDK does, and the
  * 18-byte dialect already sends its 0x22 on that answer (D065). Through the
  * ESP32 proxy the CS10G's answer reached the host 0.26 to 0.40 s after the
  * frame was written (#501), so 1 s leaves room for a slower link; an answer
