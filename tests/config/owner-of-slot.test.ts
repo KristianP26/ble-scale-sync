@@ -11,29 +11,29 @@ const base = {
   last_known_weight: null,
 };
 
-const brian: UserConfig = { ...base, name: 'Alice', slug: 'brian', beurer_user_index: 1 };
-const carla: UserConfig = { ...base, name: 'Bob', slug: 'carla', beurer_user_index: 2 };
+const alice: UserConfig = { ...base, name: 'Alice', slug: 'alice', beurer_user_index: 1 };
+const bob: UserConfig = { ...base, name: 'Bob', slug: 'bob', beurer_user_index: 2 };
 const unslotted: UserConfig = { ...base, name: 'Guest', slug: 'guest' };
 
 describe('ownerOfSlot', () => {
   it('returns the single user who claims the slot', () => {
-    expect(ownerOfSlot([brian, carla], 2)).toBe(carla);
+    expect(ownerOfSlot([alice, bob], 2)).toBe(bob);
   });
 
   it('returns null when the frame names no slot', () => {
-    expect(ownerOfSlot([brian, carla], undefined)).toBeNull();
+    expect(ownerOfSlot([alice, bob], undefined)).toBeNull();
   });
 
   it('returns null when nobody claims the slot', () => {
-    expect(ownerOfSlot([brian, carla], 7)).toBeNull();
+    expect(ownerOfSlot([alice, bob], 7)).toBeNull();
   });
 
   it('returns null when two users claim the same slot (config error)', () => {
-    const dup: UserConfig = { ...carla, name: 'Dup', slug: 'dup', beurer_user_index: 1 };
-    expect(ownerOfSlot([brian, dup], 1)).toBeNull();
+    const dup: UserConfig = { ...bob, name: 'Dup', slug: 'dup', beurer_user_index: 1 };
+    expect(ownerOfSlot([alice, dup], 1)).toBeNull();
   });
 
   it('ignores users with no beurer_user_index', () => {
-    expect(ownerOfSlot([brian, unslotted], 1)).toBe(brian);
+    expect(ownerOfSlot([alice, unslotted], 1)).toBe(alice);
   });
 });
