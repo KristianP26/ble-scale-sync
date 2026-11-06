@@ -85,8 +85,21 @@ valid_weight_range() {
 # refuses any encryption key that is not base64 of exactly 32 bytes, and it
 # does so as the client is created. Every such key is 43 base64 characters
 # and one = of padding.
+#
+# Shell built-ins only, no grep: the check runs once per start, but a test runs
+# it thousands of times, and a forked grep crashed intermittently there on macOS.
+# A value with a newline in it is refused as a whole, where the grep matched any
+# one line of it.
 valid_esphome_key() {
-  printf '%s\n' "$1" | grep -Eq '^[A-Za-z0-9+/]{43}=$'
+  [ "${#1}" -eq 44 ] || return 1
+  case "$1" in
+    *=) ;;
+    *) return 1 ;;
+  esac
+  case "${1%=}" in
+    *[!A-Za-z0-9+/]*) return 1 ;;
+  esac
+  return 0
 }
 
 # <<< option checks

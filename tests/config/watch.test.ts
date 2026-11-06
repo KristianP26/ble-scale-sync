@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync, renameSync, linkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -17,6 +17,25 @@ vi.spyOn(console, 'error').mockImplementation(() => {});
 
 const DEBOUNCE_MS = 500;
 const SETTLE_MS = DEBOUNCE_MS + 200;
+
+/**
+ * Wait until `onChange` has fired `calls` times, then let a whole debounce
+ * window pass and check it did not fire again.
+ *
+ * A fixed wait of DEBOUNCE_MS + 200 ms was a guess at how late the operating
+ * system would deliver the file event, and a loaded machine (the full suite runs
+ * hundreds of files at once) delivers it later than that. Waiting for the call,
+ * with a generous ceiling, removes the guess; the second wait keeps the
+ * assertion that a burst of edits fires exactly once.
+ */
+async function expectFires(onChange: Mock, calls = 1): Promise<void> {
+  await vi.waitFor(() => expect(onChange).toHaveBeenCalledTimes(calls), {
+    timeout: 10_000,
+    interval: 25,
+  });
+  await new Promise((r) => setTimeout(r, SETTLE_MS));
+  expect(onChange).toHaveBeenCalledTimes(calls);
+}
 
 let tmpDir: string;
 let configPath: string;
@@ -39,8 +58,7 @@ describe('startConfigWatcher', () => {
 
     try {
       writeFileSync(configPath, 'version: 1\nedited: true\n');
-      await new Promise((r) => setTimeout(r, SETTLE_MS));
-      expect(onChange).toHaveBeenCalledTimes(1);
+      await expectFires(onChange);
     } finally {
       handle.close();
     }
@@ -55,8 +73,7 @@ describe('startConfigWatcher', () => {
       writeFileSync(configPath, 'version: 1\nn: 1\n');
       writeFileSync(configPath, 'version: 1\nn: 2\n');
       writeFileSync(configPath, 'version: 1\nn: 3\n');
-      await new Promise((r) => setTimeout(r, SETTLE_MS));
-      expect(onChange).toHaveBeenCalledTimes(1);
+      await expectFires(onChange);
     } finally {
       handle.close();
     }
@@ -98,14 +115,12 @@ describe('startConfigWatcher', () => {
       const tmpPath = configPath + '.tmp';
       writeFileSync(tmpPath, 'version: 1\nrenamed: true\n');
       renameSync(tmpPath, configPath);
-      await new Promise((r) => setTimeout(r, SETTLE_MS));
-      expect(onChange).toHaveBeenCalledTimes(1);
+      await expectFires(onChange);
 
       // And again after the rename: watcher must still be alive
       onChange.mockClear();
       writeFileSync(configPath, 'version: 1\nsecond: true\n');
-      await new Promise((r) => setTimeout(r, SETTLE_MS));
-      expect(onChange).toHaveBeenCalledTimes(1);
+      await expectFires(onChange);
     } finally {
       handle.close();
     }
@@ -142,8 +157,7 @@ describe('startConfigWatcher', () => {
     try {
       noteSelfWrite('version: 1\nlast_known_weight: 82\n', 2000);
       writeFileSync(configPath, 'version: 1\nrun:\n  dry_run: true\n');
-      await new Promise((r) => setTimeout(r, SETTLE_MS));
-      expect(onChange).toHaveBeenCalledTimes(1);
+      await expectFires(onChange);
     } finally {
       handle.close();
     }
@@ -204,9 +218,11 @@ describe('startConfigWatcher', () => {
       const handle = startConfigWatcher(configPath, onChange);
 
       try {
+        // Linux arms an inotify watch synchronously; macOS does not, and a write
+        // that lands before the watch is armed is never reported.
+        await new Promise((r) => setTimeout(r, 250));
         writeFileSync(hostPath, 'version: 1\nedited-on-host: true\n');
-        await new Promise((r) => setTimeout(r, SETTLE_MS));
-        expect(onChange).toHaveBeenCalledTimes(1);
+        await expectFires(onChange);
       } finally {
         handle.close();
         rmSync(elsewhere, { recursive: true, force: true });
