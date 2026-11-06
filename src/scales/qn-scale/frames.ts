@@ -10,6 +10,7 @@ import type { Gender } from '../../interfaces/scale-adapter.js';
 import {
   RESULT_ACK_MEASURED,
   RESULT_ACK_OPCODE,
+  RESULT_OPCODE_B1,
   USER_DELETE_SUBCOMMAND,
   VENDOR_APP_USER_KEY,
   VISIT_ALGORITHM,
@@ -439,6 +440,86 @@ export function decodeEightStoredRecord(
     fatPercent: s24.readUInt16BE(15) / 10,
     heartRate: s24[17],
     composition: readVaComposition(s24, s25),
+  };
+}
+
+/** One extended-dialect 0xB1 result in one part, as decodeExtendedResult reads it. */
+export interface ExtendedResult {
+  /** Slot, weight, the ten channels measured and corrected, body fat and heart rate. */
+  result: EightResult;
+  /** The scale's own results, in the 19-byte dialect's shape. */
+  composition: VaComposition;
+  /** [50], the handle or hall byte; not read further. */
+  handle: number;
+  /** [115..116] /100, read as this weigh-in's BMI at 0.01 (hypothesis). */
+  bmiFine: number;
+  /** [117], the type of BIA measurement; not read further. */
+  biaType: number;
+}
+
+/** LE u16 at `at`, divided by 10. */
+const tenthLE = (frame: Buffer, at: number): number => frame.readUInt16LE(at) / 10;
+
+/**
+ * The extended dialect's 0xB1 result when it comes in one part (#331): 119
+ * bytes, `b1 77 01 01 ..`, [1] its length, [2] one part, [3] the first. The
+ * layout is the one the vendor's published SDK reads from the record it puts
+ * together from the parts ([4 .. len-2] of each, so one part's frame offset is
+ * the payload offset + 4); every value is a LE u16 unless noted:
+ *
+ *   [4]       user slot (u8)          [5..6]    weight /100 kg
+ *   [7..26]   the ten channels as measured, /10 ohm, EIGHT_CHANNEL_ORDER
+ *   [27..46]  the same ten as the scale corrected them
+ *   [47..48]  body fat /10 %          [49] heart rate (u8), [50] handle (u8)
+ *   [51..52]  BMI /10                 [53..54] water /10 %
+ *   [55..56]  muscle /10              [57] visceral fat (u8), [58] body age (u8)
+ *   [59..60]  BMR kcal                [61..62] protein /10 %
+ *   [63]      heart index /10 (u8)    [64..65] bone /10
+ *   [66..67]  lean body mass /10 %    [68..69] subcutaneous fat /10 %
+ *   [70..71]  skeletal muscle /10 %   [72..73] score /10, [74] body shape (u8)
+ *   [75..114] filter states, not read [115..116] BMI /100 (hypothesis)
+ *   [117]     BIA measurement type    [118] sum checksum
+ *
+ * Muscle and bone are % of the body weight when the ready frame says so, as
+ * on the 19-byte dialect. The SDK reads the channels as sent, without the
+ * unscrambling of SCRAMBLE_FLAG_BIT. Null for anything else, a frame of
+ * several parts included: those are not put together here.
+ */
+export function decodeExtendedResult(frame: Buffer): ExtendedResult | null {
+  if (frame.length !== 119 || frame[0] !== RESULT_OPCODE_B1 || frame[1] !== frame.length) {
+    return null;
+  }
+  if (frame[2] !== 0x01 || frame[3] !== 0x01 || !hasValidSumChecksum(frame)) return null;
+  const channels = (from: number): number[] =>
+    Array.from({ length: 10 }, (_, i) => tenthLE(frame, from + 2 * i));
+  return {
+    result: {
+      slot: frame[4],
+      weight: frame.readUInt16LE(5) / 100,
+      original: channels(7),
+      adjusted: channels(27),
+      fatPercent: tenthLE(frame, 47),
+      heartRate: frame[49],
+    },
+    composition: {
+      bmi: tenthLE(frame, 51),
+      water: tenthLE(frame, 53),
+      muscle: tenthLE(frame, 55),
+      visceral: frame[57],
+      bodyAge: frame[58],
+      bmr: frame.readUInt16LE(59),
+      protein: tenthLE(frame, 61),
+      heartIndex: frame[63] / 10,
+      bone: tenthLE(frame, 64),
+      lbm: tenthLE(frame, 66),
+      subcutaneousFat: tenthLE(frame, 68),
+      skeletalMuscle: tenthLE(frame, 70),
+      score: tenthLE(frame, 72),
+      bodyShape: frame[74],
+    },
+    handle: frame[50],
+    bmiFine: frame.readUInt16LE(115) / 100,
+    biaType: frame[117],
   };
 }
 

@@ -8,6 +8,7 @@ import {
   buildStoredDataQuery,
   buildTimeSync,
   buildUserProfileFrame,
+  decodeExtendedResult,
   decodeStoredRecord,
   decryptQnResistance,
   hasValidSumChecksum,
@@ -282,6 +283,23 @@ const B1_CS10E_331 = Buffer.from(
 );
 
 /**
+ * #331, the same CS10E's 0xB1 of 2026-11-04, byte for byte from the public
+ * DEBUG log of that day (the `QN RAW (119B)` line): one part, user slot 1.
+ */
+const B1_CS10E_1104 = Buffer.from(
+  'b1770101014a24220db70b270dc70baa0a8009390a19091001ea002e0dc90b300dd70b480a2c0915' +
+    '0af4080401e100ed00000018012602d4020a296c07ad00002600fb02cf00ec01c80207cf838e01e2' +
+    '838e01260a7701d3668e01d4648e01da758e0169768e01cd087701b55b8e0184598e01f50a019a',
+  'hex',
+);
+/**
+ * Derived from B1_CS10E_331: [2] 02, a record in two parts, and [1] 76, so
+ * [1] no longer gives the length.
+ */
+const B1_CS10E_TWO_PARTS = derive(B1_CS10E_331, { 2: 0x02 });
+const B1_CS10E_NOT_ITS_LENGTH = derive(B1_CS10E_331, { 1: 0x76 });
+
+/**
  * #331, the same CS10E on 2026-11-04 (v1.39.1, ESPHome proxy), byte for byte
  * from the reporter's public DEBUG log apart from the MAC (as for #461 above):
  * its 0x12, ready frame, config request and its seven-byte acceptance of the
@@ -341,6 +359,8 @@ const DERIVED: [string, Buffer, Buffer, number[]][] = [
   ['RECORD_463_SLOT2', RECORD_463_SLOT2, RECORD_463, [5]],
   ['VISIT_REFUSED_CS10E', VISIT_REFUSED_CS10E, VISIT_OK_CS10E_1104, [4]],
   ['VISIT_OK_CS10E_NOT_ITS_LENGTH', VISIT_OK_CS10E_NOT_ITS_LENGTH, VISIT_OK_CS10E_1104, [1]],
+  ['B1_CS10E_TWO_PARTS', B1_CS10E_TWO_PARTS, B1_CS10E_331, [2]],
+  ['B1_CS10E_NOT_ITS_LENGTH', B1_CS10E_NOT_ITS_LENGTH, B1_CS10E_331, [1]],
 ];
 
 /** Build a fake AABB broadcast buffer with the given weight and stability. */
@@ -1330,10 +1350,10 @@ describe('QnScaleAdapter', () => {
           expect((await extendedAdapter()).parseNotification(fresh)?.weight).toBe(75.2);
         });
         expect(results()).toEqual([
-          'QN: extended result 0xb1 decoded 77.95kg, user slot 2 (impedance sweep not yet ' +
-            'calibrated, emitting weight-only) #235',
-          'QN: extended result 0xb4 decoded 75.2kg, user slot 1 (impedance sweep not yet ' +
-            'calibrated, emitting weight-only) #235',
+          'QN: extended result 0xb1 decoded 77.95kg, user slot 2 (no whole-body impedance, ' +
+            'emitting weight-only) #235',
+          'QN: extended result 0xb4 decoded 75.2kg, user slot 1 (no whole-body impedance, ' +
+            'emitting weight-only) #235',
         ]);
       } finally {
         debug.mockRestore();
@@ -1344,6 +1364,41 @@ describe('QnScaleAdapter', () => {
       const adapter = await extendedAdapter();
       expect(adapter.parseNotification(LIVE_CS10E_331)).toBeNull();
       expect(adapter.parseNotification(B1_CS10E_331)).toEqual({ weight: 93.15, impedance: 0 });
+    });
+
+    it("logs the scale's own results of a one-part 0xB1, and nothing of a split one (#331)", async () => {
+      const debug = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+      try {
+        const lines = () => debug.mock.calls.map((c) => String(c[0]));
+        const one = await extendedAdapter();
+        expect(one.parseNotification(B1_CS10E_331)).toEqual({ weight: 93.15, impedance: 0 });
+        const own = lines().filter((l) => l.startsWith('QN: extended result'));
+        expect(own).toHaveLength(3);
+        expect(own[1]).toMatch(
+          /^QN: extended result, user slot 1, 93\.15 kg, body fat [\d.]+ %; measured Ohm: LH20 [\d.]+, .*T100 [\d.]+; corrected Ohm: LH20 [\d.]+, .*T100 [\d.]+ \(#331\)$/,
+        );
+        expect(own[2]).toMatch(
+          /^QN: extended result composition: bmi [\d.]+, water .*, bodyShape \d+, heartRate \d+, handle \d+, bmiFine [\d.]+, biaType \d+ \(#331\)$/,
+        );
+        debug.mockClear();
+        const split = await extendedAdapter();
+        expect(split.parseNotification(B1_501)).toEqual({ weight: 77.95, impedance: 0 });
+        expect(lines()).toContain(
+          "QN: 0xb1 is not one 119-byte part ([2] 3, 45 bytes), the scale's own results in it are not read (#331)",
+        );
+        expect(lines().filter((l) => l.startsWith('QN: extended result,'))).toEqual([]);
+        debug.mockClear();
+        const wrongLength = await extendedAdapter();
+        expect(wrongLength.parseNotification(B1_CS10E_NOT_ITS_LENGTH)).toEqual({
+          weight: 93.15,
+          impedance: 0,
+        });
+        expect(lines()).toContain(
+          "QN: 119-byte 0xb1 fails its one-part checks ([1] 118, [3] 1, checksum ok), the scale's own results in it are not read (#331)",
+        );
+      } finally {
+        debug.mockRestore();
+      }
     });
 
     it('reads no weight from the 0xB1 parts after the first (#501)', async () => {
@@ -5060,6 +5115,87 @@ describe('buildUserProfileFrame (#331)', () => {
     expect(buildUserProfileFrame(26, 193, 'male', { athlete: true })).toEqual([
       0xa0, 0x0d, 0x02, 0x01, 0x03, 0xe8, 0x00, 0x1a, 0x07, 0x8a, 0x0e, 0x02, 0x56,
     ]);
+  });
+});
+
+// #331: the one-part 0xB1 of the 20-byte CS10E, in the layout the vendor's
+// published SDK reads. Its values are checked against each other only: the
+// frame says nothing the test could compare them with otherwise.
+describe('decodeExtendedResult (#331)', () => {
+  const both = [
+    ['the 2026-11-03 frame', B1_CS10E_331],
+    ['the 2026-11-04 frame', B1_CS10E_1104],
+  ] as const;
+
+  it('reads the public frame at the offsets of the SDK layout', () => {
+    expect(decodeExtendedResult(B1_CS10E_331)).toEqual({
+      result: {
+        slot: 1,
+        weight: 93.15,
+        original: [345.1, 308.4, 334.5, 299.4, 262.3, 231.9, 258, 227.5, 26.5, 23.2],
+        adjusted: [336.9, 301.3, 337.1, 302.7, 262.5, 234.1, 257.6, 228.7, 25.9, 22.5],
+        fatPercent: 23.8,
+        heartRate: 0,
+      },
+      composition: {
+        bmi: 28.1,
+        water: 55,
+        muscle: 72.4,
+        visceral: 10,
+        bodyAge: 41,
+        bmr: 1902,
+        protein: 17.4,
+        heartIndex: 0,
+        bone: 3.8,
+        lbm: 76.2,
+        subcutaneousFat: 20.8,
+        skeletalMuscle: 49.2,
+        score: 71,
+        bodyShape: 7,
+      },
+      handle: 0,
+      bmiFine: 28.12,
+      biaType: 1,
+    });
+  });
+
+  it.each(both)('decodes %s into values that agree with each other', (_name, frame) => {
+    const d = decodeExtendedResult(frame)!;
+    const { result: r, composition: c } = d;
+    // Lean mass and body fat are the two halves of the body, in %.
+    expect(Math.abs(c.lbm + r.fatPercent - 100)).toBeLessThanOrEqual(0.15);
+    // Muscle is lean mass without bone, both in % of the weight.
+    expect(Math.abs(c.lbm - c.bone - c.muscle)).toBeLessThanOrEqual(0.15);
+    // The 19-byte dialect's BMR rule: 370 + 21.6 x the fat-free mass.
+    const ffm = r.weight * (1 - r.fatPercent / 100);
+    expect(Math.abs(370 + 21.6 * ffm - c.bmr)).toBeLessThanOrEqual(2);
+    // [115..116] is the BMI to 0.01, [51..52] to 0.1.
+    expect(Math.abs(d.bmiFine - c.bmi)).toBeLessThanOrEqual(0.1);
+    // Segment impedances: a limb is far above a trunk.
+    expect(Math.min(...r.original.slice(0, 8))).toBeGreaterThan(
+      5 * Math.max(...r.original.slice(8)),
+    );
+    expect(Math.min(...r.adjusted.slice(0, 8))).toBeGreaterThan(
+      5 * Math.max(...r.adjusted.slice(8)),
+    );
+  });
+
+  it('gives both frames the same implied height', () => {
+    const [a, b] = both.map(([, f]) => decodeExtendedResult(f)!);
+    const heightSquared = (d: typeof a): number => d.result.weight / d.bmiFine;
+    expect(Math.abs(heightSquared(a) - heightSquared(b))).toBeLessThan(0.005);
+  });
+
+  it.each([
+    ['the first part of a split record', B1_501],
+    ['a later part', B1_501_PART2],
+    ['a one-part frame that names two parts', B1_CS10E_TWO_PARTS],
+    ['a frame whose [1] is not its length', B1_CS10E_NOT_ITS_LENGTH],
+    ['a frame with a bad checksum', Buffer.from([...B1_CS10E_331.subarray(0, -1), 0x00])],
+    ['a truncated frame', B1_CS10E_331.subarray(0, 118)],
+    ['a 0xB4', B4_501],
+  ])('reads nothing from %s', (_what, frame) => {
+    expect(decodeExtendedResult(frame)).toBeNull();
   });
 });
 

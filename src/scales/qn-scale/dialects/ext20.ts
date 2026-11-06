@@ -1,6 +1,7 @@
 import { bleLog } from '../../../ble/types.js';
 import type { ScaleReading } from '../../../interfaces/scale-adapter.js';
 import {
+  EIGHT_CHANNEL_ORDER,
   RESULT_MAX_WEIGHT_KG,
   RESULT_MIN_WEIGHT_KG,
   RESULT_OPCODE_B1,
@@ -9,7 +10,7 @@ import {
   SCALE_EPOCH_OFFSET,
 } from '../constants.js';
 import { storedSlotLabel, type QnDialectHandler } from '../dialect.js';
-import { hasValidSumChecksum } from '../frames.js';
+import { decodeExtendedResult, hasValidSumChecksum } from '../frames.js';
 import type { QnSession } from '../session.js';
 
 /**
@@ -18,7 +19,8 @@ import type { QnSession } from '../session.js';
  * CS10E but never from the GE or the CS10G, and stays undecoded either way:
  * the weight comes from these 0xB1/0xB4 result frames. The burst's non-weight
  * parts (repeated 0xB4s, the 0xB1 parts after the first) come back null, so
- * they are not logged as ignored.
+ * they are not logged as ignored. A 0xB1 in one part also carries the scale's
+ * own results, decoded and logged (decodeExtendedResult, #331).
  */
 export const ext20: QnDialectHandler = {
   frame(q, data) {
@@ -34,8 +36,8 @@ export const ext20: QnDialectHandler = {
  *
  * Accepts the consolidated 0xB4 (weight at [11]) or the first part of the
  * 0xB1, however many parts it came in (weight at [5]). Returns a weight-only
- * reading (impedance 0, see RESULT_OPCODE_* for why the raw channels are not
- * used yet), or null when the frame is not a recognised result frame, fails its
+ * reading (impedance 0: the channels are segment impedances, see RESULT_OPCODE_*),
+ * or null when the frame is not a recognised result frame, fails its
  * trailing sum checksum, carries an out-of-range weight, or a reading was
  * already emitted this session.
  */
@@ -100,7 +102,47 @@ function resultFrame(s: QnSession, data: Buffer): ScaleReading | null {
   // (#501). Logged only, so a reporter can find the slot to set.
   bleLog.debug(
     `QN: extended result 0x${data[0].toString(16)} decoded ${weight}kg, ` +
-      `${storedSlotLabel(data[4])} (impedance sweep not yet calibrated, emitting weight-only) #235`,
+      `${storedSlotLabel(data[4])} (no whole-body impedance, emitting weight-only) #235`,
   );
+  if (data[0] === RESULT_OPCODE_B1) logExtendedResult(data);
   return { weight, impedance: 0 };
+}
+
+/** Why decodeExtendedResult read nothing from a 0xB1, for the debug log (#331). */
+function notDecodedLine(data: Buffer): string {
+  const notRead = "the scale's own results in it are not read (#331)";
+  if (data.length !== 119 || data[2] !== 0x01) {
+    return `QN: 0xb1 is not one 119-byte part ([2] ${data[2]}, ${data.length} bytes), ${notRead}`;
+  }
+  return (
+    `QN: 119-byte 0xb1 fails its one-part checks ([1] ${data[1]}, [3] ${data[3]}, checksum ` +
+    `${hasValidSumChecksum(data) ? 'ok' : 'bad'}), ${notRead}`
+  );
+}
+
+/**
+ * The scale's own results in a one-part 0xB1, for the debug log (#331): the
+ * measured and corrected channels and every value, the ones nothing exports
+ * included. Any other 0xB1 gets a line that says why it is not read.
+ */
+function logExtendedResult(data: Buffer): void {
+  const decoded = decodeExtendedResult(data);
+  if (!decoded) {
+    bleLog.debug(notDecodedLine(data));
+    return;
+  }
+  const { result, composition } = decoded;
+  const channels = (values: number[]): string =>
+    EIGHT_CHANNEL_ORDER.map((name, i) => `${name} ${values[i]}`).join(', ');
+  bleLog.debug(
+    `QN: extended result, user slot ${result.slot}, ${result.weight} kg, body fat ` +
+      `${result.fatPercent} %; measured Ohm: ${channels(result.original)}; ` +
+      `corrected Ohm: ${channels(result.adjusted)} (#331)`,
+  );
+  bleLog.debug(
+    `QN: extended result composition: ${Object.entries(composition)
+      .map(([k, v]) => `${k} ${v}`)
+      .join(', ')}, heartRate ${result.heartRate}, handle ${decoded.handle}, ` +
+      `bmiFine ${decoded.bmiFine}, biaType ${decoded.biaType} (#331)`,
+  );
 }

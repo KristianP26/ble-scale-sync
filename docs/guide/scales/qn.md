@@ -72,7 +72,7 @@ The scale keeps up to eight users, each in a numbered slot with the key the vend
 To find the slot, weigh in once with `runtime.debug: true`. On the 20-byte dialect the result line names it:
 
 ```text
-QN: extended result 0xb1 decoded 72.4kg, user slot 2 (impedance sweep not yet calibrated, emitting weight-only) #235
+QN: extended result 0xb1 decoded 72.4kg, user slot 2 (no whole-body impedance, emitting weight-only) #235
 ```
 
 On the 19-byte dialect the line `QN: result block, user slot N` names it, on the 18-byte dialect only the lines of stored weigh-ins.

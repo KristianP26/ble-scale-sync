@@ -498,7 +498,8 @@ export const VISIT_ANSWER_TIMEOUT_MS = 1000;
  *               an ESPHome proxy (#331). The fields below are the first part's.
  *       [4]     user slot (#501)
  *       [5-6]   weight, LE uint16, /100 kg
- *       [7..]   impedance channels
+ *       [7..]   impedance channels and the scale's own results; the one-part
+ *               layout is at decodeExtendedResult (#331)
  *   0xB4 .. 04 01 : stored history record, 44 bytes. Weight only when fresh.
  *       [7-10]  record timestamp, LE uint32 (scale 2000-epoch)
  *       [11-12] recorded weight, LE uint16, /100 kg
@@ -526,13 +527,13 @@ export const VISIT_ANSWER_TIMEOUT_MS = 1000;
  * 75.20 kg, BMI 20.2 in the 0xB1 03 03 tail, cross-checked as
  * 75.20 / 1.93^2 = 20.19. Every frame carries the standard QN trailing sum.
  *
- * Impedance is deliberately NOT forwarded to the BIA estimator yet. The channels
- * are a proprietary multi-frequency segmental sweep in raw units (~2,300-3,050),
- * not the single ~500 ohm whole-body value computeBiaFat expects (it divides
- * height^2 / impedance), and feeding one in raw yields a ~57% fat nonsense.
- * Until the channels are calibrated the reading is emitted weight-only, so body
- * composition falls back to the same profile-based estimate broadcast-only
- * scales already use. Weight and BMI are the parts this decode is sure of.
+ * Impedance is deliberately NOT forwarded to the BIA estimator. Per the
+ * vendor's published SDK the channels are the 8-electrode segment impedances
+ * in 0.1 ohm (EIGHT_CHANNEL_ORDER): a few hundred ohm on each limb and a few
+ * tens on the trunk, none of them the single whole-body value computeBiaFat
+ * expects (it divides height^2 / impedance). The reading carries impedance 0,
+ * so without the scale's own composition the body composition falls back to
+ * the same profile-based estimate broadcast-only scales use.
  */
 /**
  * How far before the session's start a 0xB4 record may be stamped and still
