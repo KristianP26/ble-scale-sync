@@ -113,7 +113,7 @@ Weigh-ins the scale stored while nothing was connected arrive on the next connec
 
 ## GE CS 10 G and Extended-Dialect Scales
 
-The scale waits for a weight anchor close to the weight of the person on it. The anchor is the first user's `last_known_weight`, or the middle of their `weight_range` when that range lies between 20 and 250 kg and spans no more than 100 kg. Without either, the log warns `QN: no usable weight anchor in config` and a fixed value is sent. Once the scale streams, every frame is acknowledged with its own weight, so the anchor matters only for the start.
+The scale waits for a weight anchor close to the weight of the person on it. The anchor is the first user's `last_known_weight`, or the middle of their `weight_range` when that range lies between 20 and 250 kg and spans no more than 100 kg. Without either, the log warns `QN: no usable weight anchor in config` and a fixed value is sent. The scale's live weight frames are not acknowledged, so the anchor matters only for the start.
 
 With `qn_user_key` set, the start command and the anchor go out only after the scale answers the profile frame or after one second without an answer, as in the vendor app, and no anchor goes out when the scale reports ready, even with `qn_weight_ack: true`.
 
