@@ -12,6 +12,7 @@ The QN protocol runs on many Renpho, Arboleaf, FITINDEX, GE and Sencor scales an
 - Renpho ES-CS20M, ES-32MD, Elis 1, and FITINDEX and Sencor rebadges.
 - Arboleaf scales with eight electrodes (19-byte dialect).
 - GE CS 10 G ("Fit Plus") and rebadges (20-byte extended dialect).
+- Arboleaf CS10E and CS10G with eight electrodes (20-byte extended dialect).
 
 Some ES-CS20M and Elis 1 units never accept a connection. ble-scale-sync then reads the weight from their broadcast, and body composition is estimated from BMI, because the broadcast carries no impedance. `ble-scale-sync diagnose <MAC>` (`npm run diagnose -- <MAC>` from a clone) shows whether a unit is connectable. Newer ES-CS20M revisions on service 0x1A10 use Renpho's own protocol instead, see [Renpho Scales](./renpho).
 
@@ -87,7 +88,7 @@ ble:
 
 The profile frame tells the scale which body-fat method to compute with. The scale never reports which one it expects: the vendor app picks it from its own settings for the scale model, and per the vendor's published SDK an 8-electrode scale without such a setting gets 7. ble-scale-sync sends 4, or 14 for an athlete aged 18 or older on the 18-byte dialect.
 
-`qn_algorithm` (Experimental, 0 to 255) sends another value. It goes into the profile frame as given, with no athlete step, wherever the vendor-app profile frame goes out: with `qn_user_key` on the 18-, 19- and 20-byte dialects, and with `qn_weight_ack: true` on the 19-byte dialect. Without either, a warning says it is never sent. The debug log names it:
+`qn_algorithm` (Experimental, 0 to 255) sends another value. It goes into the profile frame as given, with no athlete step, wherever the vendor-app profile frame goes out: with `qn_user_key` on the 18-, 19- and 20-byte dialects, and with `qn_weight_ack: true` on the 19-byte dialect. Without either, a warning says it is never sent. On the 20-byte dialect it also turns on the [scale's own body composition](#scale-body-composition-on-the-extended-dialect). The debug log names it:
 
 ```text
 QN: A00D profile frame with key 1000, age 30, height 1700 mm, sex female, athlete no, algorithm 7 (ble.qn_user_key, 20-byte dialect, #463)
@@ -115,6 +116,18 @@ Weigh-ins the scale stored while nothing was connected arrive on the next connec
 The scale waits for a weight anchor close to the weight of the person on it. The anchor is the first user's `last_known_weight`, or the middle of their `weight_range` when that range lies between 20 and 250 kg and spans no more than 100 kg. Without either, the log warns `QN: no usable weight anchor in config` and a fixed value is sent. Once the scale streams, every frame is acknowledged with its own weight, so the anchor matters only for the start.
 
 With `qn_user_key` set, the start command and the anchor go out only after the scale answers the profile frame or after one second without an answer, as in the vendor app, and no anchor goes out when the scale reports ready, even with `qn_weight_ack: true`.
+
+### Scale Body Composition on the Extended Dialect {#scale-body-composition-on-the-extended-dialect}
+
+Experimental. Eight-electrode scales on this dialect, such as the Arboleaf CS10E, compute body fat, water, muscle, bone, visceral fat, BMR and body age for the profile they were sent. With `qn_user_key` and [`qn_algorithm`](#algorithm-byte) set, these are exported, with body age as metabolic age, under the same two conditions as on the [19-byte dialect](#arboleaf-scales-19-byte-dialect). The scale must send its result in one frame, as it does over an ESPHome proxy; when the result arrives split, which happens over the ESP32 proxy, only the weight goes out. Without `qn_algorithm` the normal log names it as the reason and the weigh-in gets the BMI estimate.
+
+```yaml
+ble:
+  qn_user_key: 1000
+  qn_algorithm: 7 # what the vendor's published SDK sends an 8-electrode scale
+```
+
+These are the scale's own values, which can differ from what the vendor app shows. Report on [#331](https://github.com/KristianP26/ble-scale-sync/issues/331) how they compare with the vendor app.
 
 ## Stored Weigh-Ins on the 18-Byte Dialect
 

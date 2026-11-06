@@ -24,6 +24,7 @@ _Weight only_ means the weight is read and body composition is estimated from BM
 | Xiaomi Body Composition Scale S400 (MJTZC01YM)                         | Yes              | Needs `ble.bind_key` and `ble.scale_mac`; weigh barefoot for impedance |
 | Renpho ES-CS20M / ES-32MD / Elis 1 / FITINDEX / Sencor (QN-Scale)      | Yes              | The most common protocol; see [QN Scales](./scales/qn) |
 | Arboleaf (QN-Scale, 19-byte dialect)                                   | Yes              | Uses the body composition the scale computes; see [QN Scales](./scales/qn) |
+| Arboleaf CS10E (QN-Scale, 20-byte dialect)                             | Weight only      | Experimental: the scale's own body composition with `ble.qn_algorithm`; see [QN Scales](./scales/qn#scale-body-composition-on-the-extended-dialect) |
 | Renpho ES-CS20M on service 0x1A10                                      | Yes              | See [Renpho Scales](./scales/renpho) |
 | Renpho ES-WBE28                                                        | Weight only      | Standard GATT variant |
 | Renpho A-R003                                                          | Weight only      | Experimental; advertises no name, so it needs `ble.scale_mac` on the default Linux transport and on macOS |

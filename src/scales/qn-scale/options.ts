@@ -105,7 +105,9 @@ export const QN_BLE_OPTIONS = {
    * Set, it goes into the profile frame as given, without the athlete step,
    * wherever the vendor-app profile frame is sent: with `qn_user_key` on the
    * 18-, 19- and 20-byte dialects, and with `qn_weight_ack` on the 19-byte one.
-   * Elsewhere openScale's frame goes out and this is not sent. Left unset it
+   * Elsewhere openScale's frame goes out and this is not sent. On the 20-byte
+   * dialect a profile frame sent with it is also what lets the scale's own body
+   * composition from a one-part 0xB1 be exported (#331, D096). Left unset it
    * changes nothing.
    */
   qn_algorithm: z.number().int().min(0).max(255).optional().nullable(),

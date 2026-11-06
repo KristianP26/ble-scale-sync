@@ -298,6 +298,22 @@ const B1_CS10E_1104 = Buffer.from(
  */
 const B1_CS10E_TWO_PARTS = derive(B1_CS10E_331, { 2: 0x02 });
 const B1_CS10E_NOT_ITS_LENGTH = derive(B1_CS10E_331, { 1: 0x76 });
+/**
+ * Derived from B1_CS10E_331: [4] 02, the weigh-in on user slot 2; and the
+ * lean mass at [66..67] raised by 0.3 %, so lean mass and body fat no longer
+ * add up to 100 %.
+ */
+const B1_CS10E_SLOT2 = derive(B1_CS10E_331, { 4: 0x02 });
+const B1_CS10E_LEAN_OFF = derive(B1_CS10E_331, { 66: B1_CS10E_331[66] + 3 });
+/**
+ * Derived from LIVE_CS10E_331: another weight at [5..6] (24 00, [6] changed), status 02 at
+ * [3], and user slot 2 at [2].
+ */
+const LIVE_CS10E_OTHER_WEIGHT = derive(LIVE_CS10E_331, { 6: 0x00 });
+const LIVE_CS10E_STATUS2 = derive(LIVE_CS10E_331, { 3: 0x02 });
+const LIVE_CS10E_SLOT2 = derive(LIVE_CS10E_331, { 2: 0x02 });
+/** LIVE_CS10E_331 at 1.00 kg ([5..6] 00 64), below the weight range. */
+const LIVE_CS10E_LIGHT = derive(LIVE_CS10E_331, { 5: 0x00, 6: 0x64 });
 
 /**
  * #331, the same CS10E on 2026-11-04 (v1.39.1, ESPHome proxy), byte for byte
@@ -361,6 +377,12 @@ const DERIVED: [string, Buffer, Buffer, number[]][] = [
   ['VISIT_OK_CS10E_NOT_ITS_LENGTH', VISIT_OK_CS10E_NOT_ITS_LENGTH, VISIT_OK_CS10E_1104, [1]],
   ['B1_CS10E_TWO_PARTS', B1_CS10E_TWO_PARTS, B1_CS10E_331, [2]],
   ['B1_CS10E_NOT_ITS_LENGTH', B1_CS10E_NOT_ITS_LENGTH, B1_CS10E_331, [1]],
+  ['B1_CS10E_SLOT2', B1_CS10E_SLOT2, B1_CS10E_331, [4]],
+  ['B1_CS10E_LEAN_OFF', B1_CS10E_LEAN_OFF, B1_CS10E_331, [66]],
+  ['LIVE_CS10E_OTHER_WEIGHT', LIVE_CS10E_OTHER_WEIGHT, LIVE_CS10E_331, [6]],
+  ['LIVE_CS10E_STATUS2', LIVE_CS10E_STATUS2, LIVE_CS10E_331, [3]],
+  ['LIVE_CS10E_SLOT2', LIVE_CS10E_SLOT2, LIVE_CS10E_331, [2]],
+  ['LIVE_CS10E_LIGHT', LIVE_CS10E_LIGHT, LIVE_CS10E_331, [5, 6]],
 ];
 
 /** Build a fake AABB broadcast buffer with the given weight and stability. */
@@ -5196,6 +5218,250 @@ describe('decodeExtendedResult (#331)', () => {
     ['a 0xB4', B4_501],
   ])('reads nothing from %s', (_what, frame) => {
     expect(decodeExtendedResult(frame)).toBeNull();
+  });
+});
+
+// #331, D096: the 20-byte dialect's one-part 0xB1 as the source of the body
+// composition, only with ble.qn_algorithm in the profile frame.
+describe("20-byte dialect: the scale's own body composition (#331)", () => {
+  const decoded = decodeExtendedResult(B1_CS10E_331)!;
+  const { result: R, composition: C } = decoded;
+  // A neutral age and sex; the height is the one the frame's BMI implies, as
+  // the scale computes for the height in the profile frame.
+  const P = defaultProfile({
+    age: 30,
+    height: Math.round(Math.sqrt(R.weight / decoded.bmiFine) * 100),
+    lastKnownWeight: 90,
+  });
+  const ALGO = { qnUserKey: 1000, qnAlgorithm: 7 };
+
+  interface Step {
+    frame?: Buffer;
+    advance?: number;
+    /** Options handed to configure() at this point (a reload). */
+    configure?: Record<string, unknown>;
+  }
+
+  /** The session up to the 0xB1 and the reading it gives. */
+  async function weighIn(
+    opts: Record<string, unknown>,
+    steps: Step[],
+  ): Promise<{ adapter: QnScaleAdapter; reading: ScaleReading | null }> {
+    vi.useFakeTimers();
+    try {
+      const adapter = makeAdapter();
+      adapter.configure(opts);
+      const ctx = {
+        write: async () => {},
+        read: async () => Buffer.alloc(0),
+        subscribe: async () => {},
+        profile: P,
+        deviceAddress: '',
+        availableChars: new Set<string>(),
+      } as unknown as ConnectionContext;
+      adapter.onSessionStart?.();
+      await adapter.onConnected(ctx);
+      let reading: ScaleReading | null = null;
+      for (const step of steps) {
+        if (step.configure) adapter.configure(step.configure);
+        if (step.frame) reading = adapter.parseNotification(step.frame) ?? reading;
+        await vi.advanceTimersByTimeAsync(step.advance ?? 0);
+      }
+      return { adapter, reading };
+    } finally {
+      vi.useRealTimers();
+    }
+  }
+
+  const HANDSHAKE: Step[] = [
+    { frame: INFO_CS10E_1104, advance: 300 },
+    { frame: READY_CS10E_1104, advance: 300 },
+    { frame: CONFIG_REQ_CS10E_1104, advance: 300 },
+  ];
+  /** Accepted, a live frame (status 00) after it, then the result. */
+  const ACCEPTED_THEN = (b1: Buffer): Step[] => [
+    ...HANDSHAKE,
+    { frame: VISIT_OK_CS10E_1104, advance: 100 },
+    { frame: LIVE_CS10E_331, advance: 1000 },
+    { frame: b1 },
+  ];
+
+  /** computeMetrics with the info lines it logged. */
+  function metrics(adapter: QnScaleAdapter, reading: ScaleReading) {
+    const info = vi.spyOn(bleLog, 'info').mockImplementation(() => {});
+    try {
+      const payload = adapter.computeMetrics(reading, P);
+      return { payload, lines: info.mock.calls.map((c) => String(c[0])) };
+    } finally {
+      info.mockRestore();
+    }
+  }
+  const NOT_USED = "QN: the scale's own body composition is not used for this weigh-in: ";
+  const USED = "QN: using the scale's own body composition for this weigh-in (#331)";
+  const rejected = (lines: string[]): string[] =>
+    lines.filter((l) => l.startsWith(NOT_USED)).map((l) => l.slice(NOT_USED.length));
+
+  it("exports the scale's values with ble.qn_algorithm and an accepted profile", async () => {
+    const { adapter, reading } = await weighIn(ALGO, ACCEPTED_THEN(B1_CS10E_331));
+    expect(reading).not.toBeNull();
+    const { payload, lines } = metrics(adapter, reading!);
+    expect(lines).toContain(USED);
+    const w = reading!.weight;
+    expect(payload.bodyFatPercent).toBe(R.fatPercent);
+    expect(payload.waterPercent).toBe(C.water);
+    expect(payload.muscleMass).toBeCloseTo((C.muscle * w) / 100, 2);
+    expect(payload.boneMass).toBeCloseTo((C.bone * w) / 100, 2);
+    expect(payload.visceralFat).toBe(C.visceral);
+    expect(payload.bmr).toBe(C.bmr);
+    expect(payload.metabolicAge).toBe(C.bodyAge);
+    // Neither the skeletal muscle nor the segments go out.
+    expect(payload).not.toHaveProperty('skeletalMusclePercent');
+    expect(Object.keys(payload).filter((k) => /^impedance[A-Z]/.test(k))).toEqual([]);
+    assertPayloadRanges(payload);
+  });
+
+  it('does not use them without ble.qn_algorithm, and says why', async () => {
+    const { adapter, reading } = await weighIn({ qnUserKey: 1000 }, ACCEPTED_THEN(B1_CS10E_331));
+    const { payload, lines } = metrics(adapter, reading!);
+    expect(lines).not.toContain(USED);
+    expect(rejected(lines)).toEqual([
+      'the profile frame went out without ble.qn_algorithm, which the 20-byte dialect needs; ' +
+        'estimating instead (#331)',
+    ]);
+    expect(payload.bodyFatPercent).not.toBe(R.fatPercent);
+  });
+
+  it('does not use them without a live frame after the acceptance', async () => {
+    const { adapter, reading } = await weighIn(ALGO, [
+      ...HANDSHAKE,
+      { frame: LIVE_CS10E_331, advance: 100 },
+      { frame: VISIT_OK_CS10E_1104, advance: 1000 },
+      { frame: B1_CS10E_331 },
+    ]);
+    expect(rejected(metrics(adapter, reading!).lines)).toEqual([
+      'the scale sent no live weight after it accepted the profile; estimating instead (#331)',
+    ]);
+  });
+
+  // A 0xB1 the scale replays after a reconnect comes after live frames of
+  // another weigh-in, or none.
+  it('does not use them when the live weight after the acceptance is another one', async () => {
+    const { adapter, reading } = await weighIn(ALGO, [
+      ...HANDSHAKE,
+      { frame: VISIT_OK_CS10E_1104, advance: 100 },
+      { frame: LIVE_CS10E_OTHER_WEIGHT, advance: 1000 },
+      { frame: B1_CS10E_331 },
+    ]);
+    expect(rejected(metrics(adapter, reading!).lines)).toEqual([
+      "the result's weight is not the one the scale streamed after it accepted the profile; " +
+        'estimating instead (#331)',
+    ]);
+  });
+
+  it.each([
+    ['status 02', LIVE_CS10E_STATUS2],
+    ['another user slot', LIVE_CS10E_SLOT2],
+    ['a weight below the range', LIVE_CS10E_LIGHT],
+  ])('does not count a live frame with %s as measured', async (_what, live) => {
+    const { adapter, reading } = await weighIn(ALGO, [
+      ...HANDSHAKE,
+      { frame: VISIT_OK_CS10E_1104, advance: 100 },
+      { frame: live, advance: 1000 },
+      { frame: B1_CS10E_331 },
+    ]);
+    expect(rejected(metrics(adapter, reading!).lines)).toEqual([
+      'the scale sent no live weight after it accepted the profile; estimating instead (#331)',
+    ]);
+  });
+
+  // An acceptance names a slot; one for another slot than the profile
+  // frame's is no acceptance of it, so the live frames after it do not count.
+  it('does not count live frames after an acceptance for another slot', async () => {
+    const { adapter, reading } = await weighIn(
+      ALGO,
+      ACCEPTED_THEN(B1_CS10E_331).map((step) =>
+        step.frame === VISIT_OK_CS10E_1104 ? { ...step, frame: ACCEPTED_SLOT2 } : step,
+      ),
+    );
+    expect(adapter.s.measuredAfterVisit).toBe(false);
+    expect(adapter.s.liveWeightAfterVisit).toBeNull();
+    expect(rejected(metrics(adapter, reading!).lines)).toEqual([
+      'the scale did not accept the profile; estimating instead (#331)',
+    ]);
+  });
+
+  it('names the body composition in the result line only with ble.qn_algorithm', async () => {
+    const debug = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+    try {
+      const line = () =>
+        debug.mock.calls
+          .map((c) => String(c[0]))
+          .filter((l) => l.startsWith('QN: extended result 0xb1'));
+      await weighIn(ALGO, ACCEPTED_THEN(B1_CS10E_331));
+      expect(line()).toEqual([
+        "QN: extended result 0xb1 decoded 93.15kg, user slot 1 (no whole-body impedance, with the scale's own body composition) #235",
+      ]);
+      debug.mockClear();
+      const { reading } = await weighIn({ qnUserKey: 1000 }, ACCEPTED_THEN(B1_CS10E_331));
+      expect(reading!.scaleComposition).toBeDefined();
+      expect(line()).toEqual([
+        'QN: extended result 0xb1 decoded 93.15kg, user slot 1 (no whole-body impedance, emitting weight-only) #235',
+      ]);
+    } finally {
+      debug.mockRestore();
+    }
+  });
+
+  it('does not use them for a weigh-in on another user slot', async () => {
+    const { adapter, reading } = await weighIn(ALGO, ACCEPTED_THEN(B1_CS10E_SLOT2));
+    expect(rejected(metrics(adapter, reading!).lines)).toEqual([
+      'the weigh-in is on another user slot of the scale; estimating instead (#331)',
+    ]);
+  });
+
+  it('does not use them when the scale refused the profile', async () => {
+    const { adapter, reading } = await weighIn(ALGO, [
+      ...HANDSHAKE,
+      { frame: VISIT_REFUSED_CS10E, advance: 100 },
+      { frame: LIVE_CS10E_331, advance: 1000 },
+      { frame: B1_CS10E_331 },
+    ]);
+    expect(rejected(metrics(adapter, reading!).lines)).toEqual([
+      'the scale did not accept the profile; estimating instead (#331)',
+    ]);
+  });
+
+  it('does not use them when lean mass and body fat do not add up to 100 %', async () => {
+    const { adapter, reading } = await weighIn(ALGO, ACCEPTED_THEN(B1_CS10E_LEAN_OFF));
+    expect(rejected(metrics(adapter, reading!).lines)).toEqual([
+      "the scale's lean mass and body fat do not add up to 100 %; estimating instead (#331)",
+    ]);
+  });
+
+  it('gives a 0xB1 in several parts its weight only', async () => {
+    const { reading } = await weighIn(ALGO, ACCEPTED_THEN(B1_501));
+    expect(reading).toEqual({ weight: 77.95, impedance: 0 });
+  });
+
+  it('reads the option from the profile frame sent, not from a later reload', async () => {
+    const steps = (reload: Record<string, unknown>): Step[] => [
+      ...HANDSHAKE,
+      { frame: VISIT_OK_CS10E_1104, advance: 100 },
+      { configure: reload, frame: LIVE_CS10E_331, advance: 1000 },
+      { frame: B1_CS10E_331 },
+    ];
+    const setLater = await weighIn({ qnUserKey: 1000 }, steps(ALGO));
+    expect(rejected(metrics(setLater.adapter, setLater.reading!).lines)).toEqual([
+      'the profile frame went out without ble.qn_algorithm, which the 20-byte dialect needs; ' +
+        'estimating instead (#331)',
+    ]);
+    const removedLater = await weighIn(ALGO, steps({ qnUserKey: 1000 }));
+    expect(metrics(removedLater.adapter, removedLater.reading!).lines).toContain(USED);
+  });
+
+  it('pins nothing on a session that sent no profile of a configured user', async () => {
+    const { reading } = await weighIn({ qnAlgorithm: 7 }, ACCEPTED_THEN(B1_CS10E_331));
+    expect(reading).toEqual({ weight: R.weight, impedance: 0 });
   });
 });
 

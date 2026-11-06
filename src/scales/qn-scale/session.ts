@@ -142,6 +142,11 @@ export class QnSession {
   }
   readyValueType: number | null = null;
   measuredAfterVisit = false;
+  /**
+   * The 20-byte dialect's last live weight for the profile's slot after the
+   * scale accepted the profile (ext20.ts noteLiveFrame, #331); null before one.
+   */
+  liveWeightAfterVisit: number | null = null;
   a4PreludeSent = false;
 
   /**

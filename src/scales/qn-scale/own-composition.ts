@@ -9,7 +9,7 @@ import {
   noEstimateNote,
   type ScaleBodyComp,
 } from '../body-comp-helpers.js';
-import { BMI_MATCH_TOLERANCE } from './constants.js';
+import { BMI_MATCH_TOLERANCE, LIVE_MATCH_WEIGHT_KG } from './constants.js';
 import { buildUserProfileFrame, type EightResult, type VaComposition } from './frames.js';
 
 /*
@@ -23,7 +23,8 @@ export const seconds = (ms: number | null): string =>
   ms === null ? 'unknown' : `${(ms / 1000).toFixed(1)} s`;
 
 /**
- * The scale's own results for one 19-byte weigh-in, and what this session sent
+ * The scale's own results for one weigh-in (the 19-byte dialect's result
+ * block, or the 20-byte dialect's one-part 0xB1), and what this session sent
  * it and heard back, pinned to the reading they belong to (#331).
  */
 export interface ScaleCompositionPin {
@@ -38,11 +39,29 @@ export interface ScaleCompositionPin {
   measuredAfterVisit: boolean;
   /**
    * Milliseconds from the scale accepting the profile to its first answer to
-   * the 0x22; null without an accepted profile or without an answer.
+   * the 0x22; null without an accepted profile or without an answer. Absent on
+   * the 20-byte dialect, whose result is not an answer to the 0x22.
    */
-  answerAfterVisitMs: number | null;
+  answerAfterVisitMs?: number | null;
   a4PreludeSent: boolean;
+  /**
+   * The 20-byte dialect's pin (#331, D096): used only when the profile frame
+   * carried `ble.qn_algorithm`, and only when its lean mass and body fat add up
+   * to 100 %, the check that the 0xB1 layout was read right. Absent on the
+   * 19-byte dialect.
+   */
+  requiresAlgorithmOption?: true;
+  /**
+   * The 20-byte dialect's last live weight after the acceptance (null without
+   * one), which the 0xB1's weight must match to LIVE_MATCH_WEIGHT_KG: a 0xB1
+   * the scale replays after a reconnect is a weigh-in from before (#331).
+   * Absent on the 19-byte dialect.
+   */
+  liveWeightAfterVisit?: number | null;
 }
+
+/** How far the 0xB1's lean mass and body fat may sum from 100 % (two 0.1 roundings). */
+const LEAN_FAT_SUM_TOLERANCE = 0.2 + 1e-9;
 
 /**
  * Why the scale's own composition pinned to a reading does not belong to the
@@ -60,24 +79,44 @@ export interface ScaleCompositionPin {
  * 0.1 rounding: one centimetre already moves it by more than that. A
  * session that sent the `qn_a4_prelude` frames overwrote the slot's stored
  * segment values with someone else's, which the scale corrects its channels
- * with, so it is never used there.
+ * with, so it is never used there. On the 20-byte dialect also see
+ * `requiresAlgorithmOption`.
  */
 function scaleCompositionRejection(pin: ScaleCompositionPin, profile: UserProfile): string | null {
   const { visit, reply, result, composition } = pin;
   if (!visit) return 'this session sent the scale no profile of a configured user';
+  if (pin.requiresAlgorithmOption && !visit.algorithmFromOption) {
+    return 'the profile frame went out without ble.qn_algorithm, which the 20-byte dialect needs';
+  }
   if (!reply) return 'the scale did not answer the profile frame';
   if (!reply.ok || reply.slot !== visit.slot) return 'the scale did not accept the profile';
   if (!pin.measuredAfterVisit) {
-    return pin.answerAfterVisitMs === null
+    const answerMs = pin.answerAfterVisitMs ?? null;
+    return answerMs === null
       ? 'the scale sent no live weight after it accepted the profile'
-      : `the scale answered ${seconds(pin.answerAfterVisitMs)} after it accepted the ` +
+      : `the scale answered ${seconds(answerMs)} after it accepted the ` +
           'profile, with no live weight in between, so it most likely measured before that';
+  }
+  if (pin.requiresAlgorithmOption) {
+    // The scale streams its stable live frame just before the 0xB1, so a
+    // result of this weigh-in carries that frame's weight; a 0xB1 replayed
+    // after a reconnect follows the live frames of another weigh-in, or none.
+    const live = pin.liveWeightAfterVisit ?? null;
+    if (live === null || Math.abs(live - result.weight) > LIVE_MATCH_WEIGHT_KG + 1e-9) {
+      return "the result's weight is not the one the scale streamed after it accepted the profile";
+    }
   }
   if (pin.a4PreludeSent) {
     return "ble.qn_a4_prelude overwrote the scale's segment values in this session";
   }
   if (result.slot !== visit.slot) return 'the weigh-in is on another user slot of the scale';
   if (pin.valueType !== 1) return 'the scale did not report its results as percentages';
+  if (
+    pin.requiresAlgorithmOption &&
+    Math.abs(composition.lbm + result.fatPercent - 100) > LEAN_FAT_SUM_TOLERANCE
+  ) {
+    return "the scale's lean mass and body fat do not add up to 100 %";
+  }
   const expected = buildUserProfileFrame(profile.age, profile.height, profile.gender);
   if (expected.slice(6, 10).some((b, i) => b !== visit.frame[6 + i])) {
     return "the matched user's age, height or sex is not the profile sent to the scale";

@@ -1652,7 +1652,7 @@ export class QnScaleAdapter
   }
 
   computeMetrics(reading: ScaleReading, profile: UserProfile): BodyComposition {
-    // The 19-byte dialect's own results, when they belong to this user (#331).
+    // The 19- and 20-byte dialects' own results, when they belong to this user (#331).
     const pin = reading.scaleComposition as ScaleCompositionPin | undefined;
     if (pin) {
       const payload = scaleCompositionPayload(pin, reading, profile);
