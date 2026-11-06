@@ -25,7 +25,7 @@ A run reports an error only when every exporter fails. A failed export to a targ
 | [HealthLog](#healthlog)         | Weight and body composition to a HealthLog instance    |
 | [Dreeve](#dreeve)               | Weight to a self-hosted Dreeve instance                |
 
-The [Renpho R-MSC04 extras](/guide/scales/renpho#r-msc04-morphoscan-nova), skeletal muscle percentage and segment impedances, reach MQTT, Webhook, File JSONL and InfluxDB with the weigh-ins that carry them. Ntfy and Telegram show only the skeletal muscle percentage; CSV and the other targets get the same fields for every scale.
+The skeletal muscle percentage and the segment impedances reach MQTT, Webhook, File JSONL and InfluxDB with the weigh-ins that carry them. The [Renpho R-MSC04](/guide/scales/renpho#r-msc04-morphoscan-nova) sends both, and the [Arboleaf CS10E on the 20-byte QN dialect](/guide/scales/qn#scale-body-composition-on-the-extended-dialect) sends the skeletal muscle percentage. Ntfy and Telegram show only the skeletal muscle percentage; CSV and the other targets get the same fields for every scale.
 
 ## Garmin Connect {#garmin}
 
@@ -135,13 +135,13 @@ Each weigh-in is one message on `<topic>/<user slug>`. Masses are in kg whatever
 
 `timestamp` is when the weigh-in was measured, in ISO 8601 UTC: the scale's own time when it sends one, otherwise the time the reading reached the app. Weigh-ins a scale sends from its memory do not go to MQTT, so it is always the last live weigh-in.
 
-The R-MSC04 extras are `skeletalMusclePercent` and ten segment impedances in ohm: `impedanceTrunk20kHz`, `impedanceTrunk100kHz`, and the same pairs for `LeftArm`, `RightArm`, `LeftLeg` and `RightLeg`. A key is in the message only when that weigh-in carries it.
+Some scales add `skeletalMusclePercent`, and the R-MSC04 also ten segment impedances in ohm: `impedanceTrunk20kHz`, `impedanceTrunk100kHz`, and the same pairs for `LeftArm`, `RightArm`, `LeftLeg` and `RightLeg`. A key is in the message only when that weigh-in carries it.
 
 ### Home Assistant Sensors
 
 Discovery creates one device per user, with a sensor for weight, impedance, BMI, body fat, water, bone mass, muscle mass, visceral fat, physique rating, BMR, metabolic age and the time of the last weigh-in (**Last Weigh-in**). Each sensor has its own display precision.
 
-The R-MSC04 extras get sensors the first time a message carries them: **Skeletal Muscle**, and one per segment impedance (**Impedance Left Arm 20 kHz** and so on), which are diagnostic and disabled until you enable them on the device page. A later message without one of these keys shows its sensor as unknown. With `retain: false` such a sensor can miss the value of the weigh-in that created it, because Home Assistant subscribes to its topic only once the sensor exists.
+The skeletal muscle percentage and the segment impedances get sensors the first time a message carries them: **Skeletal Muscle**, and one per segment impedance (**Impedance Left Arm 20 kHz** and so on), which are diagnostic and disabled until you enable them on the device page. A later message without one of these keys shows its sensor as unknown. With `retain: false` such a sensor can miss the value of the weigh-in that created it, because Home Assistant subscribes to its topic only once the sensor exists.
 
 Availability uses an MQTT last will: when the app loses the broker without a clean shutdown, the broker publishes `offline` and Home Assistant shows the sensors as unavailable until the app reconnects.
 

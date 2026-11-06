@@ -79,7 +79,8 @@
       "measuredAfterVisit": true,
       "liveWeightAfterVisit": 92.9,
       "a4PreludeSent": false,
-      "requiresAlgorithmOption": true
+      "requiresAlgorithmOption": true,
+      "exportsSkeletalMuscle": true
     }
   },
   "history": [],

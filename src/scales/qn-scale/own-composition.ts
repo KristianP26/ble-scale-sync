@@ -58,6 +58,13 @@ export interface ScaleCompositionPin {
    * Absent on the 19-byte dialect.
    */
   liveWeightAfterVisit?: number | null;
+  /**
+   * The 20-byte dialect's pin (#331): the 0xB1's skeletal muscle percentage
+   * ([70..71]) goes out with an accepted set, and only inside the band
+   * buildPayload keeps it to (#497). On one CS10E it matched the vendor app.
+   * Absent on the 19-byte dialect, whose value nobody has compared with the app.
+   */
+  exportsSkeletalMuscle?: true;
 }
 
 /** How far the 0xB1's lean mass and body fat may sum from 100 % (two 0.1 roundings). */
@@ -136,7 +143,8 @@ function scaleCompositionRejection(pin: ScaleCompositionPin, profile: UserProfil
  * and metabolic age, each only inside its band (D078). Athlete mode: the scale
  * has none for these scales in the vendor's published SDK, so an athlete gets
  * its values with a note rather than the BMI estimate, which is the worst one
- * for a muscular body.
+ * for a muscular body. On the 20-byte dialect the set also carries the scale's
+ * skeletal muscle percentage (`exportsSkeletalMuscle`).
  */
 export function scaleCompositionPayload(
   pin: ScaleCompositionPin,
@@ -172,6 +180,9 @@ export function scaleCompositionPayload(
   const { bmr, bodyAge } = pin.composition;
   if (isPlausibleBmr(bmr)) set.bmr = bmr;
   if (isPlausibleMetabolicAge(bodyAge)) set.metabolicAge = bodyAge;
+  // buildPayload exports it only next to the accepted body fat and inside its
+  // band, and never estimates it (#497).
+  if (pin.exportsSkeletalMuscle) set.skeletalMuscle = pin.composition.skeletalMuscle;
   bleLog.info("QN: using the scale's own body composition for this weigh-in (#331)");
   bleLog.debug(
     'QN: ' +

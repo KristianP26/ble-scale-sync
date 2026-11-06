@@ -119,7 +119,7 @@ With `qn_user_key` set, the start command and the anchor go out only after the s
 
 ### Scale Body Composition on the Extended Dialect {#scale-body-composition-on-the-extended-dialect}
 
-Experimental. Eight-electrode scales on this dialect, such as the Arboleaf CS10E, compute body fat, water, muscle, bone, visceral fat, BMR and body age for the profile they were sent. With `qn_user_key` and [`qn_algorithm`](#algorithm-byte) set, these are exported, with body age as metabolic age, under the same two conditions as on the [19-byte dialect](#arboleaf-scales-19-byte-dialect). The scale must send its result in one frame, as it does over an ESPHome proxy; when the result arrives split, which happens over the ESP32 proxy, only the weight goes out. Without `qn_algorithm` the normal log names it as the reason and the weigh-in gets the BMI estimate.
+Experimental. Eight-electrode scales on this dialect, such as the Arboleaf CS10E, compute body fat, water, muscle, bone, skeletal muscle, visceral fat, BMR and body age for the profile they were sent. With `qn_user_key` and [`qn_algorithm`](#algorithm-byte) set, these are exported, with body age as metabolic age, under the same two conditions as on the [19-byte dialect](#arboleaf-scales-19-byte-dialect). The scale must send its result in one frame, as it does over an ESPHome proxy; when the result arrives split, which happens over the ESP32 proxy, only the weight goes out. Without `qn_algorithm` the normal log names it as the reason and the weigh-in gets the BMI estimate.
 
 ```yaml
 ble:
@@ -127,7 +127,7 @@ ble:
   qn_algorithm: 7 # what the vendor's published SDK sends an 8-electrode scale
 ```
 
-These are the scale's own values, which can differ from what the vendor app shows. Report on [#331](https://github.com/KristianP26/ble-scale-sync/issues/331) how they compare with the vendor app.
+These are the scale's own values, which can differ from what the vendor app shows. The skeletal muscle percentage is exported as the scale reports it, between 10 and 90 % only. Report on [#331](https://github.com/KristianP26/ble-scale-sync/issues/331) how they compare with the vendor app.
 
 ## Stored Weigh-Ins on the 18-Byte Dialect
 

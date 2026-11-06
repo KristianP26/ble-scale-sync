@@ -160,8 +160,9 @@ function hasMeasurement(decoded: ExtendedResult): boolean {
  * Put the scale's own results of a one-part 0xB1 on its reading (#331, D096),
  * with what this session sent and heard back, snapshot now (#394).
  * computeMetrics decides whether they are this user's (own-composition.ts):
- * on this dialect also only with `ble.qn_algorithm` in the profile frame. The
- * 19-byte pin has no 0x22 answer time here: this result is not that answer.
+ * on this dialect also only with `ble.qn_algorithm` in the profile frame, and
+ * the 0xB1's skeletal muscle percentage goes with the set. The 19-byte pin has no
+ * 0x22 answer time here: this result is not that answer.
  */
 function pinOwnComposition(s: QnSession, reading: ScaleReading, decoded: ExtendedResult): void {
   if (!hasMeasurement(decoded)) {
@@ -189,6 +190,7 @@ function pinOwnComposition(s: QnSession, reading: ScaleReading, decoded: Extende
     liveWeightAfterVisit: s.liveWeightAfterVisit,
     a4PreludeSent: s.a4PreludeSent,
     requiresAlgorithmOption: true,
+    exportsSkeletalMuscle: true,
   } satisfies ScaleCompositionPin;
 }
 

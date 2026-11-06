@@ -306,6 +306,12 @@ const B1_CS10E_NOT_ITS_LENGTH = derive(B1_CS10E_331, { 1: 0x76 });
 const B1_CS10E_SLOT2 = derive(B1_CS10E_331, { 4: 0x02 });
 const B1_CS10E_LEAN_OFF = derive(B1_CS10E_331, { 66: B1_CS10E_331[66] + 3 });
 /**
+ * Derived from B1_CS10E_331: the skeletal muscle at [70..71] set to 0, and to
+ * the 0xffff sentinel; both outside its band.
+ */
+const B1_CS10E_SKELETAL_0 = derive(B1_CS10E_331, { 70: 0x00, 71: 0x00 });
+const B1_CS10E_SKELETAL_FFFF = derive(B1_CS10E_331, { 70: 0xff, 71: 0xff });
+/**
  * Derived from LIVE_CS10E_331: another weight at [5..6] (24 00, [6] changed), status 02 at
  * [3], and user slot 2 at [2].
  */
@@ -379,6 +385,8 @@ const DERIVED: [string, Buffer, Buffer, number[]][] = [
   ['B1_CS10E_NOT_ITS_LENGTH', B1_CS10E_NOT_ITS_LENGTH, B1_CS10E_331, [1]],
   ['B1_CS10E_SLOT2', B1_CS10E_SLOT2, B1_CS10E_331, [4]],
   ['B1_CS10E_LEAN_OFF', B1_CS10E_LEAN_OFF, B1_CS10E_331, [66]],
+  ['B1_CS10E_SKELETAL_0', B1_CS10E_SKELETAL_0, B1_CS10E_331, [70, 71]],
+  ['B1_CS10E_SKELETAL_FFFF', B1_CS10E_SKELETAL_FFFF, B1_CS10E_331, [70, 71]],
   ['LIVE_CS10E_OTHER_WEIGHT', LIVE_CS10E_OTHER_WEIGHT, LIVE_CS10E_331, [6]],
   ['LIVE_CS10E_STATUS2', LIVE_CS10E_STATUS2, LIVE_CS10E_331, [3]],
   ['LIVE_CS10E_SLOT2', LIVE_CS10E_SLOT2, LIVE_CS10E_331, [2]],
@@ -5314,8 +5322,8 @@ describe("20-byte dialect: the scale's own body composition (#331)", () => {
     expect(payload.visceralFat).toBe(C.visceral);
     expect(payload.bmr).toBe(C.bmr);
     expect(payload.metabolicAge).toBe(C.bodyAge);
-    // Neither the skeletal muscle nor the segments go out.
-    expect(payload).not.toHaveProperty('skeletalMusclePercent');
+    expect(payload.skeletalMusclePercent).toBe(C.skeletalMuscle);
+    // The segments do not go out.
     expect(Object.keys(payload).filter((k) => /^impedance[A-Z]/.test(k))).toEqual([]);
     assertPayloadRanges(payload);
   });
@@ -5329,6 +5337,21 @@ describe("20-byte dialect: the scale's own body composition (#331)", () => {
         'estimating instead (#331)',
     ]);
     expect(payload.bodyFatPercent).not.toBe(R.fatPercent);
+    expect(payload).not.toHaveProperty('skeletalMusclePercent');
+  });
+
+  it.each([
+    ['0 %', B1_CS10E_SKELETAL_0],
+    ['the 0xffff sentinel', B1_CS10E_SKELETAL_FFFF],
+  ])('exports the set without a skeletal muscle percentage of %s', async (_what, b1) => {
+    const real = await weighIn(ALGO, ACCEPTED_THEN(B1_CS10E_331));
+    const { skeletalMusclePercent, ...rest } = metrics(real.adapter, real.reading!).payload;
+    expect(skeletalMusclePercent).toBe(C.skeletalMuscle);
+    const { adapter, reading } = await weighIn(ALGO, ACCEPTED_THEN(b1));
+    const { payload, lines } = metrics(adapter, reading!);
+    expect(lines).toContain(USED);
+    expect(payload).not.toHaveProperty('skeletalMusclePercent');
+    expect(payload).toEqual(rest);
   });
 
   it('does not use them without a live frame after the acceptance', async () => {

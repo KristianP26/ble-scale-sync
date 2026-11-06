@@ -10,7 +10,11 @@ import type {
   UserProfile,
 } from '../../src/interfaces/scale-adapter.js';
 import { defaultProfile } from '../helpers/scale-test-utils.js';
-import { buildPayload } from '../../src/scales/body-comp-helpers.js';
+import {
+  buildPayload,
+  isPlausibleSkeletalMusclePercent,
+} from '../../src/scales/body-comp-helpers.js';
+import type { ScaleCompositionPin } from '../../src/scales/qn-scale/own-composition.js';
 import {
   decodeEightResult,
   decodeEightStoredRecord,
@@ -730,6 +734,17 @@ describe("QN 19-byte: the scale's own body composition (#331)", () => {
     expect({ ...reading, scaleComposition: undefined }).toEqual({ weight: 76.85, impedance: 0 });
     return { adapter, reading: reading! };
   }
+
+  // Only the 20-byte dialect's skeletal muscle percentage is exported (#331);
+  // this one is in band, so only the dialect keeps it out.
+  it("does not export the 19-byte scale's skeletal muscle percentage", async () => {
+    const { adapter, reading } = await weighIn();
+    const pin = reading.scaleComposition as ScaleCompositionPin;
+    expect(isPlausibleSkeletalMusclePercent(pin.composition.skeletalMuscle)).toBe(true);
+    const payload = adapter.computeMetrics(reading, P181);
+    expect(payload.bodyFatPercent).toBe(pin.result.fatPercent);
+    expect(payload).not.toHaveProperty('skeletalMusclePercent');
+  });
 
   it("uses the scale's values when the matched user has the profile it was sent", async () => {
     const info = spyLines('info');
