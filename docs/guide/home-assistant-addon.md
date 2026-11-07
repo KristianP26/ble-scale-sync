@@ -159,6 +159,24 @@ When you report back, paste the `Version` line from the top of the log; on a dev
 
 If the app exits on its own, for example after repeated Bluetooth failures, the add-on starts it again after a short, growing delay; the Supervisor's Watchdog switch is not needed.
 
+An exit with code 0 is the exception. With `runtime.continuous_mode: false` in a [custom config](#custom-config-mode) the app does a single run, and when it succeeds the add-on stops instead of starting another run. This changes the behavior of earlier versions, which started the next run after 5 seconds; with continuous mode off, start the add-on again (or switch continuous mode on) for the next run. A single run that finds nothing exits with code 1 and is retried with the growing delay. The default add-on options always run in continuous mode and are not affected.
+
+To sync once a day, turn **Start on boot** and **Watchdog** off, set `continuous_mode: false` in the custom config, and start the add-on from an automation:
+
+```yaml
+alias: Scale daily sync
+triggers:
+  - trigger: time
+    at: '07:30:00'
+actions:
+  - action: hassio.addon_start
+    data:
+      addon: xxxxxxxx_ble_scale_sync # slug from the add-on's URL
+mode: single
+```
+
+The scale keeps its last weigh-in and sends it on every connect, and the app exports it only once. On a day with no new weigh-in the run finds nothing new, so it exits with code 1 and is retried; add a final `hassio.addon_stop` step after a delay or a `wait_for_trigger` on your weight sensor to end it.
+
 | Path                                   | Content                                                                                                  |
 | -------------------------------------- | -------------------------------------------------------------------------------------------------------- |
 | `/data/config.yaml`                    | The generated config, rewritten on every start with each user's `last_known_weight` kept                 |
