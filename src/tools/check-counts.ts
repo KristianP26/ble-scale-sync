@@ -128,10 +128,10 @@ export const OCCURRENCES: Occurrence[] = [
     label: 'supported scales intro',
   },
   {
-    file: 'docs/index.md',
-    pattern: /title: (\d+) Export Targets/,
+    file: 'docs/.vitepress/theme/HomeLanding.vue',
+    pattern: /each weigh-in to (\d+) export targets/,
     counts: ['exporters'],
-    label: 'home page feature card',
+    label: 'home page hero',
   },
   {
     file: 'CONTRIBUTING.md',
