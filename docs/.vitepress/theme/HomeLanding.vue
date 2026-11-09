@@ -1371,6 +1371,19 @@ h3 {
   display: block;
   height: 32px;
   width: auto;
+  border-radius: 999px;
+  transform-origin: left center;
+  transition:
+    transform 0.2s ease,
+    box-shadow 0.2s ease;
+}
+/* The badge grows a little on hover and settles back on press. */
+.bss-badge:hover img {
+  transform: scale(1.06);
+  box-shadow: 0 6px 16px rgba(3, 169, 244, 0.35);
+}
+.bss-badge:active img {
+  transform: scale(1.02);
 }
 .bss-cmd {
   position: relative;
@@ -1688,7 +1701,8 @@ h3 {
   .bss-btn,
   .bss-node,
   .bss-icard,
-  .bss-result {
+  .bss-result,
+  .bss-badge img {
     transition: none;
   }
 }
