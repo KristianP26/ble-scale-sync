@@ -92,7 +92,7 @@ BlueZ: AA:BB:CC:DD:EE:FF disconnected 5.40 s after connect: org.bluez.Reason.Rem
 
 What to do for each reason:
 
-- `org.bluez.Reason.Remote`: the scale ended it. Many scales do that after every weigh-in, so it matters only when it comes before the reading. Stay on the scale until it shows the final result.
+- `org.bluez.Reason.Remote`: the scale ended it. Many scales do that after every weigh-in, so it matters only when it comes before the reading. Stay on the scale until it shows the final result. A Renpho R-MSC04 that hangs up about 5.5 seconds in: see [The R-MSC04 drops the connection a few seconds in](/guide/scales/renpho#the-r-msc04-drops-the-connection-a-few-seconds-in).
 - `org.bluez.Reason.Timeout`: the radio link was lost. Shorten the distance, and keep USB 3 devices and ports away from a USB Bluetooth adapter, they interfere at 2.4 GHz.
 - `org.bluez.Reason.Local`: this host ended it (this app, BlueZ, the kernel or another Bluetooth program).
 - `org.bluez.Reason.Authentication`: the scale refused the stored pairing key. Clear the pairing as described in [Every connect fails after the first session](/guide/scales/beurer#every-connect-fails-after-the-first-session).

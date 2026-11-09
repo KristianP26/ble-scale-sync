@@ -99,9 +99,24 @@ Without `rmsc04_profile_byte` that is expected. See [Use the scale's own body fa
 
 ### The R-MSC04 drops the connection a few seconds in
 
-Some weigh-ins lose the connection about 5 seconds after it opened. The settled weight is still read, but that weigh-in gets no body composition from the scale.
+On Linux the kernel likely refuses the scale's request for a slower connection, because BlueZ has loaded the scale's own preferred connection settings into it. The scale then hangs up about 5.5 seconds after connecting, and the weigh-in gets the settled weight but no body composition from the scale. The first weigh-in after a reboot can still work. [Debug mode](/troubleshooting#connection-ended) logs when the connection ended, and `sudo btmon` during a weigh-in shows `LE Remote Connection Parameter Request Negative Reply` before the scale disconnects.
 
-On Linux, [debug mode shows why the connection ended](/troubleshooting#connection-ended). Report the lines on [#434](https://github.com/KristianP26/ble-scale-sync/issues/434).
+To stop BlueZ from loading those settings, start it without its GAP plugin. A Docker container uses the host's BlueZ, so change the host.
+
+1. Run `sudo systemctl edit bluetooth`.
+2. Add these lines. If `systemctl cat bluetooth` shows another path or more options for `bluetoothd`, keep them and add `-P gap`.
+
+   ```ini
+   [Service]
+   ExecStart=
+   ExecStart=/usr/libexec/bluetooth/bluetoothd -P gap
+   ```
+
+3. Reboot. The kernel keeps the scale's old settings until then.
+
+The next weigh-in logs a line that starts with `Renpho R-MSC04: body composition received`. Without the plugin, BlueZ takes the names of Bluetooth LE devices only from their advertisements. To undo it, remove those lines with `sudo systemctl edit bluetooth` and reboot. If the scale still hangs up, open an issue with the debug log of one weigh-in.
+
+These steps do not cover Home Assistant OS, which ships its own BlueZ. An [ESPHome proxy](/guide/esphome-proxy) may avoid the drop, because its ESP32 connects with its own Bluetooth stack, not the host's. That is not yet tested with the R-MSC04.
 
 ### The R-MSC04 connects again about 30 seconds after a weigh-in
 
