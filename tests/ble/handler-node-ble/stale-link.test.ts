@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { EventEmitter } from 'node:events';
 
 vi.spyOn(console, 'log').mockImplementation(() => {});
 vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -33,6 +34,9 @@ const {
   _resetStaleLinkStateForTests,
 } = await import('../../../src/ble/handler-node-ble/stale-link.js');
 const { bleLog } = await import('../../../src/ble/types.js');
+const { noteConnected, watchDisconnectReasons, _resetDisconnectReasonsForTests } =
+  await import('../../../src/ble/handler-node-ble/disconnect-reasons.js');
+const { setLogLevel, LogLevel } = await import('../../../src/logger.js');
 
 const MAC = 'AA:BB:CC:DD:EE:FF';
 const MIN = 60_000;
@@ -299,6 +303,32 @@ describe('disconnectBounded (#472)', () => {
       'done',
     );
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('marks the Disconnect as ours: BlueZ before 5.83 gets no reasonless line for it (#497)', async () => {
+    const debug = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+    setLogLevel(LogLevel.DEBUG);
+    try {
+      const bus = new EventEmitter() as EventEmitter & { _addMatch: () => Promise<void> };
+      bus._addMatch = async () => undefined;
+      watchDisconnectReasons(bus);
+      noteConnected(MAC);
+      await disconnectBounded({ disconnect: vi.fn(async () => undefined) } as never, {
+        mac: MAC,
+        label: 'teardown',
+      });
+      bus.emit('message', {
+        type: 4,
+        path: '/org/bluez/hci0/dev_AA_BB_CC_DD_EE_FF',
+        interface: 'org.freedesktop.DBus.Properties',
+        member: 'PropertiesChanged',
+        body: ['org.bluez.Device1', { Connected: { signature: 'b', value: false } }, []],
+      });
+      expect(debug.mock.calls.some((c) => String(c[0]).startsWith('BlueZ: '))).toBe(false);
+    } finally {
+      setLogLevel(LogLevel.INFO);
+      _resetDisconnectReasonsForTests();
+    }
   });
 
   it('calls onAnswered only for an answer from BlueZ, not for an error or a closed connection', async () => {

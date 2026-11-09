@@ -54,6 +54,12 @@ configuration:
       QN scales only, with the QN user key: the user slot (1 to 8) the vendor
       app registered you in, when it is not 1. Experimental; the QN Scales
       page says where the debug log names your slot.
+  qn_algorithm:
+    name: QN algorithm byte
+    description: >-
+      Experimental, QN scales only. The algorithm byte (0 to 255) of the
+      profile frame, sent only with the QN user key (on 19-byte scales also
+      with the QN weight acknowledgement); the QN Scales page says when to set it.
   qn_a4_prelude:
     name: QN A4 prelude
     description: >-
@@ -75,8 +81,9 @@ configuration:
   qn_result_ack:
     name: QN result acknowledgement
     description: >-
-      Experimental, QN scales with a 19-byte scale-info frame only. Sends the
-      end-of-measurement frame of the vendor's SDK after the last result frame.
+      Experimental, QN scales with a 19-byte scale-info frame and the Arboleaf
+      CS10K only. Sends the end-of-measurement frame of the vendor's SDK after
+      the last result frame.
   rmsc04_profile_byte:
     name: Renpho R-MSC04 profile byte
     description: >-

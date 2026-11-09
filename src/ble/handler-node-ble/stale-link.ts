@@ -42,6 +42,7 @@ import { helperOf, releaseDeviceProxy, type Device } from './dbus.js';
 import { getAdapter, parseHciIndex } from './connection.js';
 import { powerCycleViaDbus } from './discovery.js';
 import { onceLog } from './once-log.js';
+import { noteDisconnecting } from './disconnect-reasons.js';
 
 /** What a bounded Disconnect ended with. An error answer from BlueZ is `'done'`. */
 export type DisconnectOutcome = 'done' | 'timeout' | 'aborted';
@@ -171,6 +172,8 @@ export function disconnectBounded(
   },
 ): Promise<DisconnectOutcome> {
   const { mac, label, abortSignal } = opts;
+  // Before the Disconnect, so the Connected=false it causes is known as ours.
+  noteDisconnecting(mac);
   const t0 = now();
   let answer: Promise<void>;
   try {

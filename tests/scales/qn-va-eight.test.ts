@@ -10,7 +10,11 @@ import type {
   UserProfile,
 } from '../../src/interfaces/scale-adapter.js';
 import { defaultProfile } from '../helpers/scale-test-utils.js';
-import { buildPayload } from '../../src/scales/body-comp-helpers.js';
+import {
+  buildPayload,
+  isPlausibleSkeletalMusclePercent,
+} from '../../src/scales/body-comp-helpers.js';
+import type { ScaleCompositionPin } from '../../src/scales/qn-scale/own-composition.js';
 import {
   decodeEightResult,
   decodeEightStoredRecord,
@@ -112,6 +116,16 @@ const R06_SESSION = {
   MEASURING: hex('10 14 01 00 11 1e 05 00 00 00 00 00 00 00 00 00 00 00 00 59'),
   STABLE: hex('10 14 01 01 11 1e 05 00 00 00 00 00 00 00 00 00 00 00 00 5a'),
 };
+/**
+ * #530, the Arboleaf CS10K's 20-byte 0x12 from the reporter's issue text (MAC
+ * rewritten to `01 00 00 00 00 02`, sum recomputed): [18] is 0x0b, no
+ * dynamic-package bit. The reporter describes the weigh-in frames as the
+ * 19-byte dialect's, so the #331 frames below run behind it: tests that use it
+ * are derived, not a CS10K capture. CS10K_CONFIG is the config the reporter
+ * ran, the vendor visit key, since this handshake is the extended one.
+ */
+const INFO_CS10K = hex('12 14 ff 01 00 00 00 00 02 1a 0f 29 00 04 05 03 e0 6f 0b e0');
+const CS10K_CONFIG: AdapterRuntimeConfig = { qnUserKey: 1000 };
 const R07_SESSION = {
   INFO: hex('12 13 ff 54 0b 04 00 07 ff 15 0f 27 00 01 05 03 e0 6f 30'),
   READY: R06_SESSION.READY,
@@ -437,6 +451,36 @@ describe('QN 19-byte stored records (#331)', () => {
     expect(s.starts()).toBe(1);
   });
 
+  // #530: the CS10K sent the same frames as five records that the extended
+  // dialect read in the VA layout (dates in 2005 and 2017) and asked for again.
+  it('reads a fresh stored record behind a CS10K 0x12 the 19-byte way, without a re-query', async () => {
+    const adapter = new QnScaleAdapter();
+    const s = await openSession(adapter, {
+      now: R07_CONNECTED,
+      info: INFO_CS10K,
+      config: CS10K_CONFIG,
+    });
+    expect(s.starts()).toBe(1);
+    const out = s.feed(R07_SESSION.VISIT_OK, ...R07_STORED);
+    expect(out.slice(0, 5)).toEqual([null, null, null, null, null]);
+    expect(out[5]).toEqual({ weight: 76.55, impedance: 0, timestamp: new Date(R07_RECORD_AT) });
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(s.starts()).toBe(1);
+  });
+
+  it('reports an older stored record behind a CS10K 0x12 as history', async () => {
+    const adapter = new QnScaleAdapter();
+    const s = await openSession(adapter, {
+      now: '2026-10-07T20:10:00Z',
+      info: INFO_CS10K,
+      config: CS10K_CONFIG,
+    });
+    const reading = s.feed(...R07_STORED)[4]!;
+    expect(reading).toEqual({ weight: 76.55, impedance: 0, timestamp: new Date(R07_RECORD_AT) });
+    expect(isHistoricalReading(reading)).toBe(true);
+    expect(adapter.completionHoldMs).toBeUndefined();
+  });
+
   it('reports an older stored record as history, without holding the link', async () => {
     const adapter = new QnScaleAdapter();
     const s = await openSession(adapter, { now: '2026-10-07T20:10:00Z' });
@@ -706,13 +750,17 @@ describe("QN 19-byte: the scale's own body composition (#331)", () => {
    * 0x16 reading.
    */
   async function weighIn(
-    opts: { profile?: Partial<UserProfile>; config?: AdapterRuntimeConfig } = {},
+    opts: {
+      profile?: Partial<UserProfile>;
+      config?: AdapterRuntimeConfig;
+      info?: Buffer;
+    } = {},
     frames: { visit?: Buffer | null; ready?: Buffer; live?: Buffer[] } = {},
   ) {
     const adapter = new QnScaleAdapter();
     const s = await openSession(adapter, {
       now: '2026-10-06T15:10:52Z',
-      info: R06_SESSION.INFO,
+      info: opts.info ?? R06_SESSION.INFO,
       profile: { ...P181, ...opts.profile },
       config: opts.config,
       ready: frames.ready,
@@ -730,6 +778,17 @@ describe("QN 19-byte: the scale's own body composition (#331)", () => {
     expect({ ...reading, scaleComposition: undefined }).toEqual({ weight: 76.85, impedance: 0 });
     return { adapter, reading: reading! };
   }
+
+  // Only the 20-byte dialect's skeletal muscle percentage is exported (#331);
+  // this one is in band, so only the dialect keeps it out.
+  it("does not export the 19-byte scale's skeletal muscle percentage", async () => {
+    const { adapter, reading } = await weighIn();
+    const pin = reading.scaleComposition as ScaleCompositionPin;
+    expect(isPlausibleSkeletalMusclePercent(pin.composition.skeletalMuscle)).toBe(true);
+    const payload = adapter.computeMetrics(reading, P181);
+    expect(payload.bodyFatPercent).toBe(pin.result.fatPercent);
+    expect(payload).not.toHaveProperty('skeletalMusclePercent');
+  });
 
   it("uses the scale's values when the matched user has the profile it was sent", async () => {
     const info = spyLines('info');
@@ -807,6 +866,43 @@ describe("QN 19-byte: the scale's own body composition (#331)", () => {
       metabolicAge: 48,
     });
     expect(info.lines()).toContain('QN: the scale computed it without an athlete mode (#331)');
+  });
+
+  // #530: the same weigh-in behind the CS10K's 20-byte 0x12 reaches the same
+  // pin and the same exported values, without `qn_algorithm`.
+  it("uses the scale's values behind a CS10K 0x12 with the vendor visit key alone", async () => {
+    const info = spyLines('info');
+    const { adapter, reading } = await weighIn({ info: INFO_CS10K, config: CS10K_CONFIG });
+    const payload = adapter.computeMetrics(reading, P181);
+    expect(payload).toMatchObject({
+      weight: 76.85,
+      bodyFatPercent: 18,
+      waterPercent: 59.1,
+      muscleMass: 59.87,
+      boneMass: 3.23,
+      visceralFat: 6,
+      bmr: 1730,
+      metabolicAge: 48,
+    });
+    expect(payload).not.toHaveProperty('skeletalMusclePercent');
+    expect(info.lines()).toContain(
+      "QN: using the scale's own body composition for this weigh-in (#331)",
+    );
+  });
+
+  it('matches the 19-byte scale value for value behind a CS10K 0x12', async () => {
+    const own = await weighIn();
+    const cs10k = await weighIn({ info: INFO_CS10K, config: CS10K_CONFIG });
+    expect(cs10k.adapter.computeMetrics(cs10k.reading, P181)).toEqual(
+      own.adapter.computeMetrics(own.reading, P181),
+    );
+  });
+
+  // The scale's own composition needs the vendor visit; without the key the
+  // extended handshake sends none, and the estimate stands.
+  it('estimates behind a CS10K 0x12 when the session sent no vendor visit', async () => {
+    const { adapter, reading } = await weighIn({ info: INFO_CS10K, config: {} }, { visit: null });
+    expect(adapter.computeMetrics(reading, P181)).toEqual(estimate(P181));
   });
 
   // Derived frames: the scale's answer with 0 (refused) at [4], the ready frame
@@ -1105,8 +1201,9 @@ describe('QN 19-byte: ble.qn_result_ack (#331)', () => {
     config: AdapterRuntimeConfig,
     now = '2026-10-06T15:10:52Z',
     adapter = new QnScaleAdapter(),
+    info = R06_SESSION.INFO,
   ) {
-    const s = await openSession(adapter, { now, info: R06_SESSION.INFO, profile: P181, config });
+    const s = await openSession(adapter, { now, info, profile: P181, config });
     const from = s.writes.length;
     return { adapter, s, after: () => s.writes.slice(from) };
   }
@@ -1131,6 +1228,20 @@ describe('QN 19-byte: ble.qn_result_ack (#331)', () => {
       scaleComposition: expect.any(Object),
     });
     expect(after()).toEqual([ACK]);
+  });
+
+  // #530: the option is for the 19-byte result block, whichever 0x12 comes with it.
+  it('sends the 0x1F behind a CS10K 0x12 too', async () => {
+    const { s, after } = await session(
+      { ...CS10K_CONFIG, qnResultAck: true },
+      undefined,
+      undefined,
+      INFO_CS10K,
+    );
+    s.feed(...UNTIL_D16);
+    expect(after().filter((w) => w[0] === 0x1f)).toEqual([]);
+    expect(s.feed(R06.D16)[0]).toMatchObject({ weight: 76.85, impedance: 0 });
+    expect(after().filter((w) => w[0] === 0x1f)).toEqual([ACK]);
   });
 
   it.each([

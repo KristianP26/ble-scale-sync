@@ -8,12 +8,14 @@ import {
   buildStoredDataQuery,
   buildTimeSync,
   buildUserProfileFrame,
+  decodeExtendedResult,
   decodeStoredRecord,
   decryptQnResistance,
   hasValidSumChecksum,
   timeZoneByte,
 } from '../../src/scales/qn-scale/frames.js';
 import { qnAdvertTraits } from '../../src/scales/qn-scale/matching.js';
+import { classifyInfoFrame, infoDynamicPackage } from '../../src/scales/qn-scale/dialect.js';
 import { NINETEEN_BYTE_RESULT_HOLD_MS } from '../../src/scales/qn-scale/constants.js';
 import { bleLog } from '../../src/ble/types.js';
 import { uuid16 } from '../../src/scales/body-comp-helpers.js';
@@ -49,6 +51,15 @@ const INFO_461 = Buffer.from([
 ]);
 const READY_461 = Buffer.from([0x14, 0x0b, 0xff, 0x01, 0x00, 0x01, 0x09, 0x03, 0x00, 0x00, 0x2c]);
 const CONFIG_REQ_461 = Buffer.from([0x21, 0x05, 0xff, 0x01, 0x26]);
+
+/**
+ * #530, the Arboleaf CS10K's 20-byte 0x12 from the reporter's issue text, bytes
+ * as sent apart from the MAC (`01 00 00 00 00 02`, the sum recomputed). [18] is
+ * 0x0b, so the dynamic-package bit is clear. This is the only CS10K frame in
+ * the tests: the weigh-in frames behind it below are the 19-byte Arboleaf's
+ * (#331), so those tests are derived, not a CS10K capture.
+ */
+const INFO_CS10K = Buffer.from('1214ff0100000000021a0f2900040503e06f0be0', 'hex');
 
 /** #283, a classic scale's 17-byte 0x12, from its public log. */
 const INFO_283 = Buffer.from([
@@ -268,6 +279,12 @@ const B1_501_PART3 = Buffer.from(
 );
 
 /**
+ * Derived from B1_501: the weight at [5..6] set to 0, so the first part is
+ * read but reads no weight (out of range) and no reading is emitted.
+ */
+const B1_501_NO_WEIGHT = derive(B1_501, { 5: 0x00, 6: 0x00 });
+
+/**
  * #331, a 20-byte Arboleaf CS10E over an ESPHome proxy (v1.39.0): its live
  * 0x10 and its 0xB1, byte for byte from the reporter's public comment, both
  * checksums valid. The 0xB1 comes in one part of 119 bytes ([2] 01, [3] 01):
@@ -280,6 +297,62 @@ const B1_CS10E_331 = Buffer.from(
     '8393011e0a7c018c669301a3649301ad75930140769301c7087b01755b930154599301fc0a0158',
   'hex',
 );
+
+/**
+ * #331, the same CS10E's 0xB1 of 2026-11-04, byte for byte from the public
+ * DEBUG log of that day (the `QN RAW (119B)` line): one part, user slot 1.
+ */
+const B1_CS10E_1104 = Buffer.from(
+  'b1770101014a24220db70b270dc70baa0a8009390a19091001ea002e0dc90b300dd70b480a2c0915' +
+    '0af4080401e100ed00000018012602d4020a296c07ad00002600fb02cf00ec01c80207cf838e01e2' +
+    '838e01260a7701d3668e01d4648e01da758e0169768e01cd087701b55b8e0184598e01f50a019a',
+  'hex',
+);
+/**
+ * Derived from B1_CS10E_331: [2] 02, a record in two parts, and [1] 76, so
+ * [1] no longer gives the length.
+ */
+const B1_CS10E_TWO_PARTS = derive(B1_CS10E_331, { 2: 0x02 });
+const B1_CS10E_NOT_ITS_LENGTH = derive(B1_CS10E_331, { 1: 0x76 });
+/**
+ * Derived from B1_CS10E_331: [4] 02, the weigh-in on user slot 2; and the
+ * lean mass at [66..67] raised by 0.3 %, so lean mass and body fat no longer
+ * add up to 100 %.
+ */
+const B1_CS10E_SLOT2 = derive(B1_CS10E_331, { 4: 0x02 });
+const B1_CS10E_LEAN_OFF = derive(B1_CS10E_331, { 66: B1_CS10E_331[66] + 3 });
+/**
+ * Derived from B1_CS10E_331: the skeletal muscle at [70..71] set to 0, and to
+ * the 0xffff sentinel; both outside its band.
+ */
+const B1_CS10E_SKELETAL_0 = derive(B1_CS10E_331, { 70: 0x00, 71: 0x00 });
+const B1_CS10E_SKELETAL_FFFF = derive(B1_CS10E_331, { 70: 0xff, 71: 0xff });
+/**
+ * Derived from LIVE_CS10E_331: another weight at [5..6] (24 00, [6] changed), status 02 at
+ * [3], and user slot 2 at [2].
+ */
+const LIVE_CS10E_OTHER_WEIGHT = derive(LIVE_CS10E_331, { 6: 0x00 });
+const LIVE_CS10E_STATUS2 = derive(LIVE_CS10E_331, { 3: 0x02 });
+const LIVE_CS10E_SLOT2 = derive(LIVE_CS10E_331, { 2: 0x02 });
+/** LIVE_CS10E_331 at 1.00 kg ([5..6] 00 64), below the weight range. */
+const LIVE_CS10E_LIGHT = derive(LIVE_CS10E_331, { 5: 0x00, 6: 0x64 });
+
+/**
+ * #331, the same CS10E on 2026-11-04 (v1.39.1, ESPHome proxy), byte for byte
+ * from the reporter's public DEBUG log apart from the MAC (as for #461 above):
+ * its 0x12, ready frame, config request and its seven-byte acceptance of the
+ * profile frame for user slot 1, the first two sessions of that log alike.
+ */
+const INFO_CS10E_1104 = Buffer.from('1214ff010000000002220f5100080503e06febf4', 'hex');
+const READY_CS10E_1104 = Buffer.from('140fff01000100006401fd08010190', 'hex');
+const CONFIG_REQ_CS10E_1104 = Buffer.from('2107ff01612cb5', 'hex');
+const VISIT_OK_CS10E_1104 = Buffer.from('a10702010107b3', 'hex');
+/**
+ * Derived from VISIT_OK_CS10E_1104: a seven-byte refusal ([4] 00), and the
+ * acceptance with [1] 06, so [1] no longer gives its length.
+ */
+const VISIT_REFUSED_CS10E = derive(VISIT_OK_CS10E_1104, { 4: 0x00 });
+const VISIT_OK_CS10E_NOT_ITS_LENGTH = derive(VISIT_OK_CS10E_1104, { 1: 0x06 });
 
 /**
  * #463, the Physiq's acceptance of the profile frame for user slot 1 and its
@@ -322,6 +395,19 @@ const DERIVED: [string, Buffer, Buffer, number[]][] = [
   ['ACCEPTED_SLOT8', ACCEPTED_SLOT8, VISIT_OK_463, [3]],
   ['REFUSED_SLOT2', REFUSED_SLOT2, REFUSED_501, [3]],
   ['RECORD_463_SLOT2', RECORD_463_SLOT2, RECORD_463, [5]],
+  ['VISIT_REFUSED_CS10E', VISIT_REFUSED_CS10E, VISIT_OK_CS10E_1104, [4]],
+  ['VISIT_OK_CS10E_NOT_ITS_LENGTH', VISIT_OK_CS10E_NOT_ITS_LENGTH, VISIT_OK_CS10E_1104, [1]],
+  ['B1_501_NO_WEIGHT', B1_501_NO_WEIGHT, B1_501, [5, 6]],
+  ['B1_CS10E_TWO_PARTS', B1_CS10E_TWO_PARTS, B1_CS10E_331, [2]],
+  ['B1_CS10E_NOT_ITS_LENGTH', B1_CS10E_NOT_ITS_LENGTH, B1_CS10E_331, [1]],
+  ['B1_CS10E_SLOT2', B1_CS10E_SLOT2, B1_CS10E_331, [4]],
+  ['B1_CS10E_LEAN_OFF', B1_CS10E_LEAN_OFF, B1_CS10E_331, [66]],
+  ['B1_CS10E_SKELETAL_0', B1_CS10E_SKELETAL_0, B1_CS10E_331, [70, 71]],
+  ['B1_CS10E_SKELETAL_FFFF', B1_CS10E_SKELETAL_FFFF, B1_CS10E_331, [70, 71]],
+  ['LIVE_CS10E_OTHER_WEIGHT', LIVE_CS10E_OTHER_WEIGHT, LIVE_CS10E_331, [6]],
+  ['LIVE_CS10E_STATUS2', LIVE_CS10E_STATUS2, LIVE_CS10E_331, [3]],
+  ['LIVE_CS10E_SLOT2', LIVE_CS10E_SLOT2, LIVE_CS10E_331, [2]],
+  ['LIVE_CS10E_LIGHT', LIVE_CS10E_LIGHT, LIVE_CS10E_331, [5, 6]],
 ];
 
 /** Build a fake AABB broadcast buffer with the given weight and stability. */
@@ -1311,10 +1397,10 @@ describe('QnScaleAdapter', () => {
           expect((await extendedAdapter()).parseNotification(fresh)?.weight).toBe(75.2);
         });
         expect(results()).toEqual([
-          'QN: extended result 0xb1 decoded 77.95kg, user slot 2 (impedance sweep not yet ' +
-            'calibrated, emitting weight-only) #235',
-          'QN: extended result 0xb4 decoded 75.2kg, user slot 1 (impedance sweep not yet ' +
-            'calibrated, emitting weight-only) #235',
+          'QN: extended result 0xb1 decoded 77.95kg, user slot 2 (no whole-body impedance, ' +
+            'emitting weight-only) #235',
+          'QN: extended result 0xb4 decoded 75.2kg, user slot 1 (no whole-body impedance, ' +
+            'emitting weight-only) #235',
         ]);
       } finally {
         debug.mockRestore();
@@ -1327,10 +1413,137 @@ describe('QnScaleAdapter', () => {
       expect(adapter.parseNotification(B1_CS10E_331)).toEqual({ weight: 93.15, impedance: 0 });
     });
 
+    it("logs the scale's own results of a one-part 0xB1, and nothing of a split one (#331)", async () => {
+      const debug = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+      try {
+        const lines = () => debug.mock.calls.map((c) => String(c[0]));
+        const one = await extendedAdapter();
+        expect(one.parseNotification(B1_CS10E_331)).toEqual({ weight: 93.15, impedance: 0 });
+        const own = lines().filter((l) => l.startsWith('QN: extended result'));
+        expect(own).toHaveLength(3);
+        expect(own[1]).toMatch(
+          /^QN: extended result, user slot 1, 93\.15 kg, body fat [\d.]+ %; measured Ohm: LH20 [\d.]+, .*T100 [\d.]+; corrected Ohm: LH20 [\d.]+, .*T100 [\d.]+ \(#331\)$/,
+        );
+        expect(own[2]).toMatch(
+          /^QN: extended result composition: bmi [\d.]+, water .*, bodyShape \d+, heartRate \d+, handle \d+, bmiFine [\d.]+, biaType \d+ \(#331\)$/,
+        );
+        debug.mockClear();
+        const split = await extendedAdapter();
+        expect(split.parseNotification(B1_501)).toEqual({ weight: 77.95, impedance: 0 });
+        expect(lines()).toContain(
+          "QN: 0xb1 is not one 119-byte part ([2] 3, 45 bytes), the scale's own results in it are not read (#331)",
+        );
+        expect(lines().filter((l) => l.startsWith('QN: extended result,'))).toEqual([]);
+        debug.mockClear();
+        const wrongLength = await extendedAdapter();
+        expect(wrongLength.parseNotification(B1_CS10E_NOT_ITS_LENGTH)).toEqual({
+          weight: 93.15,
+          impedance: 0,
+        });
+        expect(lines()).toContain(
+          "QN: 119-byte 0xb1 fails its one-part checks ([1] 118, [3] 1, checksum ok), the scale's own results in it are not read (#331)",
+        );
+      } finally {
+        debug.mockRestore();
+      }
+    });
+
     it('reads no weight from the 0xB1 parts after the first (#501)', async () => {
       const adapter = await extendedAdapter();
       expect(adapter.parseNotification(B1_501_PART2)).toBeNull();
       expect(adapter.parseNotification(B1_501_PART3)).toBeNull();
+    });
+
+    describe('the line for a 0xB1 part that comes without the first (#501)', () => {
+      const HINT =
+        'QN: 0xb1 part 2 of 3 arrived without part 1, which carries the weight. On an ESP32 ' +
+        'proxy that is likely firmware that drops notifications of a burst: flash the current ' +
+        'firmware, https://blescalesync.dev/guide/esp32-proxy#flashing-the-firmware (#501)';
+
+      const withInfo = async (run: (lines: string[]) => Promise<void>): Promise<void> => {
+        const lines: string[] = [];
+        const info = vi.spyOn(bleLog, 'info').mockImplementation((m) => void lines.push(m));
+        try {
+          await run(lines);
+        } finally {
+          info.mockRestore();
+        }
+      };
+
+      it('says so once when parts 2 and 3 arrive without part 1', async () => {
+        await withInfo(async (lines) => {
+          const adapter = await extendedAdapter();
+          expect(adapter.parseNotification(B1_501_PART2)).toBeNull();
+          expect(adapter.parseNotification(B1_501_PART3)).toBeNull();
+          expect(lines).toEqual([HINT]);
+        });
+      });
+
+      it('says nothing when part 1 comes first, parts 2 and 3 after it', async () => {
+        await withInfo(async (lines) => {
+          const adapter = await extendedAdapter();
+          expect(adapter.parseNotification(B1_501)).toEqual({ weight: 77.95, impedance: 0 });
+          expect(adapter.parseNotification(B1_501_PART2)).toBeNull();
+          expect(adapter.parseNotification(B1_501_PART3)).toBeNull();
+          expect(lines).toEqual([]);
+        });
+      });
+
+      it('says nothing for a 0xB1 sent in one part', async () => {
+        await withInfo(async (lines) => {
+          const adapter = await extendedAdapter();
+          expect(adapter.parseNotification(B1_CS10E_331)).toEqual({ weight: 93.15, impedance: 0 });
+          expect(lines.filter((l) => l.includes('arrived without part 1'))).toEqual([]);
+        });
+      });
+
+      it('says nothing for parts after a first part that read no weight', async () => {
+        await withInfo(async (lines) => {
+          const adapter = await extendedAdapter();
+          expect(adapter.parseNotification(B1_501_NO_WEIGHT)).toBeNull();
+          expect(adapter.parseNotification(B1_501_PART2)).toBeNull();
+          expect(adapter.parseNotification(B1_501_PART3)).toBeNull();
+          expect(lines).toEqual([]);
+        });
+      });
+
+      it('ignores a part with a bad checksum', async () => {
+        await withInfo(async (lines) => {
+          const adapter = await extendedAdapter();
+          const bad = Buffer.from(B1_501_PART2);
+          bad[bad.length - 1] ^= 0xff;
+          expect(adapter.parseNotification(bad)).toBeNull();
+          expect(lines).toEqual([]);
+          expect(adapter.parseNotification(B1_501_PART2)).toBeNull();
+          expect(lines).toEqual([HINT]);
+        });
+      });
+
+      it('says nothing for parts that follow a reading taken from another frame', async () => {
+        await atConnect3(async () => {
+          await withInfo(async (lines) => {
+            const adapter = await extendedAdapter();
+            const fresh = stampB4(B4_PREVIOUS_SESSION, scaleSeconds('2026-08-19T18:06:30.000Z'));
+            expect(adapter.parseNotification(fresh)?.weight).toBe(75.2);
+            expect(adapter.parseNotification(B1_501_PART2)).toBeNull();
+            expect(adapter.parseNotification(B1_501_PART3)).toBeNull();
+            expect(lines).toEqual([]);
+          });
+        });
+      });
+
+      it('says it again in the next session of the same adapter', async () => {
+        await withInfo(async (lines) => {
+          const adapter = await extendedAdapter();
+          expect(adapter.parseNotification(B1_501_PART2)).toBeNull();
+          expect(lines).toEqual([HINT]);
+          adapter.onSessionStart();
+          expect(adapter.parseNotification(EXT_INFO)).toBeNull();
+          expect(adapter.parseNotification(B1_501_PART3)).toBeNull();
+          expect(lines).toHaveLength(2);
+          expect(lines[1]).toContain('part 3 of 3');
+        });
+      });
     });
 
     it('does not decode result frames on a non-extended dialect', async () => {
@@ -2913,6 +3126,81 @@ describe('AE02 dispatch (#75, #235)', () => {
         }
       });
 
+      describe('ble.qn_algorithm (#331)', () => {
+        // A made-up profile, so the lines below name nobody's.
+        const p170 = (extra: Partial<UserProfile> = {}): UserProfile =>
+          defaultProfile({ age: 30, height: 170, lastKnownWeight: 74.05, ...extra });
+
+        it('sends it on the 19-byte dialect with qn_weight_ack alone', async () => {
+          const debug = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+          try {
+            const adapter = makeAdapter();
+            adapter.configure({ qnWeightAck: true, qnAlgorithm: 7 });
+            const writes = await driveHandshake(adapter, ARBOLEAF_2A_INFO, p170(), arboleaf2a);
+            expect(profileFrames(writes)).toEqual([
+              buildUserProfileFrame(30, 170, 'male', { algorithm: 7 }),
+            ]);
+            expect(debug.mock.calls.map((c) => String(c[0]))).toContain(
+              'QN: A00D profile frame with age 30, height 1700 mm, sex male, algorithm 7 ' +
+                '(ble.qn_weight_ack, 19-byte dialect, #331)',
+            );
+          } finally {
+            debug.mockRestore();
+          }
+        });
+
+        it('replaces the athlete step on the 18-byte dialect', async () => {
+          const adapter = makeAdapter();
+          adapter.configure({ qnUserKey: 1000, qnAlgorithm: 4 });
+          const writes = await driveHandshake(adapter, INFO_461, p170({ isAthlete: true }), physiq);
+          // 04, not the athlete's 0e.
+          expect(profileFrames(writes)).toEqual([buildUserProfileFrame(30, 170, 'male')]);
+        });
+
+        it("is not sent with openScale's profile frame, and the log says so", async () => {
+          const debug = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+          try {
+            const adapter = makeAdapter();
+            adapter.configure({ qnAlgorithm: 7 });
+            const writes = await driveHandshake(adapter, INFO_461, p170(), physiq);
+            expect(profileFrames(writes)).toEqual([OPENSCALE_PROFILE]);
+            const lines = debug.mock.calls.map((c) => String(c[0]));
+            expect(lines).toContain(
+              "QN: ble.qn_algorithm 7 is not sent: this session sends openScale's profile " +
+                'frame, which keeps its own algorithm byte (#331)',
+            );
+          } finally {
+            debug.mockRestore();
+          }
+        });
+
+        it.each([
+          [{ qnAlgorithm: 7 }, 1],
+          [{ qnAlgorithm: 7, qnUserKey: 1000 }, 0],
+          [{ qnAlgorithm: 7, qnWeightAck: true }, 0],
+          [{ qnAlgorithm: 7, qnWeightAck: false }, 1],
+          [{ qnUserKey: 1000 }, 0],
+        ])('warns at configure() when it can never be sent: %o', (opts, count) => {
+          const warn = vi.spyOn(bleLog, 'warn').mockImplementation(() => {});
+          try {
+            makeAdapter().configure(opts);
+            const lines = warn.mock.calls
+              .map((c) => String(c[0]))
+              .filter((l) => l.startsWith('QN: ble.qn_algorithm is set'));
+            expect(lines).toHaveLength(count);
+            if (count) {
+              expect(lines[0]).toBe(
+                'QN: ble.qn_algorithm is set (7) but never sent: only the vendor-app profile ' +
+                  'frame carries it, which needs ble.qn_user_key (on the 19-byte dialect ' +
+                  'ble.qn_weight_ack: true also sends it) (#331).',
+              );
+            }
+          } finally {
+            warn.mockRestore();
+          }
+        });
+      });
+
       // #501: the CS10G app sends the profile frame with key 1000 on this
       // dialect, no A2 at ready time, and its 0x22 and A2 only after the
       // scale's answer to the profile frame.
@@ -2926,6 +3214,7 @@ describe('AE02 dispatch (#75, #235)', () => {
         async function driveTimed(
           adapter: QnScaleAdapter,
           steps: Array<{ frame?: Buffer; advance: number }>,
+          profile: UserProfile = P180,
         ): Promise<{ at: number; data: number[] }[]> {
           vi.useFakeTimers();
           try {
@@ -2937,7 +3226,7 @@ describe('AE02 dispatch (#75, #235)', () => {
               },
               read: async () => Buffer.alloc(0),
               subscribe: async () => {},
-              profile: P180,
+              profile,
               deviceAddress: '',
               availableChars: new Set<string>(),
             } as unknown as ConnectionContext;
@@ -3084,6 +3373,152 @@ describe('AE02 dispatch (#75, #235)', () => {
           } finally {
             vi.useRealTimers();
           }
+        });
+
+        // ble.qn_algorithm (#331): [10] of the profile frame, snapshot in
+        // visitSent for the scale's own composition.
+        it('sends ble.qn_algorithm at [10] of the profile frame', async () => {
+          const debug = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+          try {
+            const adapter = makeAdapter();
+            adapter.configure({ qnUserKey: 1000, qnAlgorithm: 7 });
+            // A made-up profile, so the line below names nobody's.
+            const p170 = defaultProfile({ age: 30, height: 170, gender: 'female' });
+            const writes = await driveTimed(
+              adapter,
+              [...HANDSHAKE_501, { frame: REFUSED_501, advance: 500 }],
+              p170,
+            );
+            const visit = buildUserProfileFrame(30, 170, 'female', { key: 1000, algorithm: 7 });
+            expect(visit[10]).toBe(0x07);
+            expect(profileFrames(writes.map((w) => w.data))).toEqual([visit]);
+            expect(adapter.s.visitSent).toEqual({
+              slot: 1,
+              frame: visit,
+              algorithmFromOption: true,
+            });
+            expect(debug.mock.calls.map((c) => String(c[0]))).toContain(
+              'QN: A00D profile frame with key 1000, age 30, height 1700 mm, sex female, ' +
+                'athlete no, algorithm 7 (ble.qn_user_key, 20-byte dialect, #463)',
+            );
+          } finally {
+            debug.mockRestore();
+          }
+        });
+
+        it('keeps visitSent without the algorithm flag when the option is unset', async () => {
+          const adapter = makeAdapter();
+          adapter.configure({ qnUserKey: 1000 });
+          await driveTimed(adapter, [...HANDSHAKE_501, { frame: REFUSED_501, advance: 500 }]);
+          expect(adapter.s.visitSent).not.toBeNull();
+          expect(Object.keys(adapter.s.visitSent!)).toEqual(['slot', 'frame']);
+          expect(adapter.s.visitSent!.frame[10]).toBe(0x04);
+        });
+
+        // The frame is built when it is sent, so an option set after that
+        // changes nothing in it.
+        it('reads ble.qn_algorithm when the profile frame goes out', async () => {
+          const adapter = makeAdapter();
+          adapter.configure({ qnUserKey: 1000 });
+          await driveTimed(adapter, [
+            ...HANDSHAKE_501.slice(0, 2),
+            { frame: CONFIG_REQ_501, advance: 250 },
+            { frame: REFUSED_501, advance: 0 },
+          ]);
+          adapter.configure({ qnUserKey: 1000, qnAlgorithm: 7 });
+          expect(adapter.s.visitSent!.frame[10]).toBe(0x04);
+          expect(adapter.s.visitSent!.algorithmFromOption).toBeUndefined();
+        });
+
+        // #331: the CS10E answers the profile frame with seven bytes, its own
+        // length at [1]. Read as the six-byte form only, the answer was lost
+        // and START waited the whole VISIT_ANSWER_TIMEOUT_MS.
+        describe("the CS10E's seven-byte answer (#331)", () => {
+          const HANDSHAKE_CS10E = [
+            { frame: INFO_CS10E_1104, advance: 300 },
+            { frame: READY_CS10E_1104, advance: 300 },
+            { frame: CONFIG_REQ_CS10E_1104, advance: 500 },
+          ];
+          const answerAt = 1100;
+          const keyed = (): QnScaleAdapter => {
+            const adapter = makeAdapter();
+            adapter.configure({ qnUserKey: 1000 });
+            return adapter;
+          };
+
+          it("sends START and the anchor pair on the scale's answer", async () => {
+            const adapter = keyed();
+            const writes = await driveTimed(adapter, [
+              ...HANDSHAKE_CS10E,
+              { frame: VISIT_OK_CS10E_1104, advance: 1500 },
+            ]);
+            const visitAt = writes.find((w) => w.data[0] === 0xa0)!.at;
+            expect(answerAt - visitAt).toBeLessThan(1000);
+            expect(writes.filter((w) => w.at > visitAt)).toEqual([
+              { at: answerAt, data: START },
+              { at: answerAt, data: ANCHOR_78 },
+              { at: answerAt + 150, data: ANCHOR_78 },
+            ]);
+            expect(adapter.s.visitAccepted).toBe(true);
+          });
+
+          it('logs the acceptance and the bytes it does not read', async () => {
+            const debug = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+            try {
+              await driveTimed(keyed(), [
+                ...HANDSHAKE_CS10E,
+                { frame: VISIT_OK_CS10E_1104, advance: 1500 },
+              ]);
+              const lines = debug.mock.calls.map((c) => String(c[0]));
+              expect(lines).toContain('QN: the scale accepted the profile for user slot 1 (#331)');
+              expect(lines).toContain(
+                'QN: the answer to the profile frame has 1 more byte(s), 07, not decoded (#331)',
+              );
+              expect(lines.filter((l) => l.includes('no answer to the profile frame'))).toEqual([]);
+            } finally {
+              debug.mockRestore();
+            }
+          });
+
+          // Guard, not a regression test: these were never answers, and the
+          // longer form must not make them one.
+          it.each([
+            ['a bad checksum', Buffer.from([...VISIT_OK_CS10E_1104.subarray(0, -1), 0xb4])],
+            ['[1] that is not its length', VISIT_OK_CS10E_NOT_ITS_LENGTH],
+          ])('does not read a seven-byte frame with %s as the answer', async (_what, frame) => {
+            const adapter = keyed();
+            const writes = await driveTimed(adapter, [
+              ...HANDSHAKE_CS10E,
+              { frame, advance: 1500 },
+            ]);
+            const visitAt = writes.find((w) => w.data[0] === 0xa0)!.at;
+            expect(writes.find((w) => w.data[0] === 0x22)!.at).toBe(visitAt + 1000);
+            expect(adapter.s.visitReply).toBeNull();
+          });
+
+          it('says a seven-byte refusal is a refusal', async () => {
+            const info = vi.spyOn(bleLog, 'info').mockImplementation(() => {});
+            try {
+              const adapter = keyed();
+              const writes = await driveTimed(adapter, [
+                ...HANDSHAKE_CS10E,
+                { frame: VISIT_REFUSED_CS10E, advance: 1500 },
+              ]);
+              expect(writes.find((w) => w.data[0] === 0x22)!.at).toBe(answerAt);
+              expect(adapter.s.visitAccepted).toBe(false);
+              const lines = info.mock.calls.map((c) => String(c[0]));
+              expect(
+                lines.filter((l) =>
+                  l.startsWith(
+                    'QN: the scale refused the profile frame sent with ble.qn_user_key 1000 ' +
+                      'for user slot 1.',
+                  ),
+                ),
+              ).toHaveLength(1);
+            } finally {
+              info.mockRestore();
+            }
+          });
         });
 
         it("keeps openScale's frames and their timing without the key", async () => {
@@ -4044,7 +4479,15 @@ describe('AE02 dispatch (#75, #235)', () => {
     // #331, D037: the 19-byte dialect streams 20-byte 0x10 frames, sends one
     // stable frame, runs its BIA for about 13 s, and closes the weigh-in with a
     // 0x23 marker, a three-part result block, 0x15 and 0x16.
-    describe('19-byte dialect weigh-in stream (#331, D037)', () => {
+    // The same stream runs behind the Arboleaf CS10K's 20-byte 0x12 (#530):
+    // that scale sends these frames under the extended handshake.
+    describe.each([
+      ['19-byte dialect weigh-in stream (#331, D037)', 'va19'],
+      [
+        'weigh-in stream behind a 20-byte 0x12 without the dynamic-package bit (CS10K, #530)',
+        'cs10k',
+      ],
+    ])('%s', (_title, which) => {
       const hex = (h: string): Buffer => Buffer.from(h.replace(/ /g, ''), 'hex');
       const withSum = (frame: Buffer): Buffer => {
         const f = Buffer.from(frame);
@@ -4059,7 +4502,8 @@ describe('AE02 dispatch (#75, #235)', () => {
       };
 
       // #331 DEBUG log, 2026-10-06. Byte for byte from the log.
-      const INFO = hex('12 13 ff 54 0b 04 00 07 ff 15 0f 27 00 00 05 03 e0 6f 2f');
+      const INFO_19 = hex('12 13 ff 54 0b 04 00 07 ff 15 0f 27 00 00 05 03 e0 6f 2f');
+      const INFO = which === 'cs10k' ? INFO_CS10K : INFO_19;
       const READY = hex('14 0b ff 01 00 01 00 00 00 00 20');
       const CONFIG_REQ = hex('21 05 ff 01 26');
       const MEASURING = hex('10 14 01 00 11 1e 05 00 00 00 00 00 00 00 00 00 00 00 00 59');
@@ -4426,10 +4870,14 @@ describe('AE02 dispatch (#75, #235)', () => {
       // Scope: every other dialect, and the 19-byte one without a stream, stays
       // as it was. These pass on the code before D037 as well.
       // With ble.qn_result_ack as well: it is for the 19-byte stream only.
-      describe.each([
-        ['by default', {}],
-        ['with ble.qn_result_ack', { qnResultAck: true }],
-      ])('other dialects are untouched, %s', (_label, config: AdapterRuntimeConfig) => {
+      describe.each(
+        which === 'va19'
+          ? [
+              ['by default', {}],
+              ['with ble.qn_result_ack', { qnResultAck: true }],
+            ]
+          : [],
+      )('other dialects are untouched, %s', (_label, config: AdapterRuntimeConfig) => {
         it('extended: a GE-shaped stable 20-byte frame is still not read or answered', async () => {
           const adapter = makeAdapter();
           adapter.configure(config);
@@ -4505,6 +4953,163 @@ describe('AE02 dispatch (#75, #235)', () => {
           }
         });
       });
+
+      // What only the CS10K row can show: the 0x12 decides, so each of these
+      // is paired with the same frames behind a CS10E 0x12 (#530).
+      if (which === 'cs10k') {
+        // The CS10E's real 0x12 (#331, [18] 0xeb sets the dynamic-package bit) and
+        // its one-part 0xB1 of 92.9 kg, both from the 2026-11-04 log.
+        const INFO_CS10E = INFO_CS10E_1104;
+        const B1_CS10E = B1_CS10E_1104;
+        const NOW = new Date('2026-11-09T10:00:00Z');
+
+        const debugLines = () => {
+          const spy = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+          return {
+            lines: (): string[] => spy.mock.calls.map((c) => String(c[0])),
+            restore: () => spy.mockRestore(),
+          };
+        };
+
+        // The same stream behind a CS10E 0x12 is the extended dialect's: a stable
+        // frame is not a reading there, and D096 relies on that.
+        it('reads nothing from the same stream behind a CS10E 0x12', async () => {
+          vi.useFakeTimers();
+          try {
+            const adapter = makeAdapter();
+            adapter.configure({ qnWeightAck: true });
+            await openSession(adapter, INFO_CS10E);
+            expect(adapter.parseNotification(MEASURING)).toBeNull();
+            expect(adapter.parseNotification(STABLE)).toBeNull();
+            expect(adapter.completionHoldMs).toBeUndefined();
+            expect(adapter.parseNotification(DONE_16)).toBeNull();
+          } finally {
+            vi.useRealTimers();
+          }
+        });
+
+        // A 0x23 behind a CS10E 0x12 is read in the VA layout, and the empty one
+        // is asked for again; the CS10K's is the 19-byte answer "none".
+        it('answers the empty 0x23 with a re-query behind a CS10E 0x12, not behind the CS10K', async () => {
+          vi.useFakeTimers();
+          try {
+            const run = async (info: Buffer) => {
+              const adapter = makeAdapter();
+              adapter.configure({ qnWeightAck: true });
+              const writes = await openSession(adapter, info);
+              const queries = () => writes.filter((w) => w[0] === 0x22).length;
+              const first = queries();
+              adapter.parseNotification(STABLE);
+              adapter.parseNotification(END_MARKER);
+              await vi.advanceTimersByTimeAsync(3500);
+              return queries() - first;
+            };
+            expect(await run(INFO_CS10E)).toBeGreaterThan(0);
+            expect(await run(INFO_CS10K)).toBe(0);
+          } finally {
+            vi.useRealTimers();
+          }
+        });
+
+        // The handshake is the extended one on both, so what the scale hears is
+        // the same. The 0x20 time sync carries the clock, hence one fixed time.
+        it('writes what it writes behind a CS10E 0x12 with the vendor visit key', async () => {
+          vi.useFakeTimers();
+          try {
+            const run = async (info: Buffer) => {
+              vi.setSystemTime(NOW);
+              const adapter = makeAdapter();
+              adapter.configure({ qnUserKey: 1000 });
+              return openSession(adapter, info);
+            };
+            const cs10e = await run(INFO_CS10E);
+            const cs10k = await run(INFO_CS10K);
+            expect(cs10k.length).toBeGreaterThan(0);
+            expect(cs10k).toEqual(cs10e);
+          } finally {
+            vi.useRealTimers();
+          }
+        });
+
+        it('still reads a one-part 0xB1 as the final weigh-in', async () => {
+          vi.useFakeTimers();
+          try {
+            const adapter = makeAdapter();
+            adapter.configure({ qnWeightAck: true });
+            await openSession(adapter, INFO_CS10K);
+            const reading = adapter.parseNotification(B1_CS10E);
+            expect(reading).toMatchObject({ weight: 92.9, impedance: 0 });
+            expect(adapter.isFinal(reading!)).toBe(true);
+          } finally {
+            vi.useRealTimers();
+          }
+        });
+
+        it('names the missing bit once per scale-info frame, with the byte it read', async () => {
+          vi.useFakeTimers();
+          const debug = debugLines();
+          try {
+            const adapter = makeAdapter();
+            await openSession(adapter, INFO_CS10K);
+            const line =
+              'QN: 20-byte scale-info frame without the dynamic-package bit ([18] 0x0b): ' +
+              'reading the weigh-in as the 19-byte dialect sends it (#530)';
+            expect(debug.lines().filter((l) => l === line)).toHaveLength(1);
+            // A proxy that delivers the 0x12 twice: the flag stays, both are logged.
+            adapter.parseNotification(INFO_CS10K);
+            expect(debug.lines().filter((l) => l === line)).toHaveLength(2);
+            expect(debug.lines().filter((l) => l.startsWith('QN: scale info (20B'))).toHaveLength(
+              2,
+            );
+            expect(adapter.parseNotification(STABLE)).toEqual(WEIGHT);
+
+            debug.restore();
+            const other = debugLines();
+            await openSession(makeAdapter(), INFO_CS10E);
+            expect(other.lines().some((l) => l.includes('dynamic-package bit'))).toBe(false);
+            other.restore();
+          } finally {
+            debug.restore();
+            vi.useRealTimers();
+          }
+        });
+
+        // A scale that sets the bit and still sends the three-part block would
+        // lose its weigh-in; one line per session tells the reporter's log.
+        it('logs a status-02 result block behind a CS10E 0x12 once, and not behind the CS10K', async () => {
+          vi.useFakeTimers();
+          const debug = debugLines();
+          try {
+            const triage =
+              'QN: 20-byte result block in a session whose scale-info frame sets the ' +
+              'dynamic-package bit, not read; please report this log on #530';
+            const adapter = makeAdapter();
+            await openSession(adapter, INFO_CS10E);
+            // PART1 with its checksum broken is noise, not a block: no line.
+            const damaged = Buffer.from(PART1);
+            damaged[damaged.length - 1] ^= 0xff;
+            adapter.parseNotification(damaged);
+            expect(debug.lines().filter((l) => l === triage)).toHaveLength(0);
+            adapter.parseNotification(PART1);
+            adapter.parseNotification(PART2);
+            adapter.parseNotification(PART1);
+            expect(debug.lines().filter((l) => l === triage)).toHaveLength(1);
+
+            debug.restore();
+            const other = debugLines();
+            const cs10k = makeAdapter();
+            await openSession(cs10k, INFO_CS10K);
+            cs10k.parseNotification(PART1);
+            expect(other.lines().some((l) => l.includes('please report this log on #530'))).toBe(
+              false,
+            );
+            other.restore();
+          } finally {
+            debug.restore();
+            vi.useRealTimers();
+          }
+        });
+      }
     });
 
     // Every anchor frame a capture shows, rebuilt from its weight. 74.05 and
@@ -4662,6 +5267,23 @@ describe('QN per-session reset ordering (#406)', () => {
     expect(first.s.weightScaleFactor).toBe(100);
   });
 
+  // #530: the dynamic-package flag is read from the 0x12 and dies with the session.
+  it('clears the dynamic-package flag with the dialect', () => {
+    const adapter = makeAdapter();
+    const state = adapter as unknown as {
+      s: { kind: string; dynamicPackage: boolean | null };
+    };
+    adapter.onSessionStart?.();
+    adapter.parseNotification(INFO_CS10K);
+    expect(state.s.kind).toBe('ext20');
+    expect(state.s.dynamicPackage).toBe(false);
+
+    adapter.onSessionEnd?.();
+    adapter.onSessionStart?.();
+    expect(state.s.kind).toBe('unknown');
+    expect(state.s.dynamicPackage).toBeNull();
+  });
+
   // The test above checks three fields. This one covers every instance field
   // that is not configuration or a session-boundary value, so a reset dropped
   // from onSessionStart, or a new per-session field added without one, fails
@@ -4761,6 +5383,22 @@ describe('buildUserProfileFrame (#331)', () => {
     ]);
   });
 
+  // ble.qn_algorithm (#331): [10] as given, without the athlete step.
+  it('puts the algorithm option at [10] in place of the default and the athlete step', () => {
+    const plain = buildUserProfileFrame(51, 182);
+    for (const athlete of [false, true]) {
+      const set = buildUserProfileFrame(51, 182, 'male', { athlete, algorithm: 7 });
+      expect(set[10]).toBe(0x07);
+      expect([...set.slice(0, 10), ...set.slice(11, 12)]).toEqual([
+        ...plain.slice(0, 10),
+        ...plain.slice(11, 12),
+      ]);
+      expect(hasValidSumChecksum(set)).toBe(true);
+    }
+    expect(buildUserProfileFrame(51, 182, 'male', { algorithm: 4 })).toEqual(plain);
+    expect(buildUserProfileFrame(51, 182, 'male', { algorithm: 0 })[10]).toBe(0x00);
+  });
+
   // [6] is the sex per the vendor's published SDK (0 male, 1 female). Both
   // captures are of men; before #331 every profile went out as male.
   it('sends the sex at [6], 0 for male and 1 for female', () => {
@@ -4803,6 +5441,384 @@ describe('buildUserProfileFrame (#331)', () => {
     expect(buildUserProfileFrame(26, 193, 'male', { athlete: true })).toEqual([
       0xa0, 0x0d, 0x02, 0x01, 0x03, 0xe8, 0x00, 0x1a, 0x07, 0x8a, 0x0e, 0x02, 0x56,
     ]);
+  });
+});
+
+describe('infoDynamicPackage (#530)', () => {
+  // Byte 18 of every 20-byte 0x12 seen so far, with the scale it came from.
+  it.each([
+    ['Arboleaf CS10K (#530), bit clear', INFO_CS10K, false],
+    ['Arboleaf CS10E (#331)', INFO_CS10E_1104, true],
+    ['Arboleaf CS10G (#501)', INFO_501, true],
+    ['GE CS 10 G (#235)', INFO_GE_235, true],
+  ])('reads %s', (_name, info, expected) => {
+    expect(classifyInfoFrame(info)).toBe('ext20');
+    expect(infoDynamicPackage(info)).toBe(expected);
+  });
+
+  // The CS10K frame is the issue's with the MAC rewritten, so its sum is ours.
+  it('closes the rewritten CS10K frame under the family checksum', () => {
+    expect(hasValidSumChecksum(INFO_CS10K)).toBe(true);
+  });
+
+  // Byte 18 of a 19-byte frame is its checksum, so it says nothing. The first
+  // frame has the bit set in that checksum and the second has it clear.
+  it.each([
+    ['19-byte, checksum with bit 5 set (#331)', INFO_ARBOLEAF_331],
+    [
+      '19-byte, checksum with bit 5 clear (#331)',
+      Buffer.from('1213ff010000000002150f2700000503e06fc9', 'hex'),
+    ],
+    ['18-byte (#461)', INFO_461],
+    ['17-byte classic (#283)', INFO_283],
+  ])('has no verdict for the %s frame', (_name, info) => {
+    expect(infoDynamicPackage(info)).toBeNull();
+  });
+
+  it('has no verdict for a 20-byte frame that does not carry its length', () => {
+    const noLength = Buffer.from(INFO_CS10K);
+    noLength[1] = 0x00;
+    expect(infoDynamicPackage(noLength)).toBeNull();
+  });
+});
+
+// #331: the one-part 0xB1 of the 20-byte CS10E, in the layout the vendor's
+// published SDK reads. Its values are checked against each other only: the
+// frame says nothing the test could compare them with otherwise.
+describe('decodeExtendedResult (#331)', () => {
+  const both = [
+    ['the 2026-11-03 frame', B1_CS10E_331],
+    ['the 2026-11-04 frame', B1_CS10E_1104],
+  ] as const;
+
+  it('reads the public frame at the offsets of the SDK layout', () => {
+    expect(decodeExtendedResult(B1_CS10E_331)).toEqual({
+      result: {
+        slot: 1,
+        weight: 93.15,
+        original: [345.1, 308.4, 334.5, 299.4, 262.3, 231.9, 258, 227.5, 26.5, 23.2],
+        adjusted: [336.9, 301.3, 337.1, 302.7, 262.5, 234.1, 257.6, 228.7, 25.9, 22.5],
+        fatPercent: 23.8,
+        heartRate: 0,
+      },
+      composition: {
+        bmi: 28.1,
+        water: 55,
+        muscle: 72.4,
+        visceral: 10,
+        bodyAge: 41,
+        bmr: 1902,
+        protein: 17.4,
+        heartIndex: 0,
+        bone: 3.8,
+        lbm: 76.2,
+        subcutaneousFat: 20.8,
+        skeletalMuscle: 49.2,
+        score: 71,
+        bodyShape: 7,
+      },
+      handle: 0,
+      bmiFine: 28.12,
+      biaType: 1,
+    });
+  });
+
+  it.each(both)('decodes %s into values that agree with each other', (_name, frame) => {
+    const d = decodeExtendedResult(frame)!;
+    const { result: r, composition: c } = d;
+    // Lean mass and body fat are the two halves of the body, in %.
+    expect(Math.abs(c.lbm + r.fatPercent - 100)).toBeLessThanOrEqual(0.15);
+    // Muscle is lean mass without bone, both in % of the weight.
+    expect(Math.abs(c.lbm - c.bone - c.muscle)).toBeLessThanOrEqual(0.15);
+    // The 19-byte dialect's BMR rule: 370 + 21.6 x the fat-free mass.
+    const ffm = r.weight * (1 - r.fatPercent / 100);
+    expect(Math.abs(370 + 21.6 * ffm - c.bmr)).toBeLessThanOrEqual(2);
+    // [115..116] is the BMI to 0.01, [51..52] to 0.1.
+    expect(Math.abs(d.bmiFine - c.bmi)).toBeLessThanOrEqual(0.1);
+    // Segment impedances: a limb is far above a trunk.
+    expect(Math.min(...r.original.slice(0, 8))).toBeGreaterThan(
+      5 * Math.max(...r.original.slice(8)),
+    );
+    expect(Math.min(...r.adjusted.slice(0, 8))).toBeGreaterThan(
+      5 * Math.max(...r.adjusted.slice(8)),
+    );
+  });
+
+  it('gives both frames the same implied height', () => {
+    const [a, b] = both.map(([, f]) => decodeExtendedResult(f)!);
+    const heightSquared = (d: typeof a): number => d.result.weight / d.bmiFine;
+    expect(Math.abs(heightSquared(a) - heightSquared(b))).toBeLessThan(0.005);
+  });
+
+  it.each([
+    ['the first part of a split record', B1_501],
+    ['a later part', B1_501_PART2],
+    ['a one-part frame that names two parts', B1_CS10E_TWO_PARTS],
+    ['a frame whose [1] is not its length', B1_CS10E_NOT_ITS_LENGTH],
+    ['a frame with a bad checksum', Buffer.from([...B1_CS10E_331.subarray(0, -1), 0x00])],
+    ['a truncated frame', B1_CS10E_331.subarray(0, 118)],
+    ['a 0xB4', B4_501],
+  ])('reads nothing from %s', (_what, frame) => {
+    expect(decodeExtendedResult(frame)).toBeNull();
+  });
+});
+
+// #331, D096: the 20-byte dialect's one-part 0xB1 as the source of the body
+// composition, only with ble.qn_algorithm in the profile frame.
+describe("20-byte dialect: the scale's own body composition (#331)", () => {
+  const decoded = decodeExtendedResult(B1_CS10E_331)!;
+  const { result: R, composition: C } = decoded;
+  // A neutral age and sex; the height is the one the frame's BMI implies, as
+  // the scale computes for the height in the profile frame.
+  const P = defaultProfile({
+    age: 30,
+    height: Math.round(Math.sqrt(R.weight / decoded.bmiFine) * 100),
+    lastKnownWeight: 90,
+  });
+  const ALGO = { qnUserKey: 1000, qnAlgorithm: 7 };
+
+  interface Step {
+    frame?: Buffer;
+    advance?: number;
+    /** Options handed to configure() at this point (a reload). */
+    configure?: Record<string, unknown>;
+  }
+
+  /** The session up to the 0xB1 and the reading it gives. */
+  async function weighIn(
+    opts: Record<string, unknown>,
+    steps: Step[],
+  ): Promise<{ adapter: QnScaleAdapter; reading: ScaleReading | null }> {
+    vi.useFakeTimers();
+    try {
+      const adapter = makeAdapter();
+      adapter.configure(opts);
+      const ctx = {
+        write: async () => {},
+        read: async () => Buffer.alloc(0),
+        subscribe: async () => {},
+        profile: P,
+        deviceAddress: '',
+        availableChars: new Set<string>(),
+      } as unknown as ConnectionContext;
+      adapter.onSessionStart?.();
+      await adapter.onConnected(ctx);
+      let reading: ScaleReading | null = null;
+      for (const step of steps) {
+        if (step.configure) adapter.configure(step.configure);
+        if (step.frame) reading = adapter.parseNotification(step.frame) ?? reading;
+        await vi.advanceTimersByTimeAsync(step.advance ?? 0);
+      }
+      return { adapter, reading };
+    } finally {
+      vi.useRealTimers();
+    }
+  }
+
+  const HANDSHAKE: Step[] = [
+    { frame: INFO_CS10E_1104, advance: 300 },
+    { frame: READY_CS10E_1104, advance: 300 },
+    { frame: CONFIG_REQ_CS10E_1104, advance: 300 },
+  ];
+  /** Accepted, a live frame (status 00) after it, then the result. */
+  const ACCEPTED_THEN = (b1: Buffer): Step[] => [
+    ...HANDSHAKE,
+    { frame: VISIT_OK_CS10E_1104, advance: 100 },
+    { frame: LIVE_CS10E_331, advance: 1000 },
+    { frame: b1 },
+  ];
+
+  /** computeMetrics with the info lines it logged. */
+  function metrics(adapter: QnScaleAdapter, reading: ScaleReading) {
+    const info = vi.spyOn(bleLog, 'info').mockImplementation(() => {});
+    try {
+      const payload = adapter.computeMetrics(reading, P);
+      return { payload, lines: info.mock.calls.map((c) => String(c[0])) };
+    } finally {
+      info.mockRestore();
+    }
+  }
+  const NOT_USED = "QN: the scale's own body composition is not used for this weigh-in: ";
+  const USED = "QN: using the scale's own body composition for this weigh-in (#331)";
+  const rejected = (lines: string[]): string[] =>
+    lines.filter((l) => l.startsWith(NOT_USED)).map((l) => l.slice(NOT_USED.length));
+
+  it("exports the scale's values with ble.qn_algorithm and an accepted profile", async () => {
+    const { adapter, reading } = await weighIn(ALGO, ACCEPTED_THEN(B1_CS10E_331));
+    expect(reading).not.toBeNull();
+    const { payload, lines } = metrics(adapter, reading!);
+    expect(lines).toContain(USED);
+    const w = reading!.weight;
+    expect(payload.bodyFatPercent).toBe(R.fatPercent);
+    expect(payload.waterPercent).toBe(C.water);
+    expect(payload.muscleMass).toBeCloseTo((C.muscle * w) / 100, 2);
+    expect(payload.boneMass).toBeCloseTo((C.bone * w) / 100, 2);
+    expect(payload.visceralFat).toBe(C.visceral);
+    expect(payload.bmr).toBe(C.bmr);
+    expect(payload.metabolicAge).toBe(C.bodyAge);
+    expect(payload.skeletalMusclePercent).toBe(C.skeletalMuscle);
+    // The segments do not go out.
+    expect(Object.keys(payload).filter((k) => /^impedance[A-Z]/.test(k))).toEqual([]);
+    assertPayloadRanges(payload);
+  });
+
+  it('does not use them without ble.qn_algorithm, and says why', async () => {
+    const { adapter, reading } = await weighIn({ qnUserKey: 1000 }, ACCEPTED_THEN(B1_CS10E_331));
+    const { payload, lines } = metrics(adapter, reading!);
+    expect(lines).not.toContain(USED);
+    expect(rejected(lines)).toEqual([
+      'the profile frame went out without ble.qn_algorithm, which the 20-byte dialect needs; ' +
+        'estimating instead (#331)',
+    ]);
+    expect(payload.bodyFatPercent).not.toBe(R.fatPercent);
+    expect(payload).not.toHaveProperty('skeletalMusclePercent');
+  });
+
+  it.each([
+    ['0 %', B1_CS10E_SKELETAL_0],
+    ['the 0xffff sentinel', B1_CS10E_SKELETAL_FFFF],
+  ])('exports the set without a skeletal muscle percentage of %s', async (_what, b1) => {
+    const real = await weighIn(ALGO, ACCEPTED_THEN(B1_CS10E_331));
+    const { skeletalMusclePercent, ...rest } = metrics(real.adapter, real.reading!).payload;
+    expect(skeletalMusclePercent).toBe(C.skeletalMuscle);
+    const { adapter, reading } = await weighIn(ALGO, ACCEPTED_THEN(b1));
+    const { payload, lines } = metrics(adapter, reading!);
+    expect(lines).toContain(USED);
+    expect(payload).not.toHaveProperty('skeletalMusclePercent');
+    expect(payload).toEqual(rest);
+  });
+
+  it('does not use them without a live frame after the acceptance', async () => {
+    const { adapter, reading } = await weighIn(ALGO, [
+      ...HANDSHAKE,
+      { frame: LIVE_CS10E_331, advance: 100 },
+      { frame: VISIT_OK_CS10E_1104, advance: 1000 },
+      { frame: B1_CS10E_331 },
+    ]);
+    expect(rejected(metrics(adapter, reading!).lines)).toEqual([
+      'the scale sent no live weight after it accepted the profile; estimating instead (#331)',
+    ]);
+  });
+
+  // A 0xB1 the scale replays after a reconnect comes after live frames of
+  // another weigh-in, or none.
+  it('does not use them when the live weight after the acceptance is another one', async () => {
+    const { adapter, reading } = await weighIn(ALGO, [
+      ...HANDSHAKE,
+      { frame: VISIT_OK_CS10E_1104, advance: 100 },
+      { frame: LIVE_CS10E_OTHER_WEIGHT, advance: 1000 },
+      { frame: B1_CS10E_331 },
+    ]);
+    expect(rejected(metrics(adapter, reading!).lines)).toEqual([
+      "the result's weight is not the one the scale streamed after it accepted the profile; " +
+        'estimating instead (#331)',
+    ]);
+  });
+
+  it.each([
+    ['status 02', LIVE_CS10E_STATUS2],
+    ['another user slot', LIVE_CS10E_SLOT2],
+    ['a weight below the range', LIVE_CS10E_LIGHT],
+  ])('does not count a live frame with %s as measured', async (_what, live) => {
+    const { adapter, reading } = await weighIn(ALGO, [
+      ...HANDSHAKE,
+      { frame: VISIT_OK_CS10E_1104, advance: 100 },
+      { frame: live, advance: 1000 },
+      { frame: B1_CS10E_331 },
+    ]);
+    expect(rejected(metrics(adapter, reading!).lines)).toEqual([
+      'the scale sent no live weight after it accepted the profile; estimating instead (#331)',
+    ]);
+  });
+
+  // An acceptance names a slot; one for another slot than the profile
+  // frame's is no acceptance of it, so the live frames after it do not count.
+  it('does not count live frames after an acceptance for another slot', async () => {
+    const { adapter, reading } = await weighIn(
+      ALGO,
+      ACCEPTED_THEN(B1_CS10E_331).map((step) =>
+        step.frame === VISIT_OK_CS10E_1104 ? { ...step, frame: ACCEPTED_SLOT2 } : step,
+      ),
+    );
+    expect(adapter.s.measuredAfterVisit).toBe(false);
+    expect(adapter.s.liveWeightAfterVisit).toBeNull();
+    expect(rejected(metrics(adapter, reading!).lines)).toEqual([
+      'the scale did not accept the profile; estimating instead (#331)',
+    ]);
+  });
+
+  it('names the body composition in the result line only with ble.qn_algorithm', async () => {
+    const debug = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+    try {
+      const line = () =>
+        debug.mock.calls
+          .map((c) => String(c[0]))
+          .filter((l) => l.startsWith('QN: extended result 0xb1'));
+      await weighIn(ALGO, ACCEPTED_THEN(B1_CS10E_331));
+      expect(line()).toEqual([
+        "QN: extended result 0xb1 decoded 93.15kg, user slot 1 (no whole-body impedance, with the scale's own body composition) #235",
+      ]);
+      debug.mockClear();
+      const { reading } = await weighIn({ qnUserKey: 1000 }, ACCEPTED_THEN(B1_CS10E_331));
+      expect(reading!.scaleComposition).toBeDefined();
+      expect(line()).toEqual([
+        'QN: extended result 0xb1 decoded 93.15kg, user slot 1 (no whole-body impedance, emitting weight-only) #235',
+      ]);
+    } finally {
+      debug.mockRestore();
+    }
+  });
+
+  it('does not use them for a weigh-in on another user slot', async () => {
+    const { adapter, reading } = await weighIn(ALGO, ACCEPTED_THEN(B1_CS10E_SLOT2));
+    expect(rejected(metrics(adapter, reading!).lines)).toEqual([
+      'the weigh-in is on another user slot of the scale; estimating instead (#331)',
+    ]);
+  });
+
+  it('does not use them when the scale refused the profile', async () => {
+    const { adapter, reading } = await weighIn(ALGO, [
+      ...HANDSHAKE,
+      { frame: VISIT_REFUSED_CS10E, advance: 100 },
+      { frame: LIVE_CS10E_331, advance: 1000 },
+      { frame: B1_CS10E_331 },
+    ]);
+    expect(rejected(metrics(adapter, reading!).lines)).toEqual([
+      'the scale did not accept the profile; estimating instead (#331)',
+    ]);
+  });
+
+  it('does not use them when lean mass and body fat do not add up to 100 %', async () => {
+    const { adapter, reading } = await weighIn(ALGO, ACCEPTED_THEN(B1_CS10E_LEAN_OFF));
+    expect(rejected(metrics(adapter, reading!).lines)).toEqual([
+      "the scale's lean mass and body fat do not add up to 100 %; estimating instead (#331)",
+    ]);
+  });
+
+  it('gives a 0xB1 in several parts its weight only', async () => {
+    const { reading } = await weighIn(ALGO, ACCEPTED_THEN(B1_501));
+    expect(reading).toEqual({ weight: 77.95, impedance: 0 });
+  });
+
+  it('reads the option from the profile frame sent, not from a later reload', async () => {
+    const steps = (reload: Record<string, unknown>): Step[] => [
+      ...HANDSHAKE,
+      { frame: VISIT_OK_CS10E_1104, advance: 100 },
+      { configure: reload, frame: LIVE_CS10E_331, advance: 1000 },
+      { frame: B1_CS10E_331 },
+    ];
+    const setLater = await weighIn({ qnUserKey: 1000 }, steps(ALGO));
+    expect(rejected(metrics(setLater.adapter, setLater.reading!).lines)).toEqual([
+      'the profile frame went out without ble.qn_algorithm, which the 20-byte dialect needs; ' +
+        'estimating instead (#331)',
+    ]);
+    const removedLater = await weighIn(ALGO, steps({ qnUserKey: 1000 }));
+    expect(metrics(removedLater.adapter, removedLater.reading!).lines).toContain(USED);
+  });
+
+  it('pins nothing on a session that sent no profile of a configured user', async () => {
+    const { reading } = await weighIn({ qnAlgorithm: 7 }, ACCEPTED_THEN(B1_CS10E_331));
+    expect(reading).toEqual({ weight: R.weight, impedance: 0 });
   });
 });
 

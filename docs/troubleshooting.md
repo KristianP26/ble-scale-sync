@@ -5,9 +5,9 @@ description: Fixes for BLE Scale Sync problems grouped by symptom, from a scale 
 
 # Troubleshooting
 
-Find the symptom or the exact log line, then work through the fixes in order. Most log lines quoted here appear only in [debug mode](#debug-mode). For general questions, see the [FAQ](/faq).
+Find the symptom or the exact log line, then try the fixes in order. Most quoted log lines appear only in [debug mode](#debug-mode). For general questions, see the [FAQ](/faq).
 
-## Debug Mode
+## Debug mode
 
 Set `runtime.debug: true` in `config.yaml` (in the Home Assistant add-on, turn on the `debug` option), or set the `DEBUG` environment variable:
 
@@ -22,11 +22,11 @@ DEBUG=true ble-scale-sync
 $env:DEBUG="true"; ble-scale-sync
 ```
 
-The log then shows discovery, advertised services, discovered characteristics and how the scale was matched to an adapter. For one device in detail, run `ble-scale-sync diagnose <MAC>` (`npm run diagnose` from a clone): it prints the scale's services, characteristics and their flags.
+The log then shows discovery, advertised services, characteristics and how the scale was matched to an adapter. For one device in detail, run `ble-scale-sync diagnose <MAC>` (`npm run diagnose` from a clone). It prints the scale's services, characteristics and their flags.
 
-### Capture Raw Frames {#capturing-every-frame-for-a-scale-that-is-not-decoded-correctly}
+### Capture raw frames {#capturing-every-frame-for-a-scale-that-is-not-decoded-correctly}
 
-Debug mode logs what the app decided. For a misread scale, or a scale that needs a new protocol, the maintainer needs what the scale actually sent, including frames the adapter rejected:
+Debug mode logs what the app decided. For a misread scale or an unsupported protocol, the maintainer needs what the scale actually sent, including frames the adapter rejected:
 
 ```bash
 BLE_RAW_CAPTURE=true DEBUG=true ble-scale-sync
@@ -41,22 +41,22 @@ Every notification is then logged as hex with the characteristic it arrived on:
 [BLE] [RAW] 0000fff100001000800000805f9b34fb (13B): 1f 05 00 02 e6 12 ...
 ```
 
-The connection stays open 20 seconds past the settled weight, because several scales send body composition after the number stops moving. `BLE_RAW_CAPTURE_HOLD_SEC=40` makes the window longer. Neither variable changes what is exported.
+The connection stays open 20 seconds past the settled weight, because several scales send body composition after the number stops moving. `BLE_RAW_CAPTURE_HOLD_SEC=40` lengthens the window. Neither variable changes what is exported.
 
-Step on the scale once, wait until it disconnects on its own, and attach the whole log to the issue together with what the scale displayed and what the vendor app recorded for the same weigh-in. Without the known values, a field usually cannot be decoded.
+Step on the scale once, wait until it disconnects on its own, and attach the whole log to the issue with what the scale displayed and what the vendor app recorded for the same weigh-in. Without the known values a field usually cannot be decoded.
 
-## Scale Not Found
+## Scale not found
 
 ### The scan does not list the scale
 
 1. Step on the scale to wake it up. Most scales advertise only for a few seconds after they light up.
-2. Run `ble-scale-sync scan` (`npm run scan` from a clone, or the Docker `scan` command from [Getting Started](/guide/getting-started#docker)) while the scale is on.
+2. Run `ble-scale-sync scan` (`npm run scan` from a clone, or the Docker `scan` command from [Getting started](/guide/getting-started#docker)) while the scale is on.
 3. If you set `ble.scale_mac`, compare it with the address in the scan output.
 4. On Linux, check that Bluetooth runs: `sudo systemctl status bluetooth`.
 5. <span id="scale-was-found-before-but-now-isn-t-discovered-linux"></span>If the scale was found before and is not any more, restart Bluetooth: `sudo systemctl restart bluetooth`.
 6. If you use a noble driver, try the other one. See [noble drivers](/guide/transports#noble-drivers).
 
-If the scale shows up in the scan but is never read, see [Connects but No Reading](#connects-but-no-reading).
+If the scale shows up in the scan but is never read, see [Connects but no reading](#connects-but-no-reading).
 
 ### `Permission denied` on Linux {#permission-denied-linux}
 
@@ -70,9 +70,9 @@ The default Linux transport, `node-ble`, goes through BlueZ and does not need it
 
 ### The next scan starts a minute later {#why-the-next-scan-is-not-immediate}
 
-In continuous mode the wait before the next scan depends on how the last cycle ended. Failed cycles back off from 5 s up to 60 s, so a long gap means failures, not an ignored setting. The log line before the wait names the cause. The waits and their options are in [the runtime reference](/guide/configuration#runtime).
+In continuous mode the wait before the next scan depends on how the last cycle ended. Failed cycles back off from 5 s up to 60 s, so a long gap means failures, not an ignored setting. The log line before the wait names the cause. The options are in [the runtime reference](/guide/configuration#runtime).
 
-## Connection Fails or Ends
+## Connection fails or ends
 
 ### `le-connection-abort-by-local` on a Raspberry Pi {#connection-fails-on-raspberry-pi}
 
@@ -92,17 +92,25 @@ BlueZ: AA:BB:CC:DD:EE:FF disconnected 5.40 s after connect: org.bluez.Reason.Rem
 
 What to do for each reason:
 
-- `org.bluez.Reason.Remote`: the scale ended it. Many scales do that after every weigh-in, so it matters only when it comes before the reading. Stay on the scale until it shows the final result.
+- `org.bluez.Reason.Remote`: the scale ended it. Many scales do that after every weigh-in, so it matters only when it comes before the reading. Stay on the scale until it shows the final result. A Renpho R-MSC04 that hangs up about 5.5 seconds in: see [The R-MSC04 drops the connection a few seconds in](/guide/scales/renpho#the-r-msc04-drops-the-connection-a-few-seconds-in).
 - `org.bluez.Reason.Timeout`: the radio link was lost. Shorten the distance, and keep USB 3 devices and ports away from a USB Bluetooth adapter, they interfere at 2.4 GHz.
 - `org.bluez.Reason.Local`: this host ended it (this app, BlueZ, the kernel or another Bluetooth program).
 - `org.bluez.Reason.Authentication`: the scale refused the stored pairing key. Clear the pairing as described in [Every connect fails after the first session](/guide/scales/beurer#every-connect-fails-after-the-first-session).
 - Any other reason: BlueZ does not say which; `btmon` shows the code.
 
-Only BlueZ 5.83 and later (Home Assistant OS 16.2 and later) report the reason. With older BlueZ no such line appears. Debug mode is read when the app opens its D-Bus connection, so after you switch it on in a running app the lines can start one weigh-in later; a restart starts them at once.
+Only BlueZ 5.83 and later (Home Assistant OS 16.2 and later) report the reason. Older BlueZ logs a connection that ended without a Disconnect from this app, with the time but no reason, and `sudo btmon` shows the reason:
+
+```text
+BlueZ: AA:BB:CC:DD:EE:FF disconnected 5.53 s after connect without a Disconnect from this app; this BlueZ does not say why (Device1.Disconnected needs BlueZ 5.83), btmon shows the reason
+```
+
+The line also appears when a scale hangs up on its own after a complete reading, so it matters only when it comes before the reading.
+
+Debug mode is read when the app opens its D-Bus connection, so after you switch it on in a running app the lines can start one weigh-in later; a restart starts them at once.
 
 The proxy transports end a session on their own after a reading; see [when a session ends](/guide/transports#when-a-session-ends).
 
-## Connects but No Reading
+## Connects but no reading
 
 ### `Scale connected but sent no reading`
 
@@ -115,15 +123,15 @@ The scale accepted the connection, but no complete reading arrived before the se
 
 ## Pairing
 
-### Beurer or Sanitas Pairing Problems
+### Beurer or Sanitas pairing problems
 
 <span id="beurer-consent-code-rejected-after-a-battery-change"></span><span id="beurer-the-six-digit-passkey-and-the-four-digit-consent-code-are-different-numbers"></span><span id="beurer-bf-405-bf-915-factory-reset-and-deleting-one-user"></span><span id="beurer-every-connect-fails-after-the-first-session"></span><span id="beurer-the-scale-shows-a-pairing-code-again-and-again"></span><span id="beurer-bf915-pair-on-the-display-all-day"></span>These scales need a BLE pairing and a four-digit consent code per user slot. A wrong or lost consent code, a pairing the scale dropped, a passkey to type, or a pairing code that appears again and again each have their own fix in [Beurer and Sanitas pairing](/guide/scales/beurer#pairing).
 
-## Install Issues (npm / npx) {#install-issues}
+## Install issues (npm / npx) {#install-issues}
 
 ### `ble-scale-sync: command not found`
 
-The package was installed into a project instead of globally, or the npm global bin directory is not on your `PATH`. Run it through npx, which needs no `PATH` entry:
+The package is installed in a project instead of globally, or npm's global bin directory is not on your `PATH`. Run it through npx, which needs no `PATH` entry:
 
 ```bash
 npx ble-scale-sync --version
@@ -153,13 +161,13 @@ The install completed without the Bluetooth stack you selected, most often `@aba
 
 ### `Node.js ... is older than this release expects` or `... is not supported by this release` {#node-version-warning}
 
-The running Node.js is not one of the versions this release supports (listed in [the standalone prerequisites](/guide/getting-started#standalone)). The app keeps running. Update Node.js the way you installed it (the NodeSource apt repository, nvm or the installer from nodejs.org) and restart the app or its service. `... is not supported by this release` means your Node.js release line is not supported at all, for example an odd-numbered one: install one of the listed versions. The Docker image and the Home Assistant add-on bring their own Node.js; if either shows this line, open an issue.
+Your Node.js is not one of the supported versions, listed in [the standalone prerequisites](/guide/getting-started#standalone). The app keeps running. Update Node.js the way you installed it (NodeSource apt repository, nvm or the nodejs.org installer) and restart the app or its service. `... is not supported by this release` means the whole release line is unsupported, for example an odd-numbered one: install a listed version. The Docker image and the Home Assistant add-on bring their own Node.js, so if either shows this line, open an issue.
 
 ### Install fails on Raspberry Pi Zero W (first gen)
 
-The first Pi Zero W has an ARMv6 CPU, which is not supported. The Docker image is built for amd64, arm64 and arm/v7 only, and `esbuild`, which the TypeScript runner uses, crashes with `SIGILL` (illegal instruction) on ARMv6. Use a Raspberry Pi Zero 2 W or a Pi 3, 4 or 5 instead, see [recommended hardware](/guide/getting-started#recommended-hardware).
+The first Pi Zero W has an ARMv6 CPU, which is not supported: the Docker image is built for amd64, arm64 and arm/v7 only, and `esbuild`, which the TypeScript runner uses, crashes with `SIGILL` on ARMv6. Use a Raspberry Pi Zero 2 W or a Pi 3, 4 or 5, see [recommended hardware](/guide/getting-started#recommended-hardware).
 
-## Docker Issues
+## Docker issues
 
 ### Container exits at startup with `DBusError` and `AccessDenied`
 
@@ -181,7 +189,7 @@ The Home Assistant add-on already runs without an AppArmor profile.
 
 ### Container can't find the Bluetooth adapter {#container-can-t-find-ble-adapter}
 
-Compare your command with the one in [Getting Started](/guide/getting-started#docker). The flags most often missing are `--network host` and the D-Bus mount `-v /var/run/dbus:/var/run/dbus:ro`. <span id="wrong-bluetooth-group-gid"></span>The `--group-add` value must be the host's `bluetooth` group ID:
+Compare your command with the one in [Getting started](/guide/getting-started#docker). The flags most often missing are `--network host` and the D-Bus mount `-v /var/run/dbus:/var/run/dbus:ro`. <span id="wrong-bluetooth-group-gid"></span>The `--group-add` value must be the host's `bluetooth` group ID:
 
 ```bash
 getent group bluetooth | cut -d: -f3
@@ -197,7 +205,7 @@ A Docker `restart:` policy acts only when the process exits, not on health statu
 
 A frozen event loop also stops the [watchdog](#the-app-exits-after-repeated-scan-failures). Restart the container by hand and attach the log from before the freeze to an issue.
 
-## Exporter Issues
+## Exporter issues
 
 ### Garmin upload fails
 
@@ -209,7 +217,7 @@ A frozen event loop also stops the [watchdog](#the-app-exits-after-repeated-scan
 
 Use `mqtt://` for a plain connection and `mqtts://` for TLS: `mqtt://` on the TLS port 8883 hangs. Then check the broker URL, username and password. See [MQTT](/exporters#mqtt).
 
-## Discovery Stops Working After Hours {#ble-discovery-stops-working-after-hours-bluez-stuck-state}
+## Discovery stops working after hours {#ble-discovery-stops-working-after-hours-bluez-stuck-state}
 
 This applies to the built-in Linux transport (`node-ble` over BlueZ). Symptoms, visible with `DEBUG=true`:
 
@@ -270,7 +278,7 @@ runtime:
 
 ### The service hangs and systemd does not restart it
 
-A blocking D-Bus call can freeze the whole event loop, and then the watchdog above cannot run either. Let systemd check the process from outside. In the `[Service]` section of the unit from [Run as a Service](/guide/getting-started#run-as-a-service-linux), replace `Type=simple` with these lines and keep `Restart=always`:
+A blocking D-Bus call can freeze the whole event loop, and then the watchdog above cannot run either. Let systemd check the process from outside. In the `[Service]` section of the unit from [Run as a service](/guide/getting-started#run-as-a-service-linux), replace `Type=simple` with these lines and keep `Restart=always`:
 
 ```ini
 Type=notify
@@ -291,7 +299,7 @@ ble:
 
 It needs the capability from [`Permission denied` on Linux](#permission-denied-linux). The app then has the adapter to itself: `bluetoothctl`, Home Assistant's Bluetooth integration and other Bluetooth programs cannot use it at the same time. The other option is a proxy, see [choose a transport](/guide/transports#choose-a-transport).
 
-## Report an Issue
+## Report an issue
 
 If none of this helps, [open an issue](https://github.com/KristianP26/ble-scale-sync/issues/new/choose) and attach:
 

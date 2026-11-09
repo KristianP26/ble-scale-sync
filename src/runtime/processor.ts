@@ -9,7 +9,13 @@ import type {
 import type { WeightUnit, UserConfig } from '../config/schema.js';
 import type { AppContext } from './context.js';
 import { resolveUserProfile } from '../config/resolve.js';
-import { matchUserByWeight, detectWeightDrift, isOutOfRange } from '../config/user-matching.js';
+import {
+  matchUserByWeight,
+  slotClaimants,
+  detectWeightDrift,
+  isOutOfRange,
+  type MatchResult,
+} from '../config/user-matching.js';
 import { updateLastKnownWeight } from '../config/write.js';
 import { dispatchExports, type ExportAttempt } from '../orchestrator.js';
 import { createLogger } from '../logger.js';
@@ -429,7 +435,8 @@ function recordLiveWeight(ctx: AppContext, user: UserConfig, weight: number, anc
 }
 
 /**
- * Stop a reading nobody's `weight_range` vouches for, when asked to.
+ * Stop a reading outside the `weight_range` of the user it was attributed to,
+ * when asked to.
  *
  * `weight_range` was only ever a MATCHING input. A weight outside every range
  * still resolves to somebody, through the single-user tier that always matches
@@ -578,18 +585,16 @@ function attributeStored(ctx: AppContext, frame: Frame): UserConfig | null {
   const { weight, userIndex } = frame.reading;
   const users = ctx.config.users;
 
-  if (userIndex !== undefined) {
-    const owners = users.filter((u) => u.beurer_user_index === userIndex);
-    if (owners.length === 1) return owners[0];
-    if (owners.length > 1) {
-      log.warn(
-        `${tag} Dropping a stored record of scale user ${userIndex}: ` +
-          `${owners.map((u) => u.name).join(' and ')} all claim that slot (beurer_user_index).`,
-      );
-      return null;
-    }
-    // Nobody claims the slot: the weight is the only evidence left.
+  const owners = slotClaimants(users, userIndex);
+  if (owners.length === 1) return owners[0];
+  if (owners.length > 1) {
+    log.warn(
+      `${tag} Dropping a stored record of scale user ${userIndex}: ` +
+        `${owners.map((u) => u.name).join(' and ')} all claim that slot (beurer_user_index).`,
+    );
+    return null;
   }
+  // No slot, or nobody claims it: the weight is the only evidence left.
 
   const match = matchUserByWeight(users, weight, ctx.config.unknown_user);
   if (!match.user) {
@@ -606,6 +611,32 @@ function attributeStored(ctx: AppContext, frame: Frame): UserConfig | null {
     return null;
   }
   return match.user;
+}
+
+/**
+ * The user a live weigh-in belongs to in multi-user mode.
+ *
+ * The scale's own user slot decides when exactly one user claims it: two
+ * people can weigh about the same, and weight alone then hands one person's
+ * weigh-in, and a body composition computed from the wrong profile, to the
+ * other. Weight matching stays the fallback for a frame that names no slot, or
+ * a slot nobody claims.
+ *
+ * A slot that several users claim falls back to weight too, with a warning,
+ * where a stored record of that slot is dropped (attributeStored). It is the
+ * same split as for an ambiguous weight match (D027): the person on the scale
+ * sees where the live weigh-in went, and nobody watches a stored record land.
+ */
+function matchLive(ctx: AppContext, reading: ScaleReading): MatchResult {
+  const owners = slotClaimants(ctx.config.users, reading.userIndex);
+  if (owners.length === 1) return { user: owners[0], tier: 'slot' };
+  if (owners.length > 1) {
+    log.warn(
+      `Matching the weigh-in of scale user ${reading.userIndex} by its weight: ` +
+        `${owners.map((u) => u.name).join(' and ')} all claim that slot (beurer_user_index).`,
+    );
+  }
+  return matchUserByWeight(ctx.config.users, reading.weight, ctx.config.unknown_user);
 }
 
 async function processMultiUser(
@@ -638,11 +669,7 @@ async function processMultiUser(
   }
 
   if (latestLive) {
-    const match = matchUserByWeight(
-      ctx.config.users,
-      latestLive.reading.weight,
-      ctx.config.unknown_user,
-    );
+    const match = matchLive(ctx, latestLive.reading);
     if (!match.user) {
       // matchUserByWeight has already logged its warning, if it has one.
       ctx.display?.beep(600, 150, 3);

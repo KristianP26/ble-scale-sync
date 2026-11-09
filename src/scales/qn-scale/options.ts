@@ -92,6 +92,26 @@ export const QN_BLE_OPTIONS = {
    */
   qn_user_slot: z.number().int().min(1).max(8).optional().nullable(),
   /**
+   * Algorithm byte [10] of the QN profile frame, 0 to 255 (#331).
+   * Experimental.
+   *
+   * Per the vendor's published SDK the scale does not report this byte: the
+   * app picks a body-fat method from its own settings for the scale model,
+   * and an 8-electrode scale without such a setting gets 7. The scale then
+   * computes its own body composition with that method. ble-scale-sync sends
+   * 4 (14 for an athlete aged 18 or older on the 18-byte dialect), and nothing
+   * in the frames tells which value a unit expects.
+   *
+   * Set, it goes into the profile frame as given, without the athlete step,
+   * wherever the vendor-app profile frame is sent: with `qn_user_key` on the
+   * 18-, 19- and 20-byte dialects, and with `qn_weight_ack` on the 19-byte one.
+   * Elsewhere openScale's frame goes out and this is not sent. On the 20-byte
+   * dialect a profile frame sent with it is also what lets the scale's own body
+   * composition from a one-part 0xB1 be exported (#331, D096). Left unset it
+   * changes nothing.
+   */
+  qn_algorithm: z.number().int().min(0).max(255).optional().nullable(),
+  /**
    * Send the two 0xA4 0x0F frames an Arboleaf vendor app sends between START
    * and the first live 0x10 weight frame (#331).
    *
@@ -140,14 +160,15 @@ export const QN_BLE_OPTIONS = {
   qn_config_long: z.boolean().optional().nullable(),
   /**
    * Send the end-of-measurement frame `1f 05 <protocol type> 10 <sum>` after
-   * the 0x16 of a complete result block on the 19-byte QN dialect (#331).
+   * the 0x16 of a complete result block on the 19-byte QN dialect and on the
+   * 20-byte Arboleaf CS10K, whose 0x12 lacks the dynamic-package bit (#331, #530).
    *
    * The vendor's published SDK sends it there for every 8-electrode
    * weigh-in; this app has never sent it. Whether its absence is why the
    * scale stores a second copy of a weigh-in it already delivered, and keeps
    * advertising after the export, is not known, so this is opt-in and off by
    * default until reporters' logs with it show an effect and no harm. Other
-   * QN dialects ignore it.
+   * QN scales ignore it.
    */
   qn_result_ack: z.boolean().optional().nullable(),
 };

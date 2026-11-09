@@ -5,27 +5,27 @@ description: Options and behavior of every export target, from Garmin Connect an
 
 # Exporters
 
-Every reading goes to all enabled exporters in parallel. Exporters under `global_exporters` are shared by all users, and a user can have their own ([Per-User Exporters](/multi-user#per-user-exporters)); the [setup wizard](/guide/configuration#setup-wizard-recommended) adds and tests them.
+Every reading goes to all enabled exporters in parallel. Exporters under `global_exporters` are shared by all users, and each user can add their own ([per-user exporters](/multi-user#per-user-exporters)). The [setup wizard](/guide/configuration#setup-wizard-recommended) adds and tests them.
 
-A run reports an error only when every exporter fails. A failed export to a target that can record a past measurement is retried later ([`runtime.retry_failed_exports`](/guide/configuration#runtime)). A weigh-in the scale replays from its memory goes only to those targets too, see [Historical readings](#historical-readings).
+A run reports an error only when every exporter fails. Only targets that can record a past measurement get retries and weigh-ins replayed from the scale's memory, see [Historical readings](#historical-readings) and the [retry setting](/guide/configuration#runtime).
 
-| Target                          | What it does                                           |
-| ------------------------------- | ------------------------------------------------------ |
-| [Garmin Connect](#garmin)       | Uploads weight and body composition, no phone app      |
-| [MQTT](#mqtt)                   | Home Assistant auto-discovery sensors, LWT             |
-| [InfluxDB](#influxdb)           | Time-series database (v2 and v3)                       |
-| [Webhook](#webhook)             | Any HTTP endpoint (n8n, Make, Zapier, custom APIs)     |
-| [Ntfy](#ntfy)                   | Push notification to phone or desktop                  |
-| [Telegram](#telegram)           | Message to a Telegram chat                             |
-| [File (CSV/JSONL)](#file)       | Appends readings to a local file                       |
-| [Strava](#strava)               | Updates the weight in your Strava athlete profile      |
-| [Intervals.icu](#intervals)     | Weight and body fat to Intervals.icu wellness          |
-| [Runalyze](#runalyze)           | Weight and body composition to Runalyze metrics        |
-| [Wger](#wger)                   | Weight and body composition to a Wger instance         |
-| [HealthLog](#healthlog)         | Weight and body composition to a HealthLog instance    |
-| [Dreeve](#dreeve)               | Weight to a self-hosted Dreeve instance                |
+| Target | What it does |
+| ------ | ------------ |
+| <DocIcon id="garmin.png" /> [Garmin Connect](#garmin) | Uploads weight and body composition, no phone app |
+| <DocIcon id="homeassistant" /> [MQTT](#mqtt) | Home Assistant auto-discovery sensors, LWT |
+| <DocIcon id="influxdb" /> [InfluxDB](#influxdb) | Time-series database (v2 and v3) |
+| <DocIcon id="webhook" /> [Webhook](#webhook) | Any HTTP endpoint (n8n, Make, Zapier, custom APIs) |
+| <DocIcon id="ntfy" /> [Ntfy](#ntfy) | Push notification to phone or desktop |
+| <DocIcon id="telegram" /> [Telegram](#telegram) | Message to a Telegram chat |
+| <DocIcon id="file" /> [File (CSV/JSONL)](#file) | Appends readings to a local file |
+| <DocIcon id="strava" /> [Strava](#strava) | Weight in your Strava athlete profile |
+| <DocIcon id="intervals.png" /> [Intervals.icu](#intervals) | Weight and body fat to Intervals.icu wellness |
+| <DocIcon id="runalyze.png" /> [Runalyze](#runalyze) | Weight and body composition to Runalyze metrics |
+| <DocIcon id="wger" /> [Wger](#wger) | Weight and body composition to a Wger instance |
+| <DocIcon id="healthlog" /> [HealthLog](#healthlog) | Weight and body composition to a HealthLog instance |
+| <DocIcon id="dreeve" /> [Dreeve](#dreeve) | Weight to a self-hosted Dreeve instance |
 
-The [Renpho R-MSC04 extras](/guide/scales/renpho#r-msc04-morphoscan-nova), skeletal muscle percentage and segment impedances, reach MQTT, Webhook, File JSONL and InfluxDB with the weigh-ins that carry them. Ntfy and Telegram show only the skeletal muscle percentage; CSV and the other targets get the same fields for every scale.
+MQTT, Webhook, File JSONL and InfluxDB also receive the skeletal muscle percentage and the segment impedances, for weigh-ins that carry them. The [Renpho R-MSC04](/guide/scales/renpho#r-msc04-morphoscan-nova) sends both, and the [Arboleaf CS10E on the 20-byte QN dialect](/guide/scales/qn#scale-body-composition-on-the-extended-dialect) sends the skeletal muscle percentage. Ntfy and Telegram show only the skeletal muscle percentage; CSV and the other targets get the same fields for every scale.
 
 ## Garmin Connect {#garmin}
 
@@ -49,7 +49,7 @@ global_exporters:
 
 ### Authentication {#garmin-authentication}
 
-You authenticate once; the tokens are cached and reused. The setup wizard does it for you. To do it by hand:
+Authenticate once; the tokens are cached and reused. The setup wizard does it for you. By hand:
 
 ```bash
 ble-scale-sync setup-garmin --all-users   # every Garmin user in config.yaml
@@ -70,27 +70,29 @@ docker run --rm -it \
   ghcr.io/kristianp26/ble-scale-sync:latest setup-garmin --all-users
 ```
 
-On the Home Assistant add-on the add-on signs in on its first start; for an account with MFA see [Sign in to Garmin with MFA](/guide/home-assistant-addon#mfa-workaround).
+The Home Assistant add-on signs in on its first start.
 
-### Weight Only
+For an account with MFA see [Sign in to Garmin with MFA](/guide/home-assistant-addon#mfa-workaround).
 
-`weight_only: true` records only the weight and leaves BMI, body fat, water, bone mass, muscle mass, visceral fat, physique rating, metabolic age and BMR unset in Garmin Connect, for when you trust the scale's weight but not its impedance estimates. Garmin Connect still shows a BMI it computes from your Garmin profile height. Other exporters are not affected.
+### Weight only
 
-### Skip Metabolic Age
+`weight_only: true` uploads the weight and leaves BMI, body fat, water, bone mass, muscle mass, visceral fat, physique rating, metabolic age and BMR unset. Use it when you trust the scale's weight but not its impedance estimates. Garmin Connect still shows a BMI it computes from your profile height. Other exporters are not affected.
 
-`skip_metabolic_age: true` uploads everything except metabolic age, for when you do not want the app's metabolic age in Garmin. The body age a [QN scale](/guide/scales/qn) with a 19-byte scale-info frame sends is skipped too. Garmin's own Fitness Age is not affected.
+### Skip metabolic age
 
-### Upload Timeout
+`skip_metabolic_age: true` uploads everything except metabolic age. The body age sent by a [QN scale](/guide/scales/qn) with a 19-byte scale-info frame, or by the Arboleaf CS10K, is skipped too. Garmin's own Fitness Age is not affected.
 
-If the log shows `Python uploader timed out` three times for a measurement that uploads fine by hand later, Garmin Connect was slow: raise `upload_timeout_sec`, up to 900. A Garmin that is down then takes about three times the timeout to give up, and in continuous mode the next scan cycle and the ntfy or Telegram summary wait as long.
+### Upload timeout
+
+If the log shows `Python uploader timed out` three times for a measurement that uploads fine by hand later, Garmin Connect was slow. Raise `upload_timeout_sec` (up to 900). A Garmin outage then takes about three times the timeout to give up, and in continuous mode the next scan cycle and the Ntfy or Telegram summary wait as long.
 
 ### Troubleshooting
 
-Garmin can block logins from cloud and VPN IP addresses. If authentication fails there, authenticate on another network and copy the token directory to the machine that runs the app.
+Garmin can block logins from cloud and VPN addresses. If authentication fails there, authenticate on another network and copy the token directory to the machine that runs the app.
 
 ## MQTT {#mqtt}
 
-Publishes each weigh-in as JSON to an MQTT broker, with Home Assistant auto-discovery on by default. On Home Assistant OS or Supervised, the [Home Assistant add-on](/guide/home-assistant-addon) finds the Mosquitto broker by itself.
+Publishes each weigh-in as JSON to an MQTT broker, with Home Assistant auto-discovery on by default. The [Home Assistant add-on](/guide/home-assistant-addon) finds the Mosquitto broker by itself on Home Assistant OS or Supervised.
 
 | Field            | Required | Default                  | Description                                                              |
 | ---------------- | -------- | ------------------------ | ------------------------------------------------------------------------ |
@@ -133,21 +135,21 @@ Each weigh-in is one message on `<topic>/<user slug>`. Masses are in kg whatever
 }
 ```
 
-`timestamp` is when the weigh-in was measured, in ISO 8601 UTC: the scale's own time when it sends one, otherwise the time the reading reached the app. Weigh-ins a scale sends from its memory do not go to MQTT, so it is always the last live weigh-in.
+`timestamp` is when the weigh-in was measured, in ISO 8601 UTC: the scale's own time when it sends one, otherwise the time the reading reached the app. Weigh-ins a scale replays from its memory do not go to MQTT, so the message is always the last live weigh-in.
 
-The R-MSC04 extras are `skeletalMusclePercent` and ten segment impedances in ohm: `impedanceTrunk20kHz`, `impedanceTrunk100kHz`, and the same pairs for `LeftArm`, `RightArm`, `LeftLeg` and `RightLeg`. A key is in the message only when that weigh-in carries it.
+Some scales add `skeletalMusclePercent`, and the R-MSC04 also ten segment impedances in ohm: `impedanceTrunk20kHz`, `impedanceTrunk100kHz`, and the same pairs for `LeftArm`, `RightArm`, `LeftLeg` and `RightLeg`. A key is in the message only when that weigh-in carries it.
 
-### Home Assistant Sensors
+### Home Assistant sensors
 
-Discovery creates one device per user, with a sensor for weight, impedance, BMI, body fat, water, bone mass, muscle mass, visceral fat, physique rating, BMR, metabolic age and the time of the last weigh-in (**Last Weigh-in**). Each sensor has its own display precision.
+Discovery creates one device per user, with sensors for weight, impedance, BMI, body fat, water, bone mass, muscle mass, visceral fat, physique rating, BMR, metabolic age and the time of the last weigh-in (**Last Weigh-in**).
 
-The R-MSC04 extras get sensors the first time a message carries them: **Skeletal Muscle**, and one per segment impedance (**Impedance Left Arm 20 kHz** and so on), which are diagnostic and disabled until you enable them on the device page. A later message without one of these keys shows its sensor as unknown. With `retain: false` such a sensor can miss the value of the weigh-in that created it, because Home Assistant subscribes to its topic only once the sensor exists.
+The skeletal muscle percentage and the segment impedances get sensors the first time a message carries them: **Skeletal Muscle**, and one per segment impedance (**Impedance Left Arm 20 kHz** and so on), which are diagnostic and disabled until you enable them on the device page. A later message without one of these keys shows its sensor as unknown. With `retain: false` such a sensor can miss the value of the weigh-in that created it, because Home Assistant subscribes to its topic only once the sensor exists.
 
-Availability uses an MQTT last will: when the app loses the broker without a clean shutdown, the broker publishes `offline` and Home Assistant shows the sensors as unavailable until the app reconnects.
+Availability uses an MQTT last will: if the app drops off the broker without a clean shutdown, the broker publishes `offline` and the sensors show as unavailable until the app reconnects.
 
-### Detect a New Weigh-In
+### Detect a new weigh-in
 
-Use the **Last Weigh-in** value, not a sensor's `last_changed`. Because the message is retained, every `last_changed` becomes the time of a Home Assistant restart, and a weigh-in with the same weight as the last one does not change the weight sensor. The timestamp changes with every weigh-in and keeps its value across a restart. A state trigger on it needs `not_from`, because after a restart or a broker reconnect the sensor comes back from `unknown` or `unavailable` with the old time:
+Trigger on the **Last Weigh-in** value, not a sensor's `last_changed`. The message is retained, so every `last_changed` becomes the time of a Home Assistant restart, and a weigh-in with the same weight as the last one does not change the weight sensor. The timestamp changes with every weigh-in and survives a restart. A state trigger on it needs `not_from`, because after a restart or a broker reconnect the sensor returns from `unknown` or `unavailable` with the old time:
 
 ```yaml
 triggers:
@@ -158,7 +160,7 @@ triggers:
       - unavailable
 ```
 
-Such a trigger skips a weigh-in made while Home Assistant was down. With `ha_discovery: false`, define the sensor yourself:
+This trigger skips a weigh-in made while Home Assistant was down. With `ha_discovery: false`, define the sensor yourself:
 
 ```yaml
 mqtt:
@@ -190,7 +192,7 @@ global_exporters:
 
 ## InfluxDB {#influxdb}
 
-Writes each weigh-in in line protocol, with floats at 2 decimal places and integers with the `i` suffix. One exporter covers InfluxDB v2 and v3, through the `/api/v2/write` endpoint both have.
+Writes each weigh-in in line protocol, with floats at 2 decimal places and integers with the `i` suffix. One exporter covers v2 and v3 through the `/api/v2/write` endpoint both have.
 
 | Field         | Required | Default            | Description                                   |
 | ------------- | -------- | ------------------ | --------------------------------------------- |
@@ -244,12 +246,12 @@ global_exporters:
 ```
 
 ::: warning The topic is the password
-Anyone who knows an ntfy.sh topic can subscribe to it and read its recent messages, and each notification carries your name, weight and body composition. Use a long random topic name, a self-hosted server or an access token.
+Anyone who knows an ntfy.sh topic can read its recent messages, and each notification carries your name, weight and body composition. Use a long random topic name, a self-hosted server or an access token.
 :::
 
 Weight, muscle and bone follow `scale.weight_unit`. Each notification starts with the user's name as `[Name]`, with a single user too.
 
-With `report_exports: true` the notification waits for the other exporters and ends with one line per exporter: a check mark and its name, or a cross, its name and the error. Two notifiers with the flag do not report on each other. The notification then arrives after the slowest exporter and its retries: with Garmin at the default `upload_timeout_sec`, about nine minutes when every attempt times out. Error text is forwarded as it is, cut to 120 characters, so a public topic carries it too.
+With `report_exports: true` the notification waits for the other exporters and ends with one line per exporter: a check mark and its name, or a cross, its name and the error. Two notifiers with the flag do not report on each other. The notification arrives after the slowest exporter and its retries, about nine minutes with Garmin at the default `upload_timeout_sec` when every attempt times out. Error text is forwarded cut to 120 characters, so a public topic carries it too.
 
 ## Telegram {#telegram}
 
@@ -292,7 +294,7 @@ global_exporters:
     format: csv
 ```
 
-A CSV file gets a header row on the first write; JSONL gets one JSON object per line. In Docker, a relative `file_path` is relative to `/app`. Put the file in a mounted host directory, or it is lost when the container is re-created: create it first with UID 1000 as owner (`mkdir data && sudo chown 1000:1000 data`), mount it with `-v ./data:/app/data` and set `file_path: './data/measurements.csv'`.
+A CSV file gets a header row on the first write; JSONL gets one JSON object per line. In Docker, a relative `file_path` is relative to `/app`. Put the file in a mounted host directory, or it is lost when the container is re-created. Create the directory first with UID 1000 as owner (`mkdir data && sudo chown 1000:1000 data`), mount it with `-v ./data:/app/data` and set `file_path: './data/measurements.csv'`.
 
 ## Strava {#strava}
 
@@ -313,7 +315,7 @@ users:
         client_secret: '${STRAVA_CLIENT_SECRET}'
 ```
 
-### Create a Strava API Application {#creating-a-strava-api-application}
+### Create a Strava API application {#creating-a-strava-api-application}
 
 1. Open [strava.com/settings/api](https://www.strava.com/settings/api).
 2. Upload an **Application Icon**; the form does not save without one.
@@ -440,7 +442,7 @@ Each value is a separate measurement with the reading's exact time, so a [stored
 | `BONE_MASS`        | kg                                        | 0.5-8             |
 | `VISCERAL_FAT`     | rating                                    | 0-30              |
 
-Everything after the weight needs `sync_measurements`. On a scale without impedance these are the BMI-based estimates from [Body Composition](/body-composition). A value outside the accepted range, such as a visceral fat rating above 30, is not sent. A failed body composition value is logged and does not fail the export; a failed weight does. HealthLog answers a repeated value with `409`, which the exporter counts as already recorded.
+Everything after the weight needs `sync_measurements`. On a scale without impedance these are the BMI-based estimates from [body composition](/body-composition). A value outside the accepted range, such as a visceral fat rating above 30, is not sent. A failed body composition value is logged and does not fail the export; a failed weight does. HealthLog answers a repeated value with `409`, which the exporter counts as already recorded.
 
 The startup healthcheck calls the public `/api/version` endpoint, so it confirms the instance is reachable but not that the token is valid; a wrong or expired token shows up on the first export.
 
@@ -475,7 +477,7 @@ Dreeve keeps one weight per calendar day and the last one sent wins, so a retry 
 
 The startup healthcheck calls `/api/v1/status` with the key. A `401` means a wrong key, or a Dreeve whose `DREEVE_API_KEY` is missing or not `drv_` followed by 64 hex characters. A 404 on export means a Dreeve older than 5.3.3.
 
-## Weigh-Ins Without Body Composition
+## Weigh-ins without body composition
 
 With [`estimate_body_composition: false`](/guide/configuration#users), a weigh-in the scale measured no body composition for has no body fat, water, bone mass, muscle mass, visceral fat or physique rating. Weight, impedance, BMI, BMR and metabolic age are there as usual. Each exporter leaves the missing values out its own way:
 
@@ -492,9 +494,11 @@ With [`estimate_body_composition: false`](/guide/configuration#users), a weigh-i
 
 ## Secrets
 
-Put passwords and tokens in `${ENV_VAR}` references, as in the examples above; see [Secret references](/guide/configuration#secret-references).
+Put passwords and tokens in `${ENV_VAR}` references, as in the examples above.
 
-## Historical Readings
+See [Secret references](/guide/configuration#secret-references).
+
+## Historical readings
 
 Some scales store weigh-ins made while nothing was listening and send them, with the time they were measured, on the next connection. A reading whose recorded time is more than 5 minutes old is a past measurement. It goes only to the exporters that can file it under its own time:
 
@@ -507,9 +511,9 @@ A notification is about now, and the MQTT topic holds one retained state, the la
 Historical reading (2026-09-07T06:12:44.000Z): skipping non-back-date exporters [mqtt, ntfy]
 ```
 
-The adapters that pass the recorded time on include the Beurer BF720 family, the Renpho ES-26BB and [QN scales](/guide/scales/qn) with a 19-byte scale-info frame, or an 18-byte one with `ble.qn_user_key` set. On an 18-byte QN scale, a weigh-in marked as stored is a past measurement even if its time is recent. On a Medisana BS430 / BS440 / BS444, every record but the newest one within a minute of now is a past measurement. Salter scales send stored records as ordinary live readings. With [`runtime.no_reading_rescan_delay`](/guide/configuration#runtime) set, a weigh-in made during the wait can arrive more than 5 minutes late and is then a past measurement too.
+The adapters that pass the recorded time on include the Beurer BF720 family, the Renpho ES-26BB, the Arboleaf CS10K and [QN scales](/guide/scales/qn) with a 19-byte scale-info frame, or an 18-byte one with `ble.qn_user_key` set. On an 18-byte QN scale, a weigh-in marked as stored is a past measurement even if its time is recent. On a Medisana BS430 / BS440 / BS444, every record but the newest one within a minute of now is a past measurement. Salter scales send stored records as ordinary live readings. With [`runtime.no_reading_rescan_delay`](/guide/configuration#runtime) set, a weigh-in made during the wait can arrive more than 5 minutes late and is then a past measurement too.
 
-### Replay Check
+### Replay check
 
 A scale often hands over a stored copy of the weigh-in the app already exported live. A past measurement within 0.1 kg of the user's last live weigh-in, or of their `last_known_weight`, is skipped with `Skipping replay` in the log, unless it was measured more than 5 minutes after that live weigh-in. When the live weigh-in carried the scale's own time, that time is compared, so a scale clock ahead of the host does not make the replay look new.
 

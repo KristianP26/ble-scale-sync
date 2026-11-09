@@ -1,6 +1,8 @@
 import type { ScaleReading } from '../../interfaces/scale-adapter.js';
 import {
   EXTENDED_INFO_FRAME_LEN,
+  INFO_DYNAMIC_PACKAGE_BIT,
+  INFO_FEATURES_OFFSET,
   PROTO_ECHO_MIN_INFO_FRAME_LEN,
   STORED_UNASSIGNED_SLOT,
 } from './constants.js';
@@ -14,9 +16,12 @@ import type { QnSession } from './session.js';
  * and #283) and any frame without its own length at [1], and by length for
  * the long frame: `va18` (Renpho ES-26M, Physiq), `va19` (Arboleaf) and
  * `ext20` (20 bytes and up, GE CS 10 G). A classic frame of 18 or 19 bytes is
- * never `va18` or `va19`. Each has a handler in dialects/. A long-frame scale
- * may never send impedance, so its stable R1=R2=0 ES-30M frame is accepted
- * after a grace period; classic ES-30M scales always send the impedance frame.
+ * never `va18` or `va19`. Each has a handler in dialects/. The Arboleaf CS10K
+ * (#530) sends a 20-byte frame without the dynamic-package bit: it stays
+ * `ext20` for the handshake, and that handler passes its weigh-in frames to
+ * `va19`. A long-frame scale may never send impedance, so its stable R1=R2=0
+ * ES-30M frame is accepted after a grace period; classic ES-30M scales always
+ * send the impedance frame.
  */
 export type QnDialectKind = 'unknown' | 'classic' | 'va18' | 'va19' | 'ext20';
 
@@ -27,6 +32,16 @@ export function classifyInfoFrame(data: Buffer): QnDialectKind {
   if (data.length < 18 || data[1] !== data.length) return 'classic';
   if (data.length >= EXTENDED_INFO_FRAME_LEN) return 'ext20';
   return data.length === PROTO_ECHO_MIN_INFO_FRAME_LEN ? 'va19' : 'va18';
+}
+
+/**
+ * Whether a 0x12 of 20 bytes or more sets the dynamic-package bit; null for a
+ * frame that has no such byte (shorter, or without its length at [1]). A scale
+ * without the bit sends its weigh-in as the 19-byte dialect does (#530).
+ */
+export function infoDynamicPackage(data: Buffer): boolean | null {
+  if (classifyInfoFrame(data) !== 'ext20') return null;
+  return (data[INFO_FEATURES_OFFSET] & INFO_DYNAMIC_PACKAGE_BIT) !== 0;
 }
 
 /**

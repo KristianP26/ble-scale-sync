@@ -404,6 +404,33 @@ describe.skipIf(!nodeBleInstalled)('why a connection ended, BlueZ 5.83 (#434)', 
     ]);
   });
 
+  it('BlueZ 5.82, the scale hangs up 5.4 s in: one line with the time and no reason (#497)', async () => {
+    await debugOn();
+    droppingScale();
+    const outcome = await cycle({ targetMac: GATT_MAC });
+    expect(outcome).toEqual({ error: 'Scale disconnected before reading completed' });
+    const all = lines();
+    const ended = all.filter((l) => ENDED.test(l));
+    expect(ended).toEqual([
+      `+6900ms [debug] BlueZ: ${GATT_MAC} disconnected 5.40 s after connect without a ` +
+        'Disconnect from this app; this BlueZ does not say why ' +
+        '(Device1.Disconnected needs BlueZ 5.83), btmon shows the reason',
+    ]);
+    // The scale's hang-up, not the teardown's Disconnect after it.
+    expectInOrder(all, [
+      ended[0],
+      `+6900ms [debug] Disconnecting ${GATT_MAC} after the session...`,
+    ]);
+  });
+
+  it('BlueZ 5.82, a normal reading: our own Disconnect gives no line (#497)', async () => {
+    await debugOn();
+    gattScale();
+    const outcome = await cycle({ targetMac: GATT_MAC });
+    expect(outcome).toEqual({ reading: { weight: 80.5, impedance: 512 }, adapter: 'Wire GATT' });
+    expect(lines().filter((l) => ENDED.test(l))).toEqual([]);
+  });
+
   it('a normal reading: our own Disconnect after reading shows as Local', async () => {
     bluez.sendsDisconnectReason = true;
     await debugOn();

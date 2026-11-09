@@ -304,13 +304,26 @@ describe('StandardGattScaleAdapter: 0x2A9D and the SIG time stamp', () => {
     });
   });
 
-  it('carries the SIG time stamp and user slot, so a stored record is history', () => {
+  // The 0x2A9D frame names user slot 1, the slot this adapter always consents
+  // as, so it says nothing about who is on the scale.
+  it('does not pass the slot of its fixed consent on as userIndex', () => {
+    atCaptureTime(() => {
+      const parse = charParser(makeAdapter());
+      const weight = parse(CHR_WSS, WSS);
+      expect(weight).not.toBeNull();
+      expect(weight!.userIndex).toBeUndefined();
+      const reading = parse(CHR_BCS, BCS);
+      expect(reading).not.toBeNull();
+      expect(reading!.userIndex).toBeUndefined();
+    });
+  });
+
+  it('carries the SIG time stamp, so a stored record is history', () => {
     // Real clock: the capture's May stamp is months old, i.e. a stored record.
     const a = makeAdapter();
     const parse = charParser(a);
     const reading = parse(CHR_WSS, WSS);
     expect(reading!.timestamp).toEqual(new Date(2026, 4, 12, 18, 53, 54));
-    expect(reading!.userIndex).toBe(1);
     expect(isHistoricalReading(reading!)).toBe(true);
 
     // The record is already in the session's history buffer when its 0x2A9C

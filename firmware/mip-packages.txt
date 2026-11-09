@@ -4,8 +4,10 @@
 #
 # aioble is pinned to a micropython-lib index release; mip fetches the
 # precompiled .mpy files for the device's bytecode version. The firmware uses
-# aioble internals (aioble.core.ble_irq, discovery, subscribe), and the
-# central, client, core and device modules are unchanged from 0.6.0 to 0.6.2.
+# aioble internals (aioble.core.ble_irq, discovery, subscribe, and
+# ClientCharacteristic._on_notify_indicate, _notify_event and _indicate_event,
+# which start_notify() hooks), and the central, client, core and device
+# modules are unchanged from 0.6.0 to 0.6.2.
 # Bump it deliberately and test a GATT connect on hardware when you do.
 # GitHub specs are package path first, then @commit: mpremote splits at "@",
 # so a path after the commit is taken as part of the branch name.

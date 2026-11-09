@@ -1,33 +1,33 @@
 ---
-title: Auto Updates
+title: Auto updates
 description: Update BLE Scale Sync automatically or on a schedule in the Home Assistant add-on, Docker Compose, an npm install and a systemd install from a clone.
 ---
 
-# Auto Updates
+# Auto updates
 
-The app logs `Update available: ...` when a newer release exists, but it never installs one. To turn that check off, see [Update check](/guide/configuration#update-check). Releases are listed in the [changelog](/changelog).
+The app logs `Update available: ...` when a newer release exists, but it never installs one. [Update check](/guide/configuration#update-check) turns the check off. Releases are in the [changelog](/changelog).
 
-## Home Assistant Add-on
+## Home Assistant add-on
 
-### Manual Updates (default)
+### Manual updates (default)
 
 A new version shows an **Update** button under **Settings** > **Apps** > **BLE Scale Sync**. The Supervisor pulls the new image and restarts the add-on; options and `/data` are kept.
 
-### Automatic Updates
+### Automatic updates
 
 1. Open **Settings** > **Apps** > **BLE Scale Sync**.
 2. Turn on **Auto update**.
-3. Keep the backup toggle on in the update dialog, so the Supervisor makes a partial backup before each update. Whether that toggle starts on is set under **Settings** > **System** > **Backups**.
+3. Keep the backup toggle on in the update dialog, so the Supervisor makes a partial backup before each update. **Settings** > **System** > **Backups** sets whether that toggle starts on.
 
 The Supervisor then installs new versions during its daily update check and restarts the add-on.
 
-In custom config mode an update replaces the image and leaves `/share/ble-scale-sync/config.yaml` as it is. Read the [changelog](/changelog) for config changes before you turn on unattended updates.
+In custom config mode an update replaces the image and leaves `/share/ble-scale-sync/config.yaml` as it is. Check the [changelog](/changelog) for config changes before you turn on unattended updates.
 
 ## Docker Compose
 
 An update re-creates the container, which drops the files the app keeps next to a single-file `config.yaml` mount, the export retry queue included. See [Run](/guide/getting-started#_2-run).
 
-### Systemd Timer
+### Systemd timer
 
 A timer that pulls the image and restarts the stack needs no extra container. Create `/etc/systemd/system/ble-scale-sync-update.service`, with `WorkingDirectory` set to the directory of your `docker-compose.yml`:
 
@@ -58,7 +58,7 @@ RandomizedDelaySec=1h
 WantedBy=timers.target
 ```
 
-Enable it and check the next run:
+Enable the timer and check the next run:
 
 ```bash
 sudo systemctl daemon-reload
@@ -68,7 +68,7 @@ systemctl list-timers ble-scale-sync-update
 
 ### Watchtower {#watchtower-with-label-opt-in}
 
-[Watchtower](https://github.com/containrrr/watchtower) restarts a container when a newer image is pushed. The upstream project was archived in December 2025 and receives no more updates. If you run it, opt in only this container with a label, and add the sidecar next to your existing service:
+[Watchtower](https://github.com/containrrr/watchtower) restarts a container when a newer image is pushed. The upstream project was archived in December 2025 and gets no more updates. If you run it anyway, opt in only this container with a label and add the sidecar next to your existing service:
 
 ```yaml
 services:
@@ -92,7 +92,7 @@ services:
 
 To get a notification instead of an update, add `WATCHTOWER_MONITOR_ONLY=true`, `WATCHTOWER_NOTIFICATIONS=shoutrrr` and `WATCHTOWER_NOTIFICATION_URL=ntfy://ntfy.sh/YOUR_TOPIC` to the `watchtower` environment.
 
-## npm Install
+## npm install
 
 Update the global install and restart the service:
 
@@ -101,11 +101,11 @@ npm install -g ble-scale-sync@latest
 sudo systemctl restart ble-scale.service
 ```
 
-## Systemd Install from a Clone {#raspberry-pi-systemd-source-deployment}
+## Systemd install from a clone {#raspberry-pi-systemd-source-deployment}
 
-For a clone that runs as `ble-scale.service` (see [Run as a service](/guide/getting-started#run-as-a-service-linux)), a timer can fast-forward `main`, rebuild and restart the service. `main` can hold code that is not released yet; to stay on releases, [pin a tag](#pinning-a-version) instead.
+For a clone that runs as `ble-scale.service`, a timer can fast-forward `main`, rebuild and restart the service. The service setup is in [Run as a service](/guide/getting-started#run-as-a-service-linux). `main` can hold code that is not released yet. To stay on releases, [pin a tag](#pinning-a-version) instead.
 
-### Update Script
+### Update script
 
 Create `/home/YOUR_USER/ble-scale-sync/scripts/auto-update.sh` and make it executable with `chmod +x`:
 
@@ -180,9 +180,9 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now ble-scale-sync-update.timer
 ```
 
-This runs every Sunday at 04:30 local time, up to 30 minutes later. If the script fails before the restart (diverged history, failed install or build), the service keeps running the old build, and the error is in `journalctl -u ble-scale-sync-update.service`.
+The timer runs every Sunday at 04:30 local time, up to 30 minutes later. If the script fails before the restart, because of diverged history or a failed install or build, the service keeps running the old build. The error is in `journalctl -u ble-scale-sync-update.service`.
 
-## Pinning a Version
+## Pinning a version
 
 To upgrade only by hand, pin a release instead of `latest`.
 
@@ -201,9 +201,9 @@ git checkout vX.Y.Z
 npm ci && npm run build
 ```
 
-The Home Assistant add-on always runs the image of its own version; keep **Auto update** off to stay on it. With a pinned version, leave the update timer off; the update check still tells you when a release is out.
+The Home Assistant add-on always runs the image of its own version. Keep **Auto update** off to stay on it. With a pinned version, leave the update timer off. The update check still tells you when a release is out.
 
-## Safety Checklist Before Enabling Unattended Updates
+## Safety checklist before enabling unattended updates
 
 - `config.yaml` (and `/data` on Home Assistant, or your Docker volumes) is backed up off the device.
 - Your scale works on the current version, with no open [issue](https://github.com/KristianP26/ble-scale-sync/issues) for your hardware.

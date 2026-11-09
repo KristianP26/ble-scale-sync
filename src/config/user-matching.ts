@@ -7,7 +7,7 @@ const log = createLogger('UserMatch');
 
 export interface MatchResult {
   user: UserConfig | null;
-  tier: 'exact' | 'tiebreak' | 'last_known' | 'strategy';
+  tier: 'slot' | 'exact' | 'tiebreak' | 'last_known' | 'strategy';
   warning?: string;
   /**
    * True when several users fit and nothing about them decided between them,
@@ -20,6 +20,22 @@ export interface MatchResult {
 }
 
 // --- Helpers ---
+
+/**
+ * The users whose `beurer_user_index` is the frame's scale user slot, in config
+ * order, or none when the frame names no slot.
+ *
+ * Only a user who SET `beurer_user_index` claims a slot. The consent code falls
+ * back to slot 1 when the key is unset, but that default is not a claim: a user
+ * without the key would otherwise own every slot-1 weigh-in.
+ *
+ * More than one claimant is a config error, and what to do about it differs by
+ * frame, so the caller decides.
+ */
+export function slotClaimants(users: UserConfig[], userIndex: number | undefined): UserConfig[] {
+  if (userIndex === undefined) return [];
+  return users.filter((u) => u.beurer_user_index === userIndex);
+}
 
 function inRange(weight: number, user: UserConfig): boolean {
   return weight >= user.weight_range.min && weight <= user.weight_range.max;

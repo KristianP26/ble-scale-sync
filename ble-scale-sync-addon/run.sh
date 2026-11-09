@@ -85,8 +85,21 @@ valid_weight_range() {
 # refuses any encryption key that is not base64 of exactly 32 bytes, and it
 # does so as the client is created. Every such key is 43 base64 characters
 # and one = of padding.
+#
+# Shell built-ins only, no grep: the check runs once per start, but a test runs
+# it thousands of times, and a forked grep crashed intermittently there on macOS.
+# A value with a newline in it is refused as a whole, where the grep matched any
+# one line of it.
 valid_esphome_key() {
-  printf '%s\n' "$1" | grep -Eq '^[A-Za-z0-9+/]{43}=$'
+  [ "${#1}" -eq 44 ] || return 1
+  case "$1" in
+    *=) ;;
+    *) return 1 ;;
+  esac
+  case "${1%=}" in
+    *[!A-Za-z0-9+/]*) return 1 ;;
+  esac
+  return 0
 }
 
 # <<< option checks
@@ -249,7 +262,7 @@ if [ "$CUSTOM_CONFIG" = "true" ]; then
   # would toggle the UI option, see no change and report a false negative. A
   # wrong value for either is silent by nature, so a setting that is silently
   # ignored is worse here than almost anywhere else.
-  for _qn in qn_protocol_byte qn_report_byte qn_weight_ack qn_user_key qn_user_slot \
+  for _qn in qn_protocol_byte qn_report_byte qn_weight_ack qn_user_key qn_user_slot qn_algorithm \
     qn_a4_prelude qn_time_sync_long qn_config_long qn_result_ack rmsc04_profile_byte auto_clear_stale_bond \
     adapter_privacy; do
     if [ -n "$(opt "$_qn")" ]; then
@@ -342,9 +355,10 @@ else
       QN_WEIGHT_ACK=""
       ;;
   esac
-  # Normalised further down, next to the two QN bytes.
+  # Normalised further down, next to the QN bytes.
   QN_USER_KEY=$(opt qn_user_key)
   QN_USER_SLOT=$(opt qn_user_slot)
+  QN_ALGORITHM=$(opt qn_algorithm)
   # Same free-text normalisation as qn_weight_ack above, for the same reason.
   QN_A4_PRELUDE=$(opt qn_a4_prelude)
   case "$(echo "$QN_A4_PRELUDE" | tr '[:upper:]' '[:lower:]')" in
@@ -673,8 +687,8 @@ YAML
     FORCE_SCALE_ADAPTER=""
   fi
 
-  # The two QN bytes are text options so that "unset" stays distinguishable from
-  # 0, which is a meaningful value for both. Anything that is not a plain 0 to
+  # The three QN bytes are text options so that "unset" stays distinguishable from
+  # 0, which is a meaningful value for each. Anything that is not a plain 0 to
   # 255 integer is dropped with a warning rather than written into config.yaml,
   # where it would fail schema validation and stop the add-on from starting.
   #
@@ -686,8 +700,9 @@ YAML
   # (#461), so a value typed with a leading zero would run a different
   # experiment, or delete different slots, without a word. A plain
   # decimal means the same thing to every reader. Surrounding whitespace is
-  # trimmed for the same reason: it comes free from a text field.
-  for _qn in QN_PROTOCOL_BYTE QN_REPORT_BYTE; do
+  # trimmed for the same reason: it comes free from a text field. qn_algorithm
+  # is the algorithm byte of the QN profile frame (#331), the same 0 to 255.
+  for _qn in QN_PROTOCOL_BYTE QN_REPORT_BYTE QN_ALGORITHM; do
     eval "_qv=\$$_qn"
     _qv=$(printf '%s' "$_qv" | tr -d '[:space:]')
     [ -z "$_qv" ] && continue
@@ -783,7 +798,7 @@ YAML
   # got no ble: block at all and the setting vanished without a word.
   if [ -n "$SCALE_MAC" ] || [ -n "$BLE_ADAPTER" ] || [ -n "$FORCE_SCALE_ADAPTER" ] ||
     [ -n "$QN_PROTOCOL_BYTE" ] || [ -n "$QN_REPORT_BYTE" ] || [ -n "$QN_WEIGHT_ACK" ] ||
-    [ -n "$QN_USER_KEY" ] || [ -n "$QN_USER_SLOT" ] || [ -n "$QN_A4_PRELUDE" ] || [ -n "$QN_TIME_SYNC_LONG" ] || [ -n "$QN_CONFIG_LONG" ] ||
+    [ -n "$QN_USER_KEY" ] || [ -n "$QN_USER_SLOT" ] || [ -n "$QN_ALGORITHM" ] || [ -n "$QN_A4_PRELUDE" ] || [ -n "$QN_TIME_SYNC_LONG" ] || [ -n "$QN_CONFIG_LONG" ] ||
     [ -n "$QN_RESULT_ACK" ] || [ -n "$RMSC04_PROFILE_BYTE" ] ||
     [ "$AUTO_CLEAR_STALE_BOND" = "true" ] || [ "$PREEMPTIVE_ADAPTER_RESET" = "false" ] ||
     [ "$ADAPTER_PRIVACY" = "true" ] || [ "$PAIRING_RETRY_MAX_MIN" != "60" ] ||
@@ -798,6 +813,7 @@ YAML
     [ -n "$QN_WEIGHT_ACK" ] && echo "  qn_weight_ack: $QN_WEIGHT_ACK" >> "$FRESH"
     [ -n "$QN_USER_KEY" ] && echo "  qn_user_key: $QN_USER_KEY" >> "$FRESH"
     [ -n "$QN_USER_SLOT" ] && echo "  qn_user_slot: $QN_USER_SLOT" >> "$FRESH"
+    [ -n "$QN_ALGORITHM" ] && echo "  qn_algorithm: $QN_ALGORITHM" >> "$FRESH"
     [ -n "$QN_A4_PRELUDE" ] && echo "  qn_a4_prelude: $QN_A4_PRELUDE" >> "$FRESH"
     [ -n "$QN_TIME_SYNC_LONG" ] && echo "  qn_time_sync_long: $QN_TIME_SYNC_LONG" >> "$FRESH"
     [ -n "$QN_CONFIG_LONG" ] && echo "  qn_config_long: $QN_CONFIG_LONG" >> "$FRESH"

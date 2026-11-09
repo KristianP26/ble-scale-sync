@@ -5,7 +5,7 @@ description: How BLE Scale Sync compares with openScale, openScale-sync and manu
 
 # Alternatives
 
-BLE Scale Sync reads the scale on an always-on host instead of a phone. The table compares it with the phone apps people use for the same job.
+BLE Scale Sync reads the scale on an always-on host instead of a phone. The table compares it with the phone apps used for the same job.
 
 ## Comparison
 
@@ -31,14 +31,14 @@ BLE Scale Sync reads the scale on an always-on host instead of a phone. The tabl
 Best for:
 
 - Garmin Connect and Strava sync without a phone
-- Home automation (MQTT, InfluxDB, webhooks)
-- An always-on Raspberry Pi or server, or an [ESP32 proxy](/guide/esp32-proxy) when the server has no Bluetooth
+- Home automation over MQTT, InfluxDB or webhooks
+- An always-on Raspberry Pi or server, with an [ESP32 proxy](/guide/esp32-proxy) when the server has no Bluetooth
 - Households where the app tells users apart by weight
 - A local CSV or JSONL log next to cloud exports
 
 Limitations:
 
-- Needs an always-on host in Bluetooth range of the scale, or a Bluetooth proxy near it
+- Needs an always-on host in Bluetooth range of the scale, or a proxy near it
 - The Docker image runs on Linux only
 
 ## openScale
@@ -69,13 +69,13 @@ Limitations:
 - Needs both openScale and openScale-sync on an Android phone
 - No InfluxDB, webhook or ntfy support
 
-## Manufacturer Apps
+## Manufacturer apps
 
-Renpho, Yunmai, Xiaomi and similar apps are the shortest path if you use only one brand.
+Renpho, Yunmai, Xiaomi and similar apps are the shortest path if you use one brand.
 
 Best for:
 
-- A household with scales of one brand that wants the vendor's own metrics
+- Households with scales of one brand who want the vendor's own metrics
 
 Limitations:
 
@@ -83,4 +83,4 @@ Limitations:
 - No direct Garmin Connect export (some go through Health Connect on Android)
 - No MQTT, InfluxDB or webhook integration
 - A phone is needed for every measurement
-- Most of them store measurements in the vendor's cloud account
+- Measurements usually live in the vendor's cloud account

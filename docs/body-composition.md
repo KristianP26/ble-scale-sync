@@ -1,31 +1,31 @@
 ---
-title: Body Composition
+title: Body composition
 description: How BLE Scale Sync computes each body composition metric, the BIA and Deurenberg formulas, and what athlete mode changes.
 ---
 
-# Body Composition
+# Body composition
 
 BLE Scale Sync computes body composition from the weight, the impedance the scale measures through your feet, and the user's height, age and sex. Scales that compute their own values are used as they are, under the conditions on their scale pages.
 
-## Exported Metrics
+## Exported metrics
 
 | Metric          | Unit     | Description                                              |
 | --------------- | -------- | -------------------------------------------------------- |
 | Weight          | kg       | Scale reading                                            |
-| BMI             | (none)   | Body Mass Index                                          |
-| Body Fat        | %        | From impedance (BIA), from the scale, or estimated from BMI |
+| BMI             | (none)   | Body mass index                                          |
+| Body fat        | %        | From impedance (BIA), from the scale, or estimated from BMI |
 | Water           | %        | Total body water                                         |
-| Bone Mass       | kg       | Estimated bone mineral content                           |
-| Muscle Mass     | kg       | Fat-free mass minus bone, or the scale's own value       |
-| Visceral Fat    | 1-59     | Internal organ fat rating                                |
-| BMR             | kcal     | Basal Metabolic Rate                                     |
-| Metabolic Age   | years    | Age whose BMR matches yours                              |
-| Physique Rating | 1-9      | Body type from body fat and muscle ratio                 |
-| Skeletal Muscle | %        | Only from a scale that reports it                        |
+| Bone mass       | kg       | Estimated bone mineral content                           |
+| Muscle mass     | kg       | Fat-free mass minus bone, or the scale's own value       |
+| Visceral fat    | 1-59     | Internal organ fat rating                                |
+| BMR             | kcal     | Basal metabolic rate                                     |
+| Metabolic age   | years    | Age whose BMR matches yours                              |
+| Physique rating | 1-9      | Body type from body fat and muscle ratio                 |
+| Skeletal muscle | %        | Only from a scale that reports it                        |
 
 ## Formulas {#how-it-works}
 
-### Body Fat (BIA)
+### Body fat (BIA)
 
 With a usable impedance, body fat comes from Bioelectrical Impedance Analysis, with height in cm and impedance in ohm:
 
@@ -43,9 +43,9 @@ Body Fat % = (weight - LBM) / weight * 100
 
 The result is kept between 3 and 60 %.
 
-### When an Impedance Is Ignored
+### When an impedance is ignored
 
-An impedance below 150 ohm or above 1200 ohm is not a body measurement. It is exported as 0, and the weigh-in gets the scale's own body fat where the scale sends one, or the estimate below. A wrong value would not fail visibly; it would pin body fat to the 3 or 60 % limit. The log names the value:
+An impedance below 150 ohm or above 1200 ohm is not a body measurement. It is exported as 0, and the weigh-in gets the scale's own body fat where the scale sends one, or the estimate below. Such a value would not fail visibly. It would pin body fat to the 3 or 60 % limit. The log names the value:
 
 ```text
 Impedance 4317 Ohm is not a usable measurement (150-1200 Ohm), so it is not used.
@@ -53,7 +53,7 @@ Impedance 4317 Ohm is not a usable measurement (150-1200 Ohm), so it is not used
 
 If your scale measures impedance and your body fat still looks like an estimate, look for that line and [report](/troubleshooting#report-an-issue) the number with what your vendor app shows.
 
-### Body Fat Fallback (Deurenberg)
+### Body fat fallback (Deurenberg)
 
 Without a usable impedance (a weight-only scale, socks, or a value outside 150 to 1200 ohm) and without a body fat from the scale, body fat is estimated from BMI, with `sex` 1 for male and 0 for female:
 
@@ -62,13 +62,13 @@ Adults:          Body Fat % = 1.20 * BMI + 0.23 * age - 10.8 * sex - 5.4
 Age 15 and under: Body Fat % = 1.51 * BMI - 0.70 * age -  3.6 * sex + 1.4
 ```
 
-For athletes the result is multiplied by 0.85, and it is kept between 3 and 60 %. Water, bone mass, muscle mass, visceral fat and physique rating then follow from this estimate with the formulas below, so a weigh-in without impedance still exports every metric.
+For athletes the result is multiplied by 0.85. It is kept between 3 and 60 %. Water, bone mass, muscle mass, visceral fat and physique rating then follow from this estimate with the formulas below, so a weigh-in without impedance still exports every metric.
 
-### Without the Estimate
+### Without the estimate
 
 With `estimate_body_composition: false` for a user, a weigh-in without measured body fat gets no estimate: body fat, water, bone mass, muscle mass, visceral fat and physique rating are left empty, while weight, BMI, BMR and metabolic age are exported. See [Configuration](/guide/configuration#users).
 
-### Other Metrics
+### Other metrics
 
 LBM is lean body mass, `weight * (1 - Body Fat % / 100)`.
 
@@ -76,18 +76,20 @@ LBM is lean body mass, `weight * (1 - Body Fat % / 100)`.
 | ------------- | ------- |
 | BMI           | `weight / height_m^2` |
 | Water         | `LBM * 0.73 / weight * 100` (athlete: 0.74) |
-| Bone Mass     | `LBM * 0.042` |
-| Muscle Mass   | `LBM - Bone Mass` |
-| Visceral Fat  | `Body Fat % * 0.55 - 4 + age * 0.08`, kept between 1 and 59; 1 at 10 % body fat or less |
+| Bone mass     | `LBM * 0.042` |
+| Muscle mass   | `LBM - Bone Mass` |
+| Visceral fat  | `Body Fat % * 0.55 - 4 + age * 0.08`, kept between 1 and 59; 1 at 10 % body fat or less |
 | BMR           | Mifflin-St Jeor: `10*W + 6.25*H - 5*A + s`, `s` = +5 male, -161 female |
-| Metabolic Age | `age + (BMR at age 25 - BMR) / 15`, at least 12 |
-| Physique Rating | 1 to 9 from body fat (below 18, 18 to 25, above 25 %) and a skeletal muscle estimate of `LBM * 0.54` (athlete: 0.60) |
+| Metabolic age | `age + (BMR at age 25 - BMR) / 15`, at least 12 |
+| Physique rating | 1 to 9 from body fat (below 18, 18 to 25, above 25 %) and a skeletal muscle estimate of `LBM * 0.54` (athlete: 0.60) |
 
 A scale's own BMR and body age replace the last two when it sends them with its body fat and they are plausible (500 to 5000 kcal, 12 to 120 years).
 
-## Athlete Mode
+## Athlete mode
 
-`is_athlete: true` in a user's profile adjusts the formulas for people who train regularly. The [setup wizard](/guide/configuration#setup-wizard-recommended) asks for it.
+`is_athlete: true` in a user's profile adjusts the formulas for people who train regularly.
+
+The [setup wizard](/guide/configuration#setup-wizard-recommended) asks for it. What changes:
 
 - Lean body mass: the athlete BIA coefficients in the table above.
 - Water: 74 % of lean body mass instead of 73 %.
@@ -98,21 +100,29 @@ A scale's own BMR and body age replace the last two when it sends them with its 
 
 Values a scale computed itself are used as they are.
 
-## Scale-Specific Algorithms
+## Scale-specific algorithms
 
 A scale's own values are used only with a body fat value and only when every value it sends is in range. Otherwise the whole set is discarded and computed as above.
 
 ### Xiaomi Mi Scale 2 and S400 {#xiaomi-mi-scale-2-mibcs-mibfs-xmtzc05hm}
 
-<span id="xiaomi-body-composition-scale-s400-mjtzc01ym"></span>Both broadcast weight and impedance (the S400 its 50 kHz value). Body fat, water, bone mass and visceral fat come from the Xiaomi formulas ported from [openScale](https://github.com/oliexdev/openScale); muscle mass, BMR and the rest from the formulas above. A frame without impedance gets the Deurenberg estimate. The S400 app uses a proprietary dual-frequency model, so expect small, consistent offsets from it.
+<span id="xiaomi-body-composition-scale-s400-mjtzc01ym"></span>Both broadcast weight and impedance (the S400 its 50 kHz value). Body fat, water, bone mass and visceral fat come from the Xiaomi formulas ported from [openScale](https://github.com/oliexdev/openScale). muscle mass, BMR and the rest come from the formulas above. A frame without impedance gets the Deurenberg estimate. The S400 app uses a proprietary dual-frequency model, so expect small, consistent offsets from it.
 
 ### Yunmai
 
-On firmware that sends it, the body fat the scale computed itself is used, and water, muscle, bone mass and visceral fat are derived from it with the Yunmai formulas ported from openScale. Otherwise body fat comes from the Yunmai formula, which works mostly from BMI and age; the generic BIA formula is not used. The scale computes for the profile its vendor app stored.
+On firmware that sends it, the scale's own body fat is used, and water, muscle, bone mass and visceral fat are derived from it with the Yunmai formulas ported from openScale. Otherwise body fat comes from the Yunmai formula, which works mostly from BMI and age. The generic BIA formula is not used. The scale computes for the profile its vendor app stored.
 
-### Scales That Compute Their Own Composition {#arboleaf-and-other-8-electrode-qn-scales-19-byte-dialect}
+### Scales that compute their own composition {#arboleaf-and-other-8-electrode-qn-scales-19-byte-dialect}
 
-<span id="renpho-r-msc04-morphoscan-nova"></span>The Arboleaf and other 19-byte QN scales, the Renpho R-MSC04 and the Huawei CH100 / AH100 (body fat only) compute body composition themselves for a profile ble-scale-sync sends them. Their values are used only when that profile matches the user the weigh-in goes to; see [QN Scales](/guide/scales/qn), [Renpho Scales](/guide/scales/renpho) and [Huawei CH100 / AH100](/guide/supported-scales#huawei-ch100-ah100).
+<span id="renpho-r-msc04-morphoscan-nova"></span>These scales compute body composition themselves for a profile ble-scale-sync sends them:
+
+- Arboleaf and other 19-byte QN scales
+- Arboleaf CS10K (Experimental, with `ble.qn_user_key`)
+- Arboleaf CS10E on the 20-byte QN dialect (Experimental, with `ble.qn_algorithm`)
+- Renpho R-MSC04
+- Huawei CH100 / AH100 (body fat only)
+
+Their values are used only when that profile matches the user the weigh-in goes to. See [QN scales](/guide/scales/qn), [Renpho scales](/guide/scales/renpho) and [Huawei CH100 / AH100](/guide/supported-scales#huawei-ch100-ah100).
 
 ## References
 
