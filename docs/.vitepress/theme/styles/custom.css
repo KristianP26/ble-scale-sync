@@ -213,3 +213,16 @@ html:not(.dark) .vp-code span {
 .vp-doc .doc-icon + a {
   white-space: nowrap;
 }
+
+/* Footer: the EU flag beside "Software made in Europe". */
+.VPFooter .made-in-eu {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+.VPFooter .made-in-eu img {
+  display: block;
+  border-radius: 2px;
+  box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.12);
+}

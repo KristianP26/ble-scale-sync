@@ -112,7 +112,8 @@ export default defineConfig({
     },
 
     footer: {
-      message: 'Released under the GPL-3.0 License.',
+      message:
+        'Released under the GPL-3.0 License.<br /><span class="made-in-eu"><img src="/img/eu-flag.svg" width="21" height="14" alt="" />Software made in Europe</span>',
       copyright: 'Copyright &copy; 2026 <a href="https://partl.dev">Kristi\u00e1n Partl</a>',
     },
   },
