@@ -4,6 +4,51 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.40.0](https://github.com/KristianP26/ble-scale-sync/compare/v1.39.1...v1.40.0) (2026-11-09)
+
+
+### Added
+
+* **ble:** log a scale connection that BlueZ before 5.83 ends without a reason, in debug ([b99c18e](https://github.com/KristianP26/ble-scale-sync/commit/b99c18e4da4afb244ac1b5ab84317ee7fc1ccae6)), closes [#497](https://github.com/KristianP26/ble-scale-sync/issues/497)
+* **qn:** decode the extended dialect's one-part 0xB1 result ([#331](https://github.com/KristianP26/ble-scale-sync/issues/331)) ([1b7e114](https://github.com/KristianP26/ble-scale-sync/commit/1b7e11419e650e1c96b4a01acc00256ede52d65e))
+* **qn:** export the scale's skeletal muscle on the extended dialect ([#331](https://github.com/KristianP26/ble-scale-sync/issues/331)) ([cb72f53](https://github.com/KristianP26/ble-scale-sync/commit/cb72f538bfa35c55a37c84a07bd91b7bae3f3bf5))
+* **qn:** set the algorithm byte of the profile frame with ble.qn_algorithm ([#331](https://github.com/KristianP26/ble-scale-sync/issues/331)) ([18638b8](https://github.com/KristianP26/ble-scale-sync/commit/18638b8f9a4e298f8e6d0554397ed796cc2a1da8))
+* **qn:** use the scale's own body composition on the extended dialect ([#331](https://github.com/KristianP26/ble-scale-sync/issues/331)) ([94cea96](https://github.com/KristianP26/ble-scale-sync/commit/94cea96ccb597f7300690b8dc287c25431f03109))
+
+
+### Fixed
+
+* **addon:** stop the ESPHome-key shell test and the config watcher tests from flaking ([#504](https://github.com/KristianP26/ble-scale-sync/issues/504)) ([b829290](https://github.com/KristianP26/ble-scale-sync/commit/b82929023c4b436ed894d7e7989fcc7795df996c))
+* **firmware:** forward every notification of a burst, in order ([cb0127b](https://github.com/KristianP26/ble-scale-sync/commit/cb0127b1c34f6c5c1dd4d82b478462becc05bcca)), closes [#501](https://github.com/KristianP26/ble-scale-sync/issues/501)
+* **qn:** point at the ESP32 firmware when a 0xb1 arrives without its first part ([119acdf](https://github.com/KristianP26/ble-scale-sync/commit/119acdfaa9234e411dd612453814a5eb5ec6bc5a)), closes [#501](https://github.com/KristianP26/ble-scale-sync/issues/501)
+* **qn:** read the scale's 7-byte answer to the profile frame ([#331](https://github.com/KristianP26/ble-scale-sync/issues/331)) ([630c154](https://github.com/KristianP26/ble-scale-sync/commit/630c154ae6f3f3a6fd10cfa737e48e010f032702))
+* **qn:** read the weigh-in of a 20-byte scale without the dynamic-package bit ([c7fea17](https://github.com/KristianP26/ble-scale-sync/commit/c7fea17529ef9080f37d14e15d18c502dce3b275)), closes [#530](https://github.com/KristianP26/ble-scale-sync/issues/530)
+* **renpho:** send a time zone west of UTC to the R-MSC04 as the Renpho app does ([658cc16](https://github.com/KristianP26/ble-scale-sync/commit/658cc16fcbd5abc67e02c8bceb90a44c5ec9dbdf)), closes [#497](https://github.com/KristianP26/ble-scale-sync/issues/497)
+* **runtime:** attribute live readings by the scale's user slot ([#529](https://github.com/KristianP26/ble-scale-sync/issues/529)) ([4de9340](https://github.com/KristianP26/ble-scale-sync/commit/4de93409fca5cfe923017db3da20d6b366f8cee9))
+* **runtime:** warn when two users claim a live weigh-in's scale slot ([1c7c29a](https://github.com/KristianP26/ble-scale-sync/commit/1c7c29a57aec5f31d3dfea176682f6cc380180ee))
+* **scales:** do not pass the fixed consent slot of the SBF72 and standard GATT adapters as the user slot ([aff5c7b](https://github.com/KristianP26/ble-scale-sync/commit/aff5c7b2ee7e4a03d49116f2260d3248bc39d4a9)), closes [#529](https://github.com/KristianP26/ble-scale-sync/issues/529)
+
+
+### Docs
+
+* add a made in Europe line with the EU flag to the footer ([d71b030](https://github.com/KristianP26/ble-scale-sync/commit/d71b03029cf6a40065c3520ef84d346db8976129))
+* add a See all exporters button to the landing hero ([b8881c3](https://github.com/KristianP26/ble-scale-sync/commit/b8881c39003a3739895961c6951caecc2a719d89))
+* align the docs pages with the landing page ([56f4f9f](https://github.com/KristianP26/ble-scale-sync/commit/56f4f9f1b9ccada05efaaeb35fc423ced8ea1653))
+* group the landing page's export targets and show where it runs ([bdd6adc](https://github.com/KristianP26/ble-scale-sync/commit/bdd6adcdb44e511616fefe7daa6ecb199052b9c6))
+* list every export target on the landing page and fix its dark mode ([bb6631c](https://github.com/KristianP26/ble-scale-sync/commit/bb6631c546a7580e7e682329918ec2e0ce94a8ff))
+* **multi-user:** say the scale's user slot assigns a weigh-in first ([2a4d269](https://github.com/KristianP26/ble-scale-sync/commit/2a4d26935e6391713d62f6905fbc989a12124d1e)), closes [#529](https://github.com/KristianP26/ble-scale-sync/issues/529)
+* put the landing platform line on its own row ([67eb37c](https://github.com/KristianP26/ble-scale-sync/commit/67eb37cb6a203e08fba07f850c679214f69b8d39))
+* put trailing pointer sentences on their own line ([dc47598](https://github.com/KristianP26/ble-scale-sync/commit/dc4759832229b4eb2d133b9975d3b079c1bb915f))
+* **qn:** say the extended dialect's live weight frames are not acknowledged ([c7996ca](https://github.com/KristianP26/ble-scale-sync/commit/c7996cac830f8c5b9798ac04abb87bf73b7618f4)), closes [#331](https://github.com/KristianP26/ble-scale-sync/issues/331)
+* redesign the landing page around a live log and the data flow ([9c9ca3f](https://github.com/KristianP26/ble-scale-sync/commit/9c9ca3fe168ec2c600c7e921f973137c12a2c027))
+* **renpho:** explain why the R-MSC04 hangs up 5.5 seconds in on Linux and how to stop it ([830e682](https://github.com/KristianP26/ble-scale-sync/commit/830e68263a169662c22a2f5cb23e736a7b2817e2)), closes [#497](https://github.com/KristianP26/ble-scale-sync/issues/497)
+* show that the landing install cards open a guide ([bf2596d](https://github.com/KristianP26/ble-scale-sync/commit/bf2596db1837c4ac2817c00abc86bacc722039c2))
+* show the footer on the docs pages too ([ba118b9](https://github.com/KristianP26/ble-scale-sync/commit/ba118b94517da26eb9027f26358cbdebae76dac4))
+* stack the landing transports, enlarge the hub and copy the Docker setup run ([c0b7ad9](https://github.com/KristianP26/ble-scale-sync/commit/c0b7ad9f4fcc4aa94b83eb46db7213261f608511))
+* stream the landing hero log, draw the data flow in and show the setup wizard ([bb82acf](https://github.com/KristianP26/ble-scale-sync/commit/bb82acf7bae15ecf27cc10d5c326e51f9c009e1d))
+* tighten the landing data flow band ([6e77985](https://github.com/KristianP26/ble-scale-sync/commit/6e779851650dbeaf7b7803fb382c81c7f100980b))
+* zoom the landing Home Assistant badge on hover ([ddd0d48](https://github.com/KristianP26/ble-scale-sync/commit/ddd0d48bba4480d3c535cc3ae195ee5e93ad376e))
+
 ## [1.39.1](https://github.com/KristianP26/ble-scale-sync/compare/v1.39.0...v1.39.1) (2026-11-04)
 
 
