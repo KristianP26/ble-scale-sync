@@ -456,6 +456,22 @@ describe('RenphoMsc04Adapter', () => {
 // anywhere: every one of them carries a person's height and weight.
 const CAPTURE_CLOCK_B3 = '55aab3000b000701016a478eb102580010';
 
+// derived, NOT captured by us: the payload `11 07 01 01 6AED6A56 8168 00` is
+// quoted by @szetszho from the app's own b3 at UTC-6 (#497, comment
+// 6702357454, seen in two of his captures, 2026-11-06T05:49:10Z). The header,
+// length and checksum are filled in here with build55aaFrame; he reports every
+// checksum in his captures valid. One sample: it is the only evidence for the
+// west encoding (0x8000 | minutes west), so the other offsets below are the
+// rule applied, not captured.
+const DERIVED_CLOCK_B3_WEST = '55aab3000b110701016aed6a56816800d7';
+
+/** The derived frame's clock, at UTC-6. */
+function derivedWestClock(): Date {
+  const d = new Date(0x6aed6a56 * 1000);
+  d.getTimezoneOffset = () => 360;
+  return d;
+}
+
 /** The capture's clock, at UTC+10 as the capture was. */
 function captureClock(): Date {
   const d = new Date(0x6a478eb1 * 1000);
@@ -596,30 +612,47 @@ describe('RenphoMsc04Adapter connect handshake (#434, D038)', () => {
     );
   });
 
-  it('sends the zone in minutes east of UTC, and a zone west of UTC as 0', () => {
+  it('builds the b3 of a zone west of UTC the way the app does (derived, #497)', () => {
+    expect(buildClockFrame(0x11, derivedWestClock()).toString('hex')).toBe(DERIVED_CLOCK_B3_WEST);
+  });
+
+  it('sends the zone east of UTC in minutes and west of UTC as 0x8000 | minutes', () => {
+    // Only UTC-6 (360) is from the app; the others apply the same rule.
     const zone = (offset: number): string =>
       buildClockFrame(0, clockAt(offset)()).subarray(13, 15).toString('hex');
+    expect(zone(300)).toBe('812c');
+    expect(zone(360)).toBe('8168');
+    expect(zone(210)).toBe('80d2');
+    expect(zone(720)).toBe('82d0');
     expect(zone(-600)).toBe('0258');
     expect(zone(0)).toBe('0000');
     expect(zone(-330)).toBe('014a');
-    expect(zone(300)).toBe('0000');
+    expect(zone(-840)).toBe('0348');
+    // Beyond UTC-12 and UTC+14 the frame cannot carry the zone: UTC.
+    expect(zone(780)).toBe('0000');
+    expect(zone(-900)).toBe('0000');
   });
 
-  it('logs the unsendable west zone once per adapter instance', async () => {
+  it('logs the unsendable zone once per adapter instance, and nothing for UTC-5', async () => {
     const debug = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
-    const westLines = (): number =>
-      debug.mock.calls.filter((c) => String(c[0]).includes('west of UTC')).length;
-    const adapter = new RenphoMsc04Adapter(clockAt(300));
+    const beyondLines = (): number =>
+      debug.mock.calls.filter((c) => String(c[0]).includes('beyond UTC-12 or UTC+14')).length;
+    const adapter = new RenphoMsc04Adapter(clockAt(780));
     for (let i = 0; i < 2; i++) {
       adapter.onSessionStart();
       await adapter.onConnected(handshakeCtx().ctx);
     }
-    expect(westLines()).toBe(1);
+    expect(beyondLines()).toBe(1);
     // A fresh instance logs it again: the latch is not module state.
-    const other = new RenphoMsc04Adapter(clockAt(300));
+    const other = new RenphoMsc04Adapter(clockAt(780));
     other.onSessionStart();
     await other.onConnected(handshakeCtx().ctx);
-    expect(westLines()).toBe(2);
+    expect(beyondLines()).toBe(2);
+    // A western zone the frame can carry logs nothing.
+    const west = new RenphoMsc04Adapter(clockAt(300));
+    west.onSessionStart();
+    await west.onConnected(handshakeCtx().ctx);
+    expect(beyondLines()).toBe(2);
   });
 
   describe('assertAllowedWrite()', () => {
@@ -636,6 +669,10 @@ describe('RenphoMsc04Adapter connect handshake (#434, D038)', () => {
       expect(() => assertAllowedWrite(Buffer.from(CAPTURE_CLOCK_B3, 'hex'))).not.toThrow();
     });
 
+    it('accepts the derived b3 of a zone west of UTC', () => {
+      expect(() => assertAllowedWrite(Buffer.from(DERIVED_CLOCK_B3_WEST, 'hex'))).not.toThrow();
+    });
+
     const refused: Array<[string, Buffer]> = [
       ['the old start command', Buffer.from(OLD_START, 'hex')],
       ['b2 in a registered slot (01)', b2(withByte(GOOD_B2, 1, 0x01))],
@@ -649,6 +686,9 @@ describe('RenphoMsc04Adapter connect handshake (#434, D038)', () => {
       ['b2 with a longer payload', b2([...GOOD_B2, 0x00])],
       ['b3 with another constant', b3(withByte(GOOD_B3, 1, 0x08))],
       ['b3 with a zone above 840 minutes', b3(withByte(withByte(GOOD_B3, 8, 0x03), 9, 0x49))],
+      ['b3 with the west bit and no minutes', b3(withByte(withByte(GOOD_B3, 8, 0x80), 9, 0x00))],
+      ['b3 with a west zone above 720 minutes', b3(withByte(withByte(GOOD_B3, 8, 0x82), 9, 0xd1))],
+      ['b3 with bit 14 set and no west bit', b3(withByte(withByte(GOOD_B3, 8, 0x41), 9, 0x68))],
       ['b3 with a non-zero last byte', b3(withByte(GOOD_B3, 10, 0x01))],
       ['a b0 ack (acks go through buildAck)', Buffer.from('55aab000020001b2', 'hex')],
       ['b6', frame55aa(0xb6, [0x01, 0x01])],

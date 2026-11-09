@@ -262,10 +262,14 @@ const CLOCK_LEN = 11;
 const CLOCK_CONSTANT = [0x07, 0x01, 0x01];
 /**
  * b3 [13..14] is the zone in minutes east of UTC (600 in both app captures,
- * taken at UTC+10). No capture west of UTC exists, so its encoding there is
- * unknown and such a zone is sent as 0.
+ * taken at UTC+10). West of UTC the Renpho app sets bit 15 and sends the
+ * minutes west: UTC-6 is 0x8168 (#497, a payload quoted from the app's own b3,
+ * two captures). That is sign and magnitude, not two's complement (0xFE98).
+ * Other western zones follow the same rule, which is a hypothesis.
  */
-const MAX_ZONE_MINUTES = 840;
+const MAX_EAST_ZONE_MINUTES = 840; // UTC+14
+const MAX_WEST_ZONE_MINUTES = 720; // UTC-12
+const ZONE_WEST = 0x8000;
 
 /**
  * Temporary diagnostic switch for #434, read from the environment (not
@@ -315,11 +319,20 @@ function weightCg(profile: UserProfile): number | null {
   return Math.round(kg * 100);
 }
 
-/** The host's zone in minutes east of UTC, or null when the b3 frame cannot carry it. */
-function zoneMinutes(now: Date): number | null {
+/** The host's zone as the b3 [13..14] field, or null when the frame cannot carry it. */
+function zoneField(now: Date): number | null {
   // getTimezoneOffset is positive WEST of Greenwich.
-  const east = -now.getTimezoneOffset();
-  return Number.isInteger(east) && east >= 0 && east <= MAX_ZONE_MINUTES ? east : null;
+  const offset = now.getTimezoneOffset();
+  if (!Number.isInteger(offset)) return null;
+  if (offset <= 0) return -offset <= MAX_EAST_ZONE_MINUTES ? -offset : null;
+  return offset <= MAX_WEST_ZONE_MINUTES ? ZONE_WEST | offset : null;
+}
+
+/** True when `v` is a b3 zone field zoneField can produce: east 0..840, or bit 15 and west 1..720. */
+function isZoneField(v: number): boolean {
+  if ((v & ZONE_WEST) === 0) return v <= MAX_EAST_ZONE_MINUTES;
+  const west = v & ~ZONE_WEST;
+  return west >= 1 && west <= MAX_WEST_ZONE_MINUTES;
 }
 
 /**
@@ -347,13 +360,13 @@ export function buildGuestProfileFrame(
 }
 
 /**
- * `b3`: seq, 07 01 01, Unix seconds (UTC) as u32 BE, the zone in minutes east
- * of UTC as u16 BE (0 west of UTC, see MAX_ZONE_MINUTES), 00. The seq is echoed
- * in the 0x23 reply.
+ * `b3`: seq, 07 01 01, Unix seconds (UTC) as u32 BE, the zone as u16 BE
+ * (minutes east of UTC, or 0x8000 | minutes west, see ZONE_WEST), 00. The seq
+ * is echoed in the 0x23 reply.
  */
 export function buildClockFrame(seq: number, now: Date): Buffer {
   const seconds = Math.floor(now.getTime() / 1000) >>> 0;
-  const zone = zoneMinutes(now) ?? 0;
+  const zone = zoneField(now) ?? 0;
   return build55aaFrame(CMD_CLOCK, [
     seq & 0xff,
     ...CLOCK_CONSTANT,
@@ -410,7 +423,7 @@ export function assertAllowedWrite(frame: Buffer, profileByte: number = GUEST_PR
       if (
         len !== CLOCK_LEN ||
         CLOCK_CONSTANT.some((b, i) => p[1 + i] !== b) ||
-        p.readUInt16BE(8) > MAX_ZONE_MINUTES ||
+        !isZoneField(p.readUInt16BE(8)) ||
         p[10] !== 0x00
       ) {
         refuse('a b3 other than the clock form');
@@ -853,10 +866,10 @@ export class RenphoMsc04Adapter
 
   private async writeClock(owner: ConnectionContext, seq: number): Promise<void> {
     const now = this.now();
-    if (zoneMinutes(now) === null && !this.zoneLogged) {
+    if (zoneField(now) === null && !this.zoneLogged) {
       this.zoneLogged = true;
       bleLog.debug(
-        'Renpho R-MSC04: the host time zone is west of UTC or beyond UTC+14, ' +
+        'Renpho R-MSC04: the host time zone is beyond UTC-12 or UTC+14, ' +
           'which the clock frame cannot carry; sending the time as UTC',
       );
     }

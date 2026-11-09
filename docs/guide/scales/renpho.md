@@ -31,8 +31,6 @@ Right after connecting, ble-scale-sync sets the scale's clock to the host's time
 
 The guest profile goes to the scale on every weigh-in, whoever steps on, also in a household with several users. It uses the guest slot, so profiles the Renpho app saved on the scale stay as they are. ble-scale-sync never logs the profile.
 
-Time zones west of UTC are sent to the R-MSC04 as UTC, so the scale's own clock shows UTC there. Exported times come from the host and are not affected.
-
 ## R-MSC04 (MorphoScan Nova)
 
 The scale sends its results about 15 seconds after the weight settles, so the connection stays open for up to 30 seconds after that. If ble-scale-sync connects after the weight has settled, it takes the weight from the results frame. That fails while the scale still holds undelivered weigh-ins. Open the Renpho app once to sync them.
