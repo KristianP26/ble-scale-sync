@@ -550,8 +550,14 @@ onBeforeUnmount(() => {
             <div v-for="c in installs" :key="c.name" class="bss-icard">
               <img :src="icon(c.icon)" alt="" width="28" height="28" />
               <div class="bss-icard__body">
-                <h3>
+                <h3 class="bss-icard__head">
                   <a class="bss-icard__link" :href="withBase(c.link)">{{ c.name }}</a>
+                  <span class="bss-icard__more" aria-hidden="true"
+                    >Read the guide
+                    <svg viewBox="0 0 16 16" width="14" height="14">
+                      <path d="M3 8h9M8.5 4.5 12 8l-3.5 3.5" />
+                    </svg>
+                  </span>
                 </h3>
                 <p>{{ c.where }}</p>
                 <a v-if="c.badge" class="bss-badge" :href="haRepo">
@@ -1290,6 +1296,46 @@ h3 {
   background: #fff;
   border-radius: 8px;
 }
+.bss-icard__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+/* Says the card opens a guide; it turns blue and the arrow steps on hover. */
+.bss-icard__more {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  padding: 4px 10px;
+  border: 1px solid var(--bss-line);
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 18px;
+  letter-spacing: 0;
+  color: var(--bss-muted);
+  transition:
+    color 0.2s ease,
+    border-color 0.2s ease;
+}
+.bss-icard__more svg {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: transform 0.2s ease;
+}
+.bss-icard:has(.bss-icard__link:hover) .bss-icard__more,
+.bss-icard:has(.bss-icard__link:focus-visible) .bss-icard__more {
+  color: var(--bss-action);
+  border-color: var(--bss-action);
+}
+.bss-icard:has(.bss-icard__link:hover) .bss-icard__more svg {
+  transform: translateX(3px);
+}
 .bss-icard__body {
   display: flex;
   flex-direction: column;
@@ -1557,6 +1603,9 @@ h3 {
 }
 
 @media (max-width: 639px) {
+  .bss-icard__head {
+    flex-wrap: wrap;
+  }
   .bss-band {
     padding: 64px 0 48px;
   }
