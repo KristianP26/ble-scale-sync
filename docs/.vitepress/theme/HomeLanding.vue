@@ -212,10 +212,26 @@ const wizard: { k: 'q' | 'a' | 'ok' | 'dim' | 'sel' | 'off' | ''; text: string }
   },
 ];
 
-// Both sides are four equal rows, so in the 400-unit tall line art (stretched to
-// the row height) each row's centre sits at 50, 150, 250 and 350.
-const flowH = 400;
-const rowsY = [50, 150, 250, 350];
+// The target groups stack as tight as their content, so the lines to them are
+// measured: the right art is as tall as the flow and each line ends at the centre
+// of its group. The server render starts from an even guess.
+const flow = ref<HTMLElement | null>(null);
+const outH = ref(400);
+const outY = ref([50, 150, 250, 350]);
+let ro: ResizeObserver | undefined;
+function measure() {
+  const f = flow.value;
+  if (!f) return;
+  // offsetTop, not the bounding box, so the draw-in's 8px rise does not count.
+  const ys = [...f.querySelectorAll<HTMLElement>('.bss-group')].map((g) => {
+    const col = g.offsetParent as HTMLElement;
+    return Math.round(col.offsetTop + g.offsetTop + g.offsetHeight / 2);
+  });
+  if (ys.length === 4 && f.offsetHeight > 0) {
+    outH.value = f.offsetHeight;
+    outY.value = ys;
+  }
+}
 // The transports sit in one tight stack, 200px tall (four 44px nodes, 8px apart),
 // so their lines are drawn 1:1 in a 200-unit art centred on the hub.
 const leftY = [22, 74, 126, 178];
@@ -268,6 +284,11 @@ async function copy(cmd: string) {
 
 onMounted(() => {
   stream();
+  measure();
+  if (typeof ResizeObserver === 'function' && flow.value) {
+    ro = new ResizeObserver(measure);
+    ro.observe(flow.value);
+  }
   if (reduced() || typeof IntersectionObserver !== 'function' || !band.value) return;
   armed.value = true;
   io = new IntersectionObserver(
@@ -286,6 +307,7 @@ onBeforeUnmount(() => {
   clearInterval(streamTimer);
   clearTimeout(copiedTimer);
   io?.disconnect();
+  ro?.disconnect();
 });
 </script>
 
@@ -369,7 +391,8 @@ onBeforeUnmount(() => {
     >
       <div class="bss-wrap">
         <h2 id="bss-flow">
-          From the scale to your apps. <span class="bss-muted">No phone in between.</span>
+          From the scale to your apps.
+          <span class="bss-muted bss-h2-line">No phone in between.</span>
         </h2>
         <p class="bss-intro">
           The scale is recognised from its Bluetooth advertisement.
@@ -377,6 +400,7 @@ onBeforeUnmount(() => {
         </p>
 
         <div
+          ref="flow"
           class="bss-flow"
           role="group"
           aria-label="How a weigh-in travels from the scale to your apps"
@@ -437,7 +461,7 @@ onBeforeUnmount(() => {
           </svg>
           <div class="bss-hub">
             <div class="bss-hub__name">
-              <img :src="withBase('/logo.svg')" alt="" width="44" height="44" />
+              <img :src="withBase('/logo.svg')" alt="" width="48" height="48" />
               <b>BLE Scale Sync</b>
             </div>
             <div class="bss-read">
@@ -472,25 +496,25 @@ onBeforeUnmount(() => {
           </div>
           <svg
             class="bss-flow__lines"
-            viewBox="0 0 100 400"
+            :viewBox="`0 0 100 ${outH}`"
             preserveAspectRatio="none"
             aria-hidden="true"
           >
             <path
-              v-for="y in rowsY"
-              :key="y"
-              :d="curve(flowH / 2, y)"
+              v-for="(y, i) in outY"
+              :key="i"
+              :d="curve(outH / 2, y)"
               pathLength="1"
               style="--ld: 0.9s"
             />
             <circle
-              v-for="(y, i) in rowsY"
-              :key="'q' + y"
+              v-for="(y, i) in outY"
+              :key="'q' + i"
               r="2.2"
               class="bss-pulse"
               :style="{
                 '--pd': `${1.4 + i * 1.4}s`,
-                offsetPath: `path('${curve(flowH / 2, y)}')`,
+                offsetPath: `path('${curve(outH / 2, y)}')`,
               }"
             />
           </svg>
@@ -925,12 +949,18 @@ h3 {
 
 /* Dataflow band on the inverse ground. */
 .bss-band {
+  /* Sized by its content, not a full screen. */
+  min-height: 0;
+  padding: 88px 0 72px;
   background: var(--bss-inv-bg);
   color: var(--bss-inv-ink);
   --bss-muted: var(--bss-inv-muted);
 }
+.bss-h2-line {
+  display: block;
+}
 .bss-intro {
-  margin: 24px 0 0;
+  margin: 16px 0 0;
   max-width: 62ch;
   font-size: 18px;
   line-height: 28px;
@@ -942,11 +972,12 @@ h3 {
   margin-left: 4px;
 }
 .bss-flow {
+  position: relative;
   display: grid;
   grid-template-columns:
     minmax(0, 1.4fr) minmax(0, 0.4fr) minmax(0, 2.6fr) minmax(0, 0.4fr) minmax(0, 2.6fr)
     minmax(0, 0.4fr) minmax(0, 4.7fr);
-  margin-top: 48px;
+  margin-top: 56px;
 }
 .bss-scale {
   align-self: center;
@@ -959,20 +990,17 @@ h3 {
   /* The render's own navy ground fades into the band. */
   mask-image: radial-gradient(closest-side, #000 70%, transparent 100%);
 }
-/* Both sides are four equal rows, sized by the tallest group card, so a line
-   from the hub meets the centre of each row. */
 .bss-flow__col {
   position: relative;
   display: grid;
-  grid-template-rows: repeat(4, 1fr);
-  align-items: center;
+  gap: 8px;
+  align-self: center;
 }
 .bss-group {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  margin: 5px 0;
-  padding: 12px 16px;
+  gap: 6px;
+  padding: 10px 16px;
   border: 1px solid var(--bss-inv-line);
   border-radius: var(--bss-r-md);
   background: rgba(248, 250, 252, 0.04);
@@ -1068,12 +1096,6 @@ h3 {
 .bss-flow__lines--left {
   align-self: center;
   height: 200px;
-}
-/* The transports stay one tight stack, centred on the hub. */
-.bss-flow__col--in {
-  grid-template-rows: none;
-  gap: 8px;
-  align-self: center;
 }
 .bss-flow__lines path {
   fill: none;
@@ -1228,7 +1250,7 @@ h3 {
   color: var(--bss-inv-ink);
 }
 .bss-foot {
-  margin: 40px 0 0;
+  margin: 32px 0 0;
   font-size: 16px;
   line-height: 26px;
   color: var(--bss-inv-muted);
@@ -1434,8 +1456,18 @@ h3 {
 @media (max-width: 1399px) {
   .bss-flow {
     grid-template-columns:
-      minmax(0, 2.6fr) minmax(0, 0.5fr) minmax(0, 2.8fr) minmax(0, 0.5fr)
-      minmax(0, 5.4fr);
+      minmax(0, 2.9fr) minmax(0, 0.4fr) minmax(0, 2.6fr) minmax(0, 0.4fr)
+      minmax(0, 5.3fr);
+  }
+  .bss-hub {
+    padding: 22px;
+  }
+  .bss-hub__name img {
+    width: 40px;
+    height: 40px;
+  }
+  .bss-hub__name b {
+    font-size: 18px;
   }
   .bss-scale,
   .bss-flow__lines--scale {
@@ -1450,23 +1482,8 @@ h3 {
   h1 {
     font-size: 52px;
   }
-  .bss-flow {
-    grid-template-columns:
-      minmax(0, 2.9fr) minmax(0, 0.4fr) minmax(0, 2.6fr) minmax(0, 0.4fr)
-      minmax(0, 5.3fr);
-  }
   .bss-stats {
     gap: 28px;
-  }
-  .bss-hub {
-    padding: 22px;
-  }
-  .bss-hub__name img {
-    width: 36px;
-    height: 36px;
-  }
-  .bss-hub__name b {
-    font-size: 18px;
   }
   .bss-stats dd {
     font-size: 30px;
@@ -1540,6 +1557,9 @@ h3 {
 }
 
 @media (max-width: 639px) {
+  .bss-band {
+    padding: 64px 0 48px;
+  }
   .bss {
     --bss-gut: 24px;
     --bss-padt: 96px;
