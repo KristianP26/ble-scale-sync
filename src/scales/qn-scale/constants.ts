@@ -402,6 +402,19 @@ export const MAX_AE00_RESPONSES = 3;
 export const EXTENDED_INFO_FRAME_LEN = 20;
 
 /**
+ * The feature flags of a long 0x12 frame sit at [18], and only a frame longer
+ * than 19 bytes has them: on a 19-byte frame that byte is the checksum. Bit 5
+ * is what the vendor's published SDK calls the dynamic package. The SDK sends
+ * its 0xB7 only to a scale with the bit set, and the weigh-ins of the scales
+ * that have it (GE CS 10 G 0x2b, CS10G 0x3b, CS10E 0xeb) all come as 0xB1 or
+ * 0xB4 result frames. The Arboleaf CS10K sends 0x0b, no bit, and weighs in
+ * with the 19-byte dialect's 0x10 result block (#530). The bit is a
+ * correlation over five units, not a documented switch.
+ */
+export const INFO_FEATURES_OFFSET = 18;
+export const INFO_DYNAMIC_PACKAGE_BIT = 0x20;
+
+/**
  * Smallest long 0x12 frame whose byte[2] is echoed back on the first attempt.
  *
  * Separate from EXTENDED_INFO_FRAME_LEN on purpose: that constant decides which

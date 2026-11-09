@@ -95,7 +95,7 @@ These keys change what the app sends to one family of scales. Leave them unset u
 | `qn_time_sync_long`   | `false`     | QN scales. Send the 9-byte time-sync frame with the host's UTC offset. See [QN scales](./scales/qn). |
 | `qn_config_long`      | `false`     | QN scales. Send the 10-byte config frame. See [QN scales](./scales/qn). |
 | `qn_a4_prelude`       | `false`     | QN scales. Send two extra `0xA4` frames the vendor app sends. They overwrite data the scale keeps for its first user. See [QN scales](./scales/qn). |
-| `qn_result_ack`       | `false`     | QN scales with a 19-byte scale-info frame. Send the end-of-measurement frame. Experimental. See [QN scales](./scales/qn). |
+| `qn_result_ack`       | `false`     | QN scales with a 19-byte scale-info frame and the Arboleaf CS10K. Send the end-of-measurement frame. Experimental. See [QN scales](./scales/qn). |
 | `rmsc04_profile_byte` | (none)      | Renpho R-MSC04. One profile byte as two hex digits in quotes, to export the scale's own body fat. Personal. See [Renpho](./scales/renpho). |
 
 ### Scale

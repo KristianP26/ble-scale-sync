@@ -35,6 +35,7 @@ import {
   ES30M_MIN_FRAME_LEN,
   IMPEDANCE_GRACE_MS,
   INFO_DIVISOR_BIT,
+  INFO_FEATURES_OFFSET,
   LAST_KNOWN_WEIGHT_TOLERANCE,
   LEGACY_PROTO_TYPE,
   LIVE_MATCH_WEIGHT_KG,
@@ -78,6 +79,7 @@ import { parseQnBroadcast } from './broadcast.js';
 import {
   classifyInfoFrame,
   hex,
+  infoDynamicPackage,
   storedSlotLabel,
   type QnDialectHandler,
   type QnDialectKind,
@@ -762,6 +764,7 @@ export class QnScaleAdapter
   /** A 0x12 scale-info frame: the dialect, protocol byte and divisor, then the 0x13 config. */
   private onScaleInfo(data: Buffer): void {
     this.s.kind = classifyInfoFrame(data);
+    this.s.dynamicPackage = infoDynamicPackage(data);
     if (this.s.kind !== 'classic') {
       // Only the 0x12 tells the dialect, so the line waits for it.
       va18.logNoAdvertisementOnce(this);
@@ -811,6 +814,13 @@ export class QnScaleAdapter
         `factor=${this.s.weightScaleFactor}, ` +
         `proto=0x${this.s.seenProtocolType.toString(16).padStart(2, '0')}${forcedNote}`,
     );
+    if (this.s.dynamicPackage === false) {
+      const features = data[INFO_FEATURES_OFFSET].toString(16).padStart(2, '0');
+      bleLog.debug(
+        `QN: ${data.length}-byte scale-info frame without the dynamic-package bit ` +
+          `([18] 0x${features}): reading the weigh-in as the 19-byte dialect sends it (#530)`,
+      );
+    }
     void this.handleScaleInfo();
   }
 
@@ -957,12 +967,13 @@ export class QnScaleAdapter
 
     // The 20-byte live frame every capture of the long dialects shows has its
     // weight as a big-endian u16 /100 at [5..6] (PROTOCOLS.md, QN family). The
-    // 19-byte dialect decodes it in its handler. Elsewhere its [4] 0x11 puts it
-    // in the original layout, which reads 0x0011, and whether the GE frame
-    // shares the Arboleaf status and part bytes is not known, so it is logged
-    // once per session with the weight where the captures put it. On the
-    // extended dialect [2] is the user slot, as on the 19-byte one: the CS10G
-    // streams `10 14 02 ..` for the user its app registered in slot 2 (#501).
+    // 19-byte dialect and the CS10K (#530) decode it in their handler.
+    // Elsewhere its [4] 0x11 puts it in the original layout, which reads
+    // 0x0011, and whether the GE frame shares the Arboleaf status and part
+    // bytes is not known, so it is logged once per session with the weight
+    // where the captures put it. On the extended dialect [2] is the user slot,
+    // as on the 19-byte one: the CS10G streams `10 14 02 ..` for the user its
+    // app registered in slot 2 (#501).
     const twentyByteLive = data.length === 20 && data[1] === 0x14;
     if (twentyByteLive && !this.s.twentyByteFrameLogged) {
       this.s.twentyByteFrameLogged = true;
@@ -1105,7 +1116,8 @@ export class QnScaleAdapter
 
   /**
    * A 0x23 stored measurement record returned after the 0x22 history query,
-   * read in the VA layout on every dialect but the classic and the 19-byte one.
+   * read in the VA layout on every dialect but the classic, the 19-byte one and
+   * the CS10K (#530).
    * V10 Renpho / 18-byte ES-CS20M firmware delivers the weigh-in here, not
    * reliably via live 0x10 frames (#213 / #75). Layout in decodeStoredRecord:
    * R50 and R500 big-endian at [12..13] and [14..15], as the vendor SDK reads
@@ -1184,10 +1196,10 @@ export class QnScaleAdapter
   }
 
   /**
-   * Say why a 0x23 outside the 19-byte dialect is not read (#463). The record
-   * used to vanish without a line, and a frame that arrives after the session
-   * settled is not even in the DEBUG log, so nothing showed that a weigh-in the
-   * scale kept had been handed over at all.
+   * Say why a 0x23 outside the 19-byte dialect and the CS10K (#530) is not
+   * read (#463). The record used to vanish without a line, and a frame that
+   * arrives after the session settled is not even in the DEBUG log, so nothing
+   * showed that a weigh-in the scale kept had been handed over at all.
    *
    * Only the long-frame dialects get the record's values: the VA layout is
    * known there. A session without a 0x12 does not know its dialect, so its

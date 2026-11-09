@@ -160,14 +160,15 @@ export const QN_BLE_OPTIONS = {
   qn_config_long: z.boolean().optional().nullable(),
   /**
    * Send the end-of-measurement frame `1f 05 <protocol type> 10 <sum>` after
-   * the 0x16 of a complete result block on the 19-byte QN dialect (#331).
+   * the 0x16 of a complete result block on the 19-byte QN dialect and on the
+   * 20-byte Arboleaf CS10K, whose 0x12 lacks the dynamic-package bit (#331, #530).
    *
    * The vendor's published SDK sends it there for every 8-electrode
    * weigh-in; this app has never sent it. Whether its absence is why the
    * scale stores a second copy of a weigh-in it already delivered, and keeps
    * advertising after the export, is not known, so this is opt-in and off by
    * default until reporters' logs with it show an effect and no harm. Other
-   * QN dialects ignore it.
+   * QN scales ignore it.
    */
   qn_result_ack: z.boolean().optional().nullable(),
 };

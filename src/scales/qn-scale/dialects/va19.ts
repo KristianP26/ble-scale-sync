@@ -41,6 +41,8 @@ import { seconds, type ScaleCompositionPin } from '../own-composition.js';
  * measuring, and a second 0x22 is the same request again. The GE CS 10 G's
  * live frame has the identical 20-byte shape and stays on the shared path,
  * and 0x15/0x16 only count after the stream, so elsewhere they are ignored.
+ * The 20-byte Arboleaf CS10K sends these frames too, behind a 20-byte 0x12
+ * without the dynamic-package bit; ext20.ts hands them over (#530).
  */
 export const dialect = {
   frame(q, data) {

@@ -15,6 +15,7 @@ import {
   timeZoneByte,
 } from '../../src/scales/qn-scale/frames.js';
 import { qnAdvertTraits } from '../../src/scales/qn-scale/matching.js';
+import { classifyInfoFrame, infoDynamicPackage } from '../../src/scales/qn-scale/dialect.js';
 import { NINETEEN_BYTE_RESULT_HOLD_MS } from '../../src/scales/qn-scale/constants.js';
 import { bleLog } from '../../src/ble/types.js';
 import { uuid16 } from '../../src/scales/body-comp-helpers.js';
@@ -50,6 +51,15 @@ const INFO_461 = Buffer.from([
 ]);
 const READY_461 = Buffer.from([0x14, 0x0b, 0xff, 0x01, 0x00, 0x01, 0x09, 0x03, 0x00, 0x00, 0x2c]);
 const CONFIG_REQ_461 = Buffer.from([0x21, 0x05, 0xff, 0x01, 0x26]);
+
+/**
+ * #530, the Arboleaf CS10K's 20-byte 0x12 from the reporter's issue text, bytes
+ * as sent apart from the MAC (`01 00 00 00 00 02`, the sum recomputed). [18] is
+ * 0x0b, so the dynamic-package bit is clear. This is the only CS10K frame in
+ * the tests: the weigh-in frames behind it below are the 19-byte Arboleaf's
+ * (#331), so those tests are derived, not a CS10K capture.
+ */
+const INFO_CS10K = Buffer.from('1214ff0100000000021a0f2900040503e06f0be0', 'hex');
 
 /** #283, a classic scale's 17-byte 0x12, from its public log. */
 const INFO_283 = Buffer.from([
@@ -4370,7 +4380,15 @@ describe('AE02 dispatch (#75, #235)', () => {
     // #331, D037: the 19-byte dialect streams 20-byte 0x10 frames, sends one
     // stable frame, runs its BIA for about 13 s, and closes the weigh-in with a
     // 0x23 marker, a three-part result block, 0x15 and 0x16.
-    describe('19-byte dialect weigh-in stream (#331, D037)', () => {
+    // The same stream runs behind the Arboleaf CS10K's 20-byte 0x12 (#530):
+    // that scale sends these frames under the extended handshake.
+    describe.each([
+      ['19-byte dialect weigh-in stream (#331, D037)', 'va19'],
+      [
+        'weigh-in stream behind a 20-byte 0x12 without the dynamic-package bit (CS10K, #530)',
+        'cs10k',
+      ],
+    ])('%s', (_title, which) => {
       const hex = (h: string): Buffer => Buffer.from(h.replace(/ /g, ''), 'hex');
       const withSum = (frame: Buffer): Buffer => {
         const f = Buffer.from(frame);
@@ -4385,7 +4403,8 @@ describe('AE02 dispatch (#75, #235)', () => {
       };
 
       // #331 DEBUG log, 2026-10-06. Byte for byte from the log.
-      const INFO = hex('12 13 ff 54 0b 04 00 07 ff 15 0f 27 00 00 05 03 e0 6f 2f');
+      const INFO_19 = hex('12 13 ff 54 0b 04 00 07 ff 15 0f 27 00 00 05 03 e0 6f 2f');
+      const INFO = which === 'cs10k' ? INFO_CS10K : INFO_19;
       const READY = hex('14 0b ff 01 00 01 00 00 00 00 20');
       const CONFIG_REQ = hex('21 05 ff 01 26');
       const MEASURING = hex('10 14 01 00 11 1e 05 00 00 00 00 00 00 00 00 00 00 00 00 59');
@@ -4752,10 +4771,14 @@ describe('AE02 dispatch (#75, #235)', () => {
       // Scope: every other dialect, and the 19-byte one without a stream, stays
       // as it was. These pass on the code before D037 as well.
       // With ble.qn_result_ack as well: it is for the 19-byte stream only.
-      describe.each([
-        ['by default', {}],
-        ['with ble.qn_result_ack', { qnResultAck: true }],
-      ])('other dialects are untouched, %s', (_label, config: AdapterRuntimeConfig) => {
+      describe.each(
+        which === 'va19'
+          ? [
+              ['by default', {}],
+              ['with ble.qn_result_ack', { qnResultAck: true }],
+            ]
+          : [],
+      )('other dialects are untouched, %s', (_label, config: AdapterRuntimeConfig) => {
         it('extended: a GE-shaped stable 20-byte frame is still not read or answered', async () => {
           const adapter = makeAdapter();
           adapter.configure(config);
@@ -4831,6 +4854,163 @@ describe('AE02 dispatch (#75, #235)', () => {
           }
         });
       });
+
+      // What only the CS10K row can show: the 0x12 decides, so each of these
+      // is paired with the same frames behind a CS10E 0x12 (#530).
+      if (which === 'cs10k') {
+        // The CS10E's real 0x12 (#331, [18] 0xeb sets the dynamic-package bit) and
+        // its one-part 0xB1 of 92.9 kg, both from the 2026-11-04 log.
+        const INFO_CS10E = INFO_CS10E_1104;
+        const B1_CS10E = B1_CS10E_1104;
+        const NOW = new Date('2026-11-09T10:00:00Z');
+
+        const debugLines = () => {
+          const spy = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+          return {
+            lines: (): string[] => spy.mock.calls.map((c) => String(c[0])),
+            restore: () => spy.mockRestore(),
+          };
+        };
+
+        // The same stream behind a CS10E 0x12 is the extended dialect's: a stable
+        // frame is not a reading there, and D096 relies on that.
+        it('reads nothing from the same stream behind a CS10E 0x12', async () => {
+          vi.useFakeTimers();
+          try {
+            const adapter = makeAdapter();
+            adapter.configure({ qnWeightAck: true });
+            await openSession(adapter, INFO_CS10E);
+            expect(adapter.parseNotification(MEASURING)).toBeNull();
+            expect(adapter.parseNotification(STABLE)).toBeNull();
+            expect(adapter.completionHoldMs).toBeUndefined();
+            expect(adapter.parseNotification(DONE_16)).toBeNull();
+          } finally {
+            vi.useRealTimers();
+          }
+        });
+
+        // A 0x23 behind a CS10E 0x12 is read in the VA layout, and the empty one
+        // is asked for again; the CS10K's is the 19-byte answer "none".
+        it('answers the empty 0x23 with a re-query behind a CS10E 0x12, not behind the CS10K', async () => {
+          vi.useFakeTimers();
+          try {
+            const run = async (info: Buffer) => {
+              const adapter = makeAdapter();
+              adapter.configure({ qnWeightAck: true });
+              const writes = await openSession(adapter, info);
+              const queries = () => writes.filter((w) => w[0] === 0x22).length;
+              const first = queries();
+              adapter.parseNotification(STABLE);
+              adapter.parseNotification(END_MARKER);
+              await vi.advanceTimersByTimeAsync(3500);
+              return queries() - first;
+            };
+            expect(await run(INFO_CS10E)).toBeGreaterThan(0);
+            expect(await run(INFO_CS10K)).toBe(0);
+          } finally {
+            vi.useRealTimers();
+          }
+        });
+
+        // The handshake is the extended one on both, so what the scale hears is
+        // the same. The 0x20 time sync carries the clock, hence one fixed time.
+        it('writes what it writes behind a CS10E 0x12 with the vendor visit key', async () => {
+          vi.useFakeTimers();
+          try {
+            const run = async (info: Buffer) => {
+              vi.setSystemTime(NOW);
+              const adapter = makeAdapter();
+              adapter.configure({ qnUserKey: 1000 });
+              return openSession(adapter, info);
+            };
+            const cs10e = await run(INFO_CS10E);
+            const cs10k = await run(INFO_CS10K);
+            expect(cs10k.length).toBeGreaterThan(0);
+            expect(cs10k).toEqual(cs10e);
+          } finally {
+            vi.useRealTimers();
+          }
+        });
+
+        it('still reads a one-part 0xB1 as the final weigh-in', async () => {
+          vi.useFakeTimers();
+          try {
+            const adapter = makeAdapter();
+            adapter.configure({ qnWeightAck: true });
+            await openSession(adapter, INFO_CS10K);
+            const reading = adapter.parseNotification(B1_CS10E);
+            expect(reading).toMatchObject({ weight: 92.9, impedance: 0 });
+            expect(adapter.isFinal(reading!)).toBe(true);
+          } finally {
+            vi.useRealTimers();
+          }
+        });
+
+        it('names the missing bit once per scale-info frame, with the byte it read', async () => {
+          vi.useFakeTimers();
+          const debug = debugLines();
+          try {
+            const adapter = makeAdapter();
+            await openSession(adapter, INFO_CS10K);
+            const line =
+              'QN: 20-byte scale-info frame without the dynamic-package bit ([18] 0x0b): ' +
+              'reading the weigh-in as the 19-byte dialect sends it (#530)';
+            expect(debug.lines().filter((l) => l === line)).toHaveLength(1);
+            // A proxy that delivers the 0x12 twice: the flag stays, both are logged.
+            adapter.parseNotification(INFO_CS10K);
+            expect(debug.lines().filter((l) => l === line)).toHaveLength(2);
+            expect(debug.lines().filter((l) => l.startsWith('QN: scale info (20B'))).toHaveLength(
+              2,
+            );
+            expect(adapter.parseNotification(STABLE)).toEqual(WEIGHT);
+
+            debug.restore();
+            const other = debugLines();
+            await openSession(makeAdapter(), INFO_CS10E);
+            expect(other.lines().some((l) => l.includes('dynamic-package bit'))).toBe(false);
+            other.restore();
+          } finally {
+            debug.restore();
+            vi.useRealTimers();
+          }
+        });
+
+        // A scale that sets the bit and still sends the three-part block would
+        // lose its weigh-in; one line per session tells the reporter's log.
+        it('logs a status-02 result block behind a CS10E 0x12 once, and not behind the CS10K', async () => {
+          vi.useFakeTimers();
+          const debug = debugLines();
+          try {
+            const triage =
+              'QN: 20-byte result block in a session whose scale-info frame sets the ' +
+              'dynamic-package bit, not read; please report this log on #530';
+            const adapter = makeAdapter();
+            await openSession(adapter, INFO_CS10E);
+            // PART1 with its checksum broken is noise, not a block: no line.
+            const damaged = Buffer.from(PART1);
+            damaged[damaged.length - 1] ^= 0xff;
+            adapter.parseNotification(damaged);
+            expect(debug.lines().filter((l) => l === triage)).toHaveLength(0);
+            adapter.parseNotification(PART1);
+            adapter.parseNotification(PART2);
+            adapter.parseNotification(PART1);
+            expect(debug.lines().filter((l) => l === triage)).toHaveLength(1);
+
+            debug.restore();
+            const other = debugLines();
+            const cs10k = makeAdapter();
+            await openSession(cs10k, INFO_CS10K);
+            cs10k.parseNotification(PART1);
+            expect(other.lines().some((l) => l.includes('please report this log on #530'))).toBe(
+              false,
+            );
+            other.restore();
+          } finally {
+            debug.restore();
+            vi.useRealTimers();
+          }
+        });
+      }
     });
 
     // Every anchor frame a capture shows, rebuilt from its weight. 74.05 and
@@ -4986,6 +5166,23 @@ describe('QN per-session reset ordering (#406)', () => {
     expect(first.s.kind).toBe('unknown');
     expect(first.s.configSent).toBe(false);
     expect(first.s.weightScaleFactor).toBe(100);
+  });
+
+  // #530: the dynamic-package flag is read from the 0x12 and dies with the session.
+  it('clears the dynamic-package flag with the dialect', () => {
+    const adapter = makeAdapter();
+    const state = adapter as unknown as {
+      s: { kind: string; dynamicPackage: boolean | null };
+    };
+    adapter.onSessionStart?.();
+    adapter.parseNotification(INFO_CS10K);
+    expect(state.s.kind).toBe('ext20');
+    expect(state.s.dynamicPackage).toBe(false);
+
+    adapter.onSessionEnd?.();
+    adapter.onSessionStart?.();
+    expect(state.s.kind).toBe('unknown');
+    expect(state.s.dynamicPackage).toBeNull();
   });
 
   // The test above checks three fields. This one covers every instance field
@@ -5145,6 +5342,44 @@ describe('buildUserProfileFrame (#331)', () => {
     expect(buildUserProfileFrame(26, 193, 'male', { athlete: true })).toEqual([
       0xa0, 0x0d, 0x02, 0x01, 0x03, 0xe8, 0x00, 0x1a, 0x07, 0x8a, 0x0e, 0x02, 0x56,
     ]);
+  });
+});
+
+describe('infoDynamicPackage (#530)', () => {
+  // Byte 18 of every 20-byte 0x12 seen so far, with the scale it came from.
+  it.each([
+    ['Arboleaf CS10K (#530), bit clear', INFO_CS10K, false],
+    ['Arboleaf CS10E (#331)', INFO_CS10E_1104, true],
+    ['Arboleaf CS10G (#501)', INFO_501, true],
+    ['GE CS 10 G (#235)', INFO_GE_235, true],
+  ])('reads %s', (_name, info, expected) => {
+    expect(classifyInfoFrame(info)).toBe('ext20');
+    expect(infoDynamicPackage(info)).toBe(expected);
+  });
+
+  // The CS10K frame is the issue's with the MAC rewritten, so its sum is ours.
+  it('closes the rewritten CS10K frame under the family checksum', () => {
+    expect(hasValidSumChecksum(INFO_CS10K)).toBe(true);
+  });
+
+  // Byte 18 of a 19-byte frame is its checksum, so it says nothing. The first
+  // frame has the bit set in that checksum and the second has it clear.
+  it.each([
+    ['19-byte, checksum with bit 5 set (#331)', INFO_ARBOLEAF_331],
+    [
+      '19-byte, checksum with bit 5 clear (#331)',
+      Buffer.from('1213ff010000000002150f2700000503e06fc9', 'hex'),
+    ],
+    ['18-byte (#461)', INFO_461],
+    ['17-byte classic (#283)', INFO_283],
+  ])('has no verdict for the %s frame', (_name, info) => {
+    expect(infoDynamicPackage(info)).toBeNull();
+  });
+
+  it('has no verdict for a 20-byte frame that does not carry its length', () => {
+    const noLength = Buffer.from(INFO_CS10K);
+    noLength[1] = 0x00;
+    expect(infoDynamicPackage(noLength)).toBeNull();
   });
 });
 

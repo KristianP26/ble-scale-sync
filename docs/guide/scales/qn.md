@@ -11,6 +11,7 @@ The QN protocol runs on many Renpho, Arboleaf, FITINDEX, GE and Sencor scales an
 
 - Renpho ES-CS20M, ES-32MD, Elis 1, and FITINDEX and Sencor rebadges.
 - Arboleaf scales with eight electrodes (19-byte dialect).
+- Arboleaf CS10K with eight electrodes (Experimental). It sends a 20-byte scale-info frame and weighs in like the 19-byte dialect.
 - GE CS 10 G ("Fit Plus") and rebadges (20-byte extended dialect).
 - Arboleaf CS10E and CS10G with eight electrodes (20-byte extended dialect).
 
@@ -25,6 +26,8 @@ QN: scale info (19B, dialect=es26m), factor=100, proto=0xff
 ```
 
 This page names dialects by that length: `18B` and `19B` are the 18- and 19-byte dialects, `20B` and longer the extended dialect, anything else the classic dialect. The `dialect=` value is an internal name.
+
+The Arboleaf CS10K is the exception: its `20B` frame names the extended dialect, but it weighs in like the 19-byte dialect (see [Arboleaf scales](#arboleaf-scales-19-byte-dialect)).
 
 If the scale-info frame is lost, which can happen on a proxy transport, the log shows this line instead:
 
@@ -66,7 +69,7 @@ All options apply on the next weigh-in without a restart. If one of them makes y
 ### Options with side effects
 
 - **`qn_report_byte`** sends, on every connection, a frame that deletes the user slots its bits select on the scale (`252` deletes slots 3 to 8), with any weigh-ins stored for them. Leave it unset unless a scale that reported weights stopped after you updated ble-scale-sync and nobody else uses the scale.
-- **`qn_result_ack: true`** (Experimental, 19-byte dialect) sends the end-of-measurement frame of the vendor's published SDK after the last result frame. Report results on [#331](https://github.com/KristianP26/ble-scale-sync/issues/331).
+- **`qn_result_ack: true`** (Experimental, 19-byte dialect and Arboleaf CS10K) sends the end-of-measurement frame of the vendor's published SDK after the last result frame. Report results on [#331](https://github.com/KristianP26/ble-scale-sync/issues/331).
 
 ## User slot
 
@@ -76,13 +79,13 @@ If the vendor app registered you in another slot, set `qn_user_slot` (Experiment
 
 A wrong slot sends the first user's profile to another person's slot, and the scale accepts key 1000 there too.
 
-To find the slot, weigh in once with `runtime.debug: true`. On the 20-byte dialect the result line names it:
+To find the slot, weigh in once with `runtime.debug: true`. On the 20-byte dialect, except the Arboleaf CS10K, the result line names it:
 
 ```text
 QN: extended result 0xb1 decoded 72.4kg, user slot 2 (no whole-body impedance, emitting weight-only) #235
 ```
 
-On the 19-byte dialect the line `QN: result block, user slot N` names it. On the 18-byte dialect only the lines of stored weigh-ins do.
+On the 19-byte dialect and the Arboleaf CS10K the line `QN: result block, user slot N` names it. On the 18-byte dialect only the lines of stored weigh-ins do.
 
 ```yaml
 ble:
@@ -94,7 +97,7 @@ ble:
 
 The profile frame tells the scale which body-fat method to compute with. The scale never reports which one it expects. The vendor app picks it from its settings for the scale model, and per the vendor's published SDK an 8-electrode scale without such a setting gets 7. ble-scale-sync sends 4, or 14 for an athlete aged 18 or older on the 18-byte dialect.
 
-`qn_algorithm` (Experimental, 0 to 255) sends another value. It goes into the profile frame as given, with no athlete step, wherever the vendor-app profile frame goes out: with `qn_user_key` on the 18-, 19- and 20-byte dialects, and with `qn_weight_ack: true` on the 19-byte dialect. Without either, a warning says it is never sent. On the 20-byte dialect it also turns on the [scale's own body composition](#scale-body-composition-on-the-extended-dialect). The debug log shows it:
+`qn_algorithm` (Experimental, 0 to 255) sends another value. It goes into the profile frame as given, with no athlete step, wherever the vendor-app profile frame goes out: with `qn_user_key` on the 18-, 19- and 20-byte dialects, and with `qn_weight_ack: true` on the 19-byte dialect. Without either, a warning says it is never sent. On the 20-byte dialect, except the Arboleaf CS10K, it also turns on the [scale's own body composition](#scale-body-composition-on-the-extended-dialect). The debug log shows it:
 
 ```text
 QN: A00D profile frame with key 1000, age 30, height 1700 mm, sex female, athlete no, algorithm 7 (ble.qn_user_key, 20-byte dialect, #463)
@@ -117,6 +120,8 @@ The log then says `QN: using the scale's own body composition for this weigh-in 
 
 Weigh-ins stored while nothing was connected arrive on the next connection. They go, with their own time and weight only, to the exporters that [can record a past measurement](/exporters#historical-readings).
 
+The Arboleaf CS10K (Experimental) sends a 20-byte scale-info frame but weighs in like these scales, so the measuring time, the held weight and the stored weigh-ins above apply to it. Instead of the two options at the top of this section, start with `qn_user_key: 1000` alone. The scale's own body composition needs it, and unlike on the CS10E it needs no `qn_algorithm`.
+
 ## GE CS 10 G and extended-dialect scales
 
 The scale waits for a weight anchor close to the weight of the person on it. The anchor is the first user's `last_known_weight`, or the middle of their `weight_range` when that range lies between 20 and 250 kg and spans no more than 100 kg. Without either, the log warns `QN: no usable weight anchor in config` and a fixed value is sent. Live weight frames are not acknowledged, so the anchor matters only for the start.
@@ -126,6 +131,8 @@ With `qn_user_key` set, the start command and the anchor go out only after the s
 ### Scale body composition on the extended dialect {#scale-body-composition-on-the-extended-dialect}
 
 Experimental. Eight-electrode scales on this dialect, such as the Arboleaf CS10E, compute body fat, water, muscle, bone, skeletal muscle, visceral fat, BMR and body age for the profile they were sent. With `qn_user_key` and [`qn_algorithm`](#algorithm-byte) set, these are exported, with body age as metabolic age, under the same two conditions as on the [19-byte dialect](#arboleaf-scales-19-byte-dialect).
+
+The Arboleaf CS10K is covered under [Arboleaf scales](#arboleaf-scales-19-byte-dialect).
 
 The scale must send its result in one frame, as it does over an ESPHome proxy. When the result arrives split, which happens over the ESP32 proxy, only the weight goes out. Without `qn_algorithm` the normal log names it as the reason and the weigh-in gets the BMI estimate.
 

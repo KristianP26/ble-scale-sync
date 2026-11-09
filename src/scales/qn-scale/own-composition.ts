@@ -23,9 +23,10 @@ export const seconds = (ms: number | null): string =>
   ms === null ? 'unknown' : `${(ms / 1000).toFixed(1)} s`;
 
 /**
- * The scale's own results for one weigh-in (the 19-byte dialect's result
- * block, or the 20-byte dialect's one-part 0xB1), and what this session sent
- * it and heard back, pinned to the reading they belong to (#331).
+ * The scale's own results for one weigh-in (the 19-byte result block of the
+ * 19-byte dialect and the CS10K, #530, or the 20-byte dialect's one-part
+ * 0xB1), and what this session sent it and heard back, pinned to the reading
+ * they belong to (#331).
  */
 export interface ScaleCompositionPin {
   result: EightResult;

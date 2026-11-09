@@ -4,6 +4,7 @@ import {
   EIGHT_CHANNEL_ORDER,
   LIVE20_FRAME_LEN,
   LIVE20_STATUS_MEASURING,
+  LIVE20_STATUS_RESULT,
   LIVE20_STATUS_STABLE,
   RESULT_MAX_WEIGHT_KG,
   RESULT_MIN_WEIGHT_KG,
@@ -17,6 +18,7 @@ import { r2 } from '../../body-comp-helpers.js';
 import { decodeExtendedResult, hasValidSumChecksum, type ExtendedResult } from '../frames.js';
 import type { ScaleCompositionPin } from '../own-composition.js';
 import type { QnSession } from '../session.js';
+import { dialect as va19 } from './va19.js';
 
 /**
  * The 20-byte extended dialect (GE CS 10 G #235, Arboleaf CS10G #501 and a
@@ -28,16 +30,48 @@ import type { QnSession } from '../session.js';
  * come back null, so they are not logged as ignored. A 0xB1 in one part also
  * carries the scale's own results (decodeExtendedResult), pinned to the
  * reading for computeMetrics to judge (#331, D096).
+ *
+ * The Arboleaf CS10K also sends a 20-byte 0x12, but without the dynamic-package
+ * bit, and weighs in with the 19-byte dialect's frames: frame() offers each one
+ * to va19 first (#530). Only the bit sends a scale that way. The CS10E, CS10G
+ * and GE keep this path, because va19 would turn their stable live frame into
+ * a provisional reading and skip noteLiveFrame, which D096 relies on.
+ * liveWeightAfterVisit stays null on the CS10K for the same reason.
  */
 export const ext20: QnDialectHandler = {
   frame(q, data) {
+    if (q.s.dynamicPackage === false) {
+      const own = va19.frame(q, data);
+      if (own !== undefined) return own;
+    }
     const opcode = data[0];
     if (opcode === 0x23) return q.storedRecord(data);
     if (opcode === RESULT_OPCODE_B4 || opcode === RESULT_OPCODE_B1) return resultFrame(q.s, data);
-    if (opcode === 0x10) noteLiveFrame(q.s, data);
+    if (opcode === 0x10) {
+      noteLiveFrame(q.s, data);
+      noteResultBlockOnDynamicPackage(q.s, data);
+    }
     return undefined;
   },
 };
+
+/**
+ * The 19-byte dialect's result block (status 02, first of three parts) behind
+ * a 0x12 that sets the dynamic-package bit: nothing here reads it, so the
+ * weigh-in is lost. One debug line per session, so a log from a scale that
+ * sets the bit and still sends this block shows it (#530).
+ */
+function noteResultBlockOnDynamicPackage(s: QnSession, data: Buffer): void {
+  if (s.dynamicPackage !== true || s.resultBlockOnDynamicPackageLogged) return;
+  if (data.length !== LIVE20_FRAME_LEN || data[1] !== LIVE20_FRAME_LEN) return;
+  if (!hasValidSumChecksum(data)) return;
+  if (data[3] !== LIVE20_STATUS_RESULT || data[4] !== 0x31) return;
+  s.resultBlockOnDynamicPackageLogged = true;
+  bleLog.debug(
+    'QN: 20-byte result block in a session whose scale-info frame sets the ' +
+      'dynamic-package bit, not read; please report this log on #530',
+  );
+}
 
 /**
  * A live 0x10 for the profile's slot ([2]) with status measuring or stable

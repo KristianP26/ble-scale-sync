@@ -117,6 +117,7 @@ On firmware that sends it, the scale's own body fat is used, and water, muscle, 
 <span id="renpho-r-msc04-morphoscan-nova"></span>These scales compute body composition themselves for a profile ble-scale-sync sends them:
 
 - Arboleaf and other 19-byte QN scales
+- Arboleaf CS10K (Experimental, with `ble.qn_user_key`)
 - Arboleaf CS10E on the 20-byte QN dialect (Experimental, with `ble.qn_algorithm`)
 - Renpho R-MSC04
 - Huawei CH100 / AH100 (body fat only)

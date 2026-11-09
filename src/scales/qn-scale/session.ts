@@ -33,6 +33,17 @@ export class QnSession {
    */
   kind: QnDialectKind = 'unknown';
 
+  /**
+   * Whether the 0x12 sets the dynamic-package bit; null while there is no
+   * 0x12 of 20 bytes or more, the only one that has the byte. `false` is a
+   * scale that weighs in with 19-byte-dialect frames under the extended
+   * handshake (Arboleaf CS10K, #530).
+   */
+  dynamicPackage: boolean | null = null;
+
+  /** One debug line per session for a 3-part result block behind a set bit (#530). */
+  resultBlockOnDynamicPackageLogged = false;
+
   /** One "divisor in doubt, reading dropped" warning per session (C-06). */
   divisorDoubtWarned = false;
 
@@ -100,9 +111,9 @@ export class QnSession {
   twentyByteFrameLogged = false;
 
   /**
-   * The 19-byte dialect's streamed weigh-in (#331, D037). `live20Seen`: a
-   * well-formed 20-byte 0x10 arrived this session, which is what makes later
-   * 0x15/0x16 frames part of the same weigh-in.
+   * The streamed weigh-in of the 19-byte dialect and of the CS10K (#331, D037,
+   * #530). `live20Seen`: a well-formed 20-byte 0x10 arrived this session,
+   * which is what makes later 0x15/0x16 frames part of the same weigh-in.
    * `live20Weight`: the stable weight, held until 0x16 (`live20ResultSeen`)
    * closes the weigh-in.
    */

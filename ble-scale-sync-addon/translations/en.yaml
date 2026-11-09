@@ -81,8 +81,9 @@ configuration:
   qn_result_ack:
     name: QN result acknowledgement
     description: >-
-      Experimental, QN scales with a 19-byte scale-info frame only. Sends the
-      end-of-measurement frame of the vendor's SDK after the last result frame.
+      Experimental, QN scales with a 19-byte scale-info frame and the Arboleaf
+      CS10K only. Sends the end-of-measurement frame of the vendor's SDK after
+      the last result frame.
   rmsc04_profile_byte:
     name: Renpho R-MSC04 profile byte
     description: >-
