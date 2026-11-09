@@ -1,26 +1,28 @@
 ---
-title: Getting Started
+title: Getting started
 description: Install BLE Scale Sync with Docker, the Home Assistant add-on or Node.js, run the setup wizard and keep it running as a service.
 ---
 
-# Getting Started
+# Getting started
 
-BLE Scale Sync runs on Linux (including Raspberry Pi), macOS and Windows, on any host with a Bluetooth adapter in range of the scale or with a [proxy](#esp32-proxy) near it.
+BLE Scale Sync runs on Linux (including Raspberry Pi), macOS and Windows. The host needs a Bluetooth adapter in range of the scale, or a [proxy](#esp32-proxy) near it.
 
-- [Docker](#docker): Linux hosts such as a Raspberry Pi or a NAS. Works with any Home Assistant install through the [MQTT exporter](/exporters#mqtt).
-- [Home Assistant add-on](#home-assistant-addon): Home Assistant OS or Supervised.
-- [Standalone Node.js](#standalone): Linux, macOS and Windows.
+<DocCards>
+<DocCard title="Docker" link="#docker" icon="docker" more="Jump to the steps">Linux hosts such as a Raspberry Pi or a NAS. Reaches any Home Assistant install through MQTT.</DocCard>
+<DocCard title="Home Assistant add-on" link="#home-assistant-addon" icon="homeassistant" more="Jump to the steps">Home Assistant OS or Supervised.</DocCard>
+<DocCard title="Standalone Node.js" link="#standalone" icon="nodedotjs" more="Jump to the steps">Linux, macOS and Windows.</DocCard>
+</DocCards>
 
-## Recommended Hardware
+## Recommended hardware
 
 - A [Raspberry Pi Zero 2 W](https://www.raspberrypi.com/products/raspberry-pi-zero-2-w/) (about 15 EUR, built-in Bluetooth) with Raspberry Pi OS Lite, or any Raspberry Pi 3, 4 or 5.
 - Any [supported scale](/guide/supported-scales).
 
 The first-generation Raspberry Pi Zero W (ARMv6) is not supported: `npm install` fails with `SIGILL`. See [install fails on Raspberry Pi Zero W](/troubleshooting#install-fails-on-raspberry-pi-zero-w-first-gen).
 
-### Hosts Without Bluetooth {#esp32-proxy}
+### Hosts without Bluetooth {#esp32-proxy}
 
-A host without Bluetooth, or one out of range of the scale, reads it through an ESP32 or ESPHome proxy near the scale, or through the Bluetooth proxies Home Assistant already has. [Bluetooth transports](/guide/transports) compares them.
+If the host has no Bluetooth or is out of range of the scale, read the scale through an ESP32 or ESPHome proxy near it, or through the Bluetooth proxies Home Assistant already has. [Bluetooth transports](/guide/transports) compares them.
 
 ## Docker (Linux only) {#docker}
 
@@ -28,7 +30,7 @@ The image reads Bluetooth through the host's BlueZ over D-Bus, so it needs a Lin
 
 ### 1. Configure
 
-Create a directory with the file and folders the container mounts. Docker creates a missing mount source as a directory owned by root, which the container cannot write to.
+Create the file and folders the container mounts first. Docker would create a missing mount source as a root-owned directory that the container cannot write to.
 
 ```bash
 mkdir -p ~/ble-scale-sync/garmin-tokens ~/ble-scale-sync/strava-tokens
@@ -52,7 +54,7 @@ docker run --rm -it \
   ghcr.io/kristianp26/ble-scale-sync:latest setup
 ```
 
-The wizard reports that the empty `config.yaml` cannot be edited and sets up a new one. Its default `token_dir` is `./garmin-tokens` (and `./strava-tokens`), relative to `config.yaml`, which is `/app/garmin-tokens` in the container. If you enter another `token_dir`, mount that path instead.
+The wizard reports that the empty `config.yaml` cannot be edited and sets up a new one. Token directories default to `./garmin-tokens` and `./strava-tokens` next to `config.yaml`, which is `/app/garmin-tokens` and `/app/strava-tokens` in the container. If you enter another `token_dir`, mount that path instead.
 
 ### 2. Run
 
@@ -73,24 +75,24 @@ docker run -d --name ble-scale-sync --restart unless-stopped \
 
 Check the log with `docker logs -f ble-scale-sync`. It shows `BLE Scale Sync (continuous)` at startup, then a `Measurement:` line when you step on the scale.
 
-What the flags do:
+The flags:
 
 - `--network host` and `-v /var/run/dbus:/var/run/dbus:ro`: access to BlueZ through the host's system D-Bus.
 - `--cap-add NET_ADMIN --cap-add NET_RAW`: raw Bluetooth operations.
-- `--group-add "$(getent group bluetooth | cut -d: -f3)"`: the host's `bluetooth` group ID. Keep the quotes: if the group does not exist, Docker reports it instead of failing later with an unclear D-Bus error.
+- `--group-add "$(getent group bluetooth | cut -d: -f3)"`: the host's `bluetooth` group ID. Keep the quotes, so a missing group is reported by Docker and not by an unclear D-Bus error later.
 - `--device /dev/rfkill`: lets the app power-cycle the adapter when BlueZ gets stuck. Optional.
 - `-e TZ=...`: the host's time zone. Without it the container runs in UTC, and the Intervals.icu and wger exporters file a weigh-in made shortly after midnight under the previous day.
 
-`config.yaml` is mounted as a single file, so the files the app keeps next to it (the export retry queue, the replay check state, the stored weigh-in marks and the update check date) stay inside the container and are lost when it is re-created, for example on an update. The tokens are safe in their mounted directories.
+Because `config.yaml` is mounted as a single file, the files the app keeps next to it stay inside the container. A re-created container, for example after an update, loses them: the export retry queue, the replay check state, the stored weigh-in marks and the update check date. Tokens are safe in their mounted directories.
 
-To use Docker Compose instead:
+For Docker Compose instead:
 
 1. Copy `docker-compose.example.yml` from the repository to `docker-compose.yml` in this directory.
 2. In a `.env` next to it, set `BLUETOOTH_GID=` to the output of `getent group bluetooth | cut -d: -f3`.
 3. Replace the volume `garmin-tokens:/home/node/.garmin_tokens` with `./garmin-tokens:/app/garmin-tokens`, add `./strava-tokens:/app/strava-tokens`, and set `TZ` to your time zone.
 4. Run `docker compose up -d`.
 
-### Other Commands
+### Other commands
 
 The image takes the same subcommands as the [standalone commands](#commands):
 
@@ -103,13 +105,13 @@ docker run --rm -v ./config.yaml:/app/config.yaml:ro \
   ghcr.io/kristianp26/ble-scale-sync:latest validate  # check config.yaml
 ```
 
-## Home Assistant Add-on {#home-assistant-addon}
+## Home Assistant add-on {#home-assistant-addon}
 
 The add-on needs Home Assistant OS or Supervised; **Settings** > **About** shows your install type. On Home Assistant Container or Core, use [Docker](#docker) with the [MQTT exporter](/exporters#mqtt).
 
 [![Add BLE Scale Sync repository to your Home Assistant](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2FKristianP26%2Fble-scale-sync)
 
-Installation, options and Garmin setup are in the [Home Assistant add-on guide](/guide/home-assistant-addon).
+Install steps, options and Garmin setup are in the [Home Assistant add-on guide](/guide/home-assistant-addon).
 
 ## Standalone (Node.js) {#standalone}
 
@@ -145,9 +147,9 @@ npm install
 
 The clone directory holds `config.yaml`, and the commands are npm scripts, see [Commands](#commands).
 
-### Install the Garmin Dependencies {#garmin-from-npm}
+### Install the Garmin dependencies {#garmin-from-npm}
 
-Skip this step if you do not use Garmin Connect. The wizard signs in to Garmin with a Python script, so install its packages first. Raspberry Pi OS and Debian refuse a system-wide `pip install`, so use a virtual environment in the app directory:
+Skip this step without Garmin Connect. The wizard signs in to Garmin with a Python script, so it needs the Python packages. Raspberry Pi OS and Debian refuse a system-wide `pip install`, so use a virtual environment in the app directory:
 
 ```bash
 cd ~/ble-scale-sync              # from a clone: the clone directory
@@ -156,7 +158,7 @@ source venv/bin/activate         # Windows: venv\Scripts\activate
 pip install -r "$(npm root -g)/ble-scale-sync/requirements.txt"   # from a clone: pip install -r requirements.txt
 ```
 
-The app finds Python as `python3` or `python` on `PATH`. Activate the virtual environment before you run the app by hand; the [service](#run-as-a-service-linux) puts it on `PATH` itself.
+The app finds Python as `python3` or `python` on `PATH`. Activate the virtual environment before you run the app by hand. The [service](#run-as-a-service-linux) puts it on `PATH` itself.
 
 ### Configure
 
@@ -202,7 +204,7 @@ From an install the commands are subcommands, from a clone they are npm scripts:
 
 `--config <path>` points the run command, `validate`, `setup`, `scan` and `diagnose` at another `config.yaml`, see [where config.yaml is read from](/guide/configuration#config-location).
 
-### Install a Bluetooth Stack Later {#adding-a-ble-stack}
+### Install a Bluetooth stack later {#adding-a-ble-stack}
 
 If the app says a Bluetooth stack package is missing, install it next to the app:
 
@@ -212,7 +214,7 @@ npm install -g @stoprocent/noble    # next to a global ble-scale-sync install
 
 Under `npx` the cache directory is discarded between runs, so install the app with the stack instead: `npm install -g ble-scale-sync @stoprocent/noble`.
 
-### Run as a Service (Linux)
+### Run as a service (Linux)
 
 1. Find your user name with `id -un`. Raspberry Pi OS has no default `pi` user: it is the user you created in Raspberry Pi Imager or at first boot.
 2. For an npm install, find the command's path with `command -v ble-scale-sync`.
@@ -257,7 +259,7 @@ Under `npx` the cache directory is discarded between runs, so install the app wi
 
 Check it with `journalctl -u ble-scale.service -f`: it logs `BLE Scale Sync (continuous)` at startup.
 
-## Next Steps {#what-s-next}
+## Next steps {#what-s-next}
 
 - [Configuration](/guide/configuration): every `config.yaml` option.
 - [Exporters](/exporters): Garmin Connect, MQTT and the other targets.

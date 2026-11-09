@@ -4,33 +4,33 @@ description: Short answers to common BLE Scale Sync questions, each linking to t
 outline: deep
 ---
 
-# Frequently Asked Questions
+# Frequently asked questions
 
 For a specific error, see [Troubleshooting](/troubleshooting).
 
-## Getting Started
+## Getting started
 
 ### Do I need a smartphone?
 
-No. The app reads the scale over Bluetooth on your server (a Raspberry Pi, NAS, PC or Home Assistant host), so stepping on the scale is all you do once it runs. See [Getting Started](/guide/getting-started).
+No. The app reads the scale over Bluetooth on your own host (a Raspberry Pi, NAS, PC or Home Assistant machine). Once it runs, stepping on the scale is all you do. See [Getting started](/guide/getting-started).
 
 ### Do I need Home Assistant?
 
-No. The app runs on Docker, as a Node.js process or as a Home Assistant add-on, and each of them can publish to Home Assistant over MQTT if you want the sensors there. See [Getting Started](/guide/getting-started) and [MQTT](/exporters#mqtt).
+No. The app runs in Docker, as a Node.js process or as a Home Assistant add-on, and each can publish to Home Assistant over MQTT if you want the sensors there. See [Getting started](/guide/getting-started) and [MQTT](/exporters#mqtt).
 
 ### Does it work offline, without Wi-Fi? {#does-it-work-offline-without-wifi}
 
-Reading the scale and calculating body composition work offline, and so do local targets such as a file or a local MQTT broker. Cloud targets such as Garmin Connect need internet at the moment of export. A failed export to a target that can record a past measurement is retried later; see [historical readings](/exporters#historical-readings).
+Reading the scale and calculating body composition work offline, and so do local targets such as a file or a local MQTT broker. Cloud targets such as Garmin Connect need internet at export time. Failed exports to targets that can record a past measurement are retried later, see [historical readings](/exporters#historical-readings).
 
 ### What hardware do I need?
 
 A host with Bluetooth that runs Docker or a supported Node.js version, or a Bluetooth proxy near the scale. A Raspberry Pi Zero 2 W is enough; the first Pi Zero W is [not supported](/troubleshooting#install-fails-on-raspberry-pi-zero-w-first-gen). See [recommended hardware](/guide/getting-started#recommended-hardware).
 
-## Privacy and Data
+## Privacy and data
 
 ### Where does my data go?
 
-Only to the exporters you configure. There is no vendor cloud and no account; the one other request the app makes is the optional update check below. See [Exporters](/exporters).
+Only to the exporters you configure. There is no vendor cloud and no account. The one other request is the optional update check below. See [Exporters](/exporters).
 
 ### What does the update check send?
 
@@ -56,7 +56,7 @@ One instance reads one scale at a time; with `ble.scale_mac` unset it reads whic
 
 ### How do I find my scale's MAC address?
 
-Run `ble-scale-sync scan` (`npm run scan` from a clone, or the Docker `scan` command) and step on the scale while it runs. See [Getting Started](/guide/getting-started#docker).
+Run `ble-scale-sync scan` (`npm run scan` from a clone, or the Docker `scan` command) and step on the scale while it runs. See [Getting started](/guide/getting-started#docker).
 
 ### I set an option from the documentation and it does nothing. Why?
 
@@ -64,21 +64,21 @@ If the log says `Unknown config key '...'`, your build is older than the option:
 
 ### My scale is discovered but the connection fails. What do I try first? {#my-scale-is-discovered-but-connection-fails-what-do-i-try-first}
 
-On Linux, run `sudo systemctl restart bluetooth` and step on the scale again. Then follow [Connection Fails or Ends](/troubleshooting#connection-fails-or-ends).
+On Linux, run `sudo systemctl restart bluetooth` and step on the scale again. Then follow [Connection fails or ends](/troubleshooting#connection-fails-or-ends).
 
 ### My Raspberry Pi stops finding the scale after a few hours. How do I fix it? {#my-raspberry-pi-works-for-a-few-hours-then-stops-finding-the-scale-until-i-reboot-how-do-i-fix-this}
 
 That is the BlueZ stuck state of the on-board Broadcom chip. The app restarts discovery and resets the adapter on its own; if it keeps coming back, a Bluetooth proxy avoids it. See [BlueZ stuck state](/troubleshooting#ble-discovery-stops-working-after-hours-bluez-stuck-state).
 
-## Body Composition
+## Body composition
 
 ### Why are my body fat numbers different from the manufacturer's app?
 
-Vendors keep their formulas closed and tune them for their own hardware, while this app uses published BIA formulas (and, for Xiaomi and Yunmai scales, formulas ported from openScale), or a BMI-based estimate when the scale reports no impedance. Expect a difference of a few percent and follow the trend. See [Body Composition](/body-composition).
+Vendors keep their formulas closed and tune them for their own hardware. This app uses published BIA formulas (for Xiaomi and Yunmai scales, formulas ported from openScale), or a BMI-based estimate when the scale reports no impedance. Expect a difference of a few percent and follow the trend. See [Body composition](/body-composition).
 
 ### Is BIA accurate?
 
-Consumer BIA, from any scale or app, is an estimate that fits a trend over weeks better than a single reading. For a clinical measurement you need a method such as DEXA. See [Body Composition](/body-composition).
+Consumer BIA, from any scale or app, is an estimate that fits a trend over weeks better than a single reading. For a clinical measurement you need a method such as DEXA. See [Body composition](/body-composition).
 
 ### What does athlete mode change?
 
@@ -110,7 +110,7 @@ A Pi Zero 2 W, or a Pi 3, 4 or 5. The first Pi Zero W (ARMv6) does not work. See
 
 ### Can I run this in Kubernetes?
 
-Yes. Either pin a pod to a node with a Bluetooth radio, with `NET_ADMIN` and `NET_RAW` and the host D-Bus socket mounted, or run a plain Deployment with an [ESP32 proxy](/guide/esp32-proxy) or [ESPHome proxy](/guide/esphome-proxy), so the cluster needs no radio. The proxy is the simpler one to run.
+Yes. Pin a pod to a node with a Bluetooth radio, with `NET_ADMIN`, `NET_RAW` and the host D-Bus socket mounted. Or run a plain Deployment with an [ESP32 proxy](/guide/esp32-proxy) or [ESPHome proxy](/guide/esphome-proxy), so the cluster needs no radio. The proxy is simpler.
 
 ### Docker on macOS or Windows?
 
@@ -120,11 +120,11 @@ Docker Desktop runs containers in a VM with no access to the host's Bluetooth. U
 
 On Home Assistant OS or Supervised, use the [add-on](/guide/home-assistant-addon). On Home Assistant Container, Core or a host without Home Assistant, use [Docker](/guide/getting-started#docker).
 
-## Updates and Maintenance
+## Updates and maintenance
 
 ### How do I update?
 
-[Auto Updates](/guide/auto-update) covers each kind of install: the add-on, Docker Compose, npm and a clone.
+[Auto updates](/guide/auto-update) covers each kind of install: the add-on, Docker Compose, npm and a clone.
 
 ### What happens to my config and tokens on update?
 
@@ -132,7 +132,7 @@ They stay as long as they live in mounted volumes (Docker) or in `/data` (add-on
 
 ### How do I back up?
 
-Copy the directory that holds `config.yaml` and `.env`. With the wizard's default `token_dir` it also holds the `garmin-tokens` and `strava-tokens` directories; copy any other `token_dir` too. On Home Assistant, a full backup includes the add-on's `/data`. See [Auto Updates](/guide/auto-update#safety-checklist-before-enabling-unattended-updates).
+Copy the directory that holds `config.yaml` and `.env`. With the wizard's default `token_dir` it also holds the `garmin-tokens` and `strava-tokens` directories; copy any other `token_dir` too. On Home Assistant, a full backup includes the add-on's `/data`. See [Auto updates](/guide/auto-update#safety-checklist-before-enabling-unattended-updates).
 
 ### Where are the logs?
 

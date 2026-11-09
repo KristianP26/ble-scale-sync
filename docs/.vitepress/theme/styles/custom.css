@@ -1,18 +1,42 @@
+/*
+ * Site theme. The docs pages take the landing page's type, colours and code
+ * look (HomeLanding.vue), so moving from the home page into the guide does not
+ * feel like a different site.
+ */
 :root {
-  /* Blue/cyan palette — BLE/Bluetooth theme */
-  --vp-c-brand-1: #3b82f6;
-  --vp-c-brand-2: #2563eb;
-  --vp-c-brand-3: #1d4ed8;
-  --vp-c-brand-soft: rgba(59, 130, 246, 0.14);
+  --vp-font-family-base:
+    'Instrument Sans Variable', 'Instrument Sans', ui-sans-serif, system-ui, sans-serif;
+  --vp-font-family-mono: 'DM Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  /* The landing page's action blue. */
+  --vp-c-brand-1: #2563eb;
+  --vp-c-brand-2: #1d4ed8;
+  --vp-c-brand-3: #1e40af;
+  --vp-c-brand-soft: rgba(37, 99, 235, 0.12);
 
   --vp-button-brand-bg: var(--vp-c-brand-1);
   --vp-button-brand-hover-bg: var(--vp-c-brand-2);
   --vp-button-brand-active-bg: var(--vp-c-brand-3);
 
-  --vp-home-hero-name-color: transparent;
-  --vp-home-hero-name-background: linear-gradient(135deg, #3b82f6 0%, #06b6d4 100%);
-  --vp-home-hero-image-background-image: linear-gradient(135deg, #3b82f620 0%, #06b6d420 100%);
-  --vp-home-hero-image-filter: blur(44px);
+  --vp-c-bg-soft: #f4f7fb;
+  --vp-c-bg-alt: #f4f7fb;
+
+  /* Code blocks are the landing page's terminal, dark in both colour schemes. */
+  --vp-code-block-bg: #0f172a;
+  --vp-code-block-color: #e2e8f0;
+  --vp-code-lang-color: #94a3b8;
+  --vp-code-copy-code-border-color: rgba(248, 250, 252, 0.14);
+  --vp-code-copy-code-bg: #1e293b;
+  --vp-code-copy-code-hover-border-color: rgba(248, 250, 252, 0.28);
+  --vp-code-copy-code-hover-bg: #1e293b;
+  --vp-code-copy-code-active-text: #cbd5e1;
+  --vp-code-line-highlight-color: rgba(96, 165, 250, 0.16);
+  --vp-code-color: var(--vp-c-text-1);
+  --vp-code-bg: rgba(15, 23, 42, 0.06);
+  --vp-code-font-size: 0.86em;
+
+  --doc-r-lg: 16px;
+  --doc-r-md: 10px;
 }
 
 .dark {
@@ -20,14 +44,172 @@
   --vp-c-brand-2: #3b82f6;
   --vp-c-brand-3: #2563eb;
   --vp-c-brand-soft: rgba(96, 165, 250, 0.14);
+
+  /* The landing page's navy. */
+  --vp-c-bg: #0f1420;
+  --vp-c-bg-alt: #0b1019;
+  --vp-c-bg-elv: #161c2a;
+  --vp-c-bg-soft: #161c2a;
+
+  --vp-code-block-bg: #0b1222;
+  --vp-code-copy-code-bg: #162036;
+  --vp-code-copy-code-hover-bg: #162036;
+  --vp-code-bg: rgba(248, 250, 252, 0.08);
 }
 
-/* Feature card icon sizing */
-.VPFeature .icon {
-  font-size: 1.5rem;
+body {
+  font-stretch: 96%;
 }
 
-/* Hero tagline */
-.VPHero .tagline {
-  max-width: 560px;
+/* Shiki's dark colours in both schemes, to match the dark block. */
+html:not(.dark) .vp-code span {
+  color: var(--shiki-dark, inherit);
+}
+
+/* Headings: the landing page's weight and tracking, balanced so a short last word never hangs. */
+.vp-doc h1,
+.vp-doc h2,
+.vp-doc h3,
+.vp-doc h4 {
+  font-weight: 560;
+  text-wrap: balance;
+}
+.vp-doc h1 {
+  font-size: 40px;
+  line-height: 1.1;
+  letter-spacing: -0.03em;
+}
+.vp-doc h2 {
+  margin-top: 56px;
+  padding-top: 32px;
+  font-size: 28px;
+  line-height: 1.2;
+  letter-spacing: -0.024em;
+}
+.vp-doc h2 .header-anchor {
+  top: 32px;
+}
+.vp-doc h3 {
+  font-size: 20px;
+  letter-spacing: -0.012em;
+}
+@media (max-width: 639px) {
+  .vp-doc h1 {
+    font-size: 32px;
+  }
+  .vp-doc h2 {
+    font-size: 24px;
+  }
+}
+
+/* Prose: no orphan words, and long keys and URLs break instead of pushing the page sideways. */
+.vp-doc p,
+.vp-doc li,
+.vp-doc td {
+  text-wrap: pretty;
+  overflow-wrap: break-word;
+}
+
+.vp-doc a {
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+  text-decoration-color: color-mix(in srgb, currentColor 40%, transparent);
+  transition:
+    color 0.2s ease,
+    text-decoration-color 0.2s ease;
+}
+.vp-doc a:hover {
+  text-decoration-color: currentColor;
+}
+
+/* Inline code sits on the text line instead of stretching it. */
+.vp-doc :not(pre) > code {
+  padding: 0.1em 0.3em;
+  border-radius: 5px;
+  line-height: 1.4;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+  font-weight: 400;
+}
+.vp-doc a > code {
+  color: inherit;
+}
+
+/* Code blocks: the landing page's terminal. */
+.vp-doc div[class*='language-'] {
+  border-radius: var(--doc-r-md);
+}
+@media (min-width: 640px) {
+  .vp-doc div[class*='language-'] {
+    border-radius: var(--doc-r-lg);
+  }
+}
+.vp-doc div[class*='language-'] code {
+  font-size: 13.5px;
+}
+
+/* Tables: rows, not a grid of boxes, across the full column on a wide screen. */
+.vp-doc table {
+  border-collapse: separate;
+  border-spacing: 0;
+  border: 1px solid var(--vp-c-divider);
+  border-radius: var(--doc-r-md);
+}
+@media (min-width: 768px) {
+  .vp-doc table {
+    display: table;
+    width: 100%;
+  }
+}
+.vp-doc tr,
+.vp-doc tr:nth-child(2n) {
+  background-color: transparent;
+  border: 0;
+}
+.vp-doc th,
+.vp-doc td {
+  border: 0;
+  border-top: 1px solid var(--vp-c-divider);
+  padding: 10px 16px;
+  vertical-align: top;
+  line-height: 1.55;
+}
+.vp-doc thead th {
+  border-top: 0;
+  background-color: var(--vp-c-bg-soft);
+  color: var(--vp-c-text-1);
+  font-weight: 560;
+  white-space: nowrap;
+}
+.vp-doc thead th:first-child {
+  border-top-left-radius: var(--doc-r-md);
+}
+.vp-doc thead th:last-child {
+  border-top-right-radius: var(--doc-r-md);
+}
+
+/* Admonitions: a flat panel with the landing page's radius. */
+.vp-doc .custom-block {
+  border-radius: var(--doc-r-md);
+  padding: 14px 18px 6px;
+}
+.vp-doc .custom-block p {
+  text-wrap: pretty;
+}
+
+/* The page title, the sidebar and the outline take the same type. */
+.VPSidebarItem .text,
+.VPDocAsideOutline .outline-link {
+  text-wrap: pretty;
+}
+
+/* A key or value in a table cell stays whole; the cell wraps around it. */
+.vp-doc td code,
+.vp-doc th code {
+  white-space: nowrap;
+}
+
+/* An icon keeps the name after it on its line. */
+.vp-doc .doc-icon + a {
+  white-space: nowrap;
 }
