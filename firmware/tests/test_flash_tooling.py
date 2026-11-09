@@ -99,9 +99,10 @@ class MipPackagePinTest(unittest.TestCase):
     """The device libraries flash.sh installs are pinned and match the manifest.
 
     The firmware relies on aioble internals (aioble.core.ble_irq, discovery and
-    subscribe behaviour), so a plain `mip install aioble` could change them
-    under an unchanged firmware. mpremote splits a spec at "@" into package and
-    version, so `github:org/repo@<sha>/sub/dir` turns "<sha>/sub/dir" into the
+    subscribe behaviour, and the notification hook of ClientCharacteristic), so
+    a plain `mip install aioble` could change them under an unchanged
+    firmware. mpremote splits a spec at "@" into package and version, so
+    `github:org/repo@<sha>/sub/dir` turns "<sha>/sub/dir" into the
     branch: the package.json resolves by accident, but every file in it is then
     fetched from <sha>/sub/dir/sub/dir and is not found.
     """

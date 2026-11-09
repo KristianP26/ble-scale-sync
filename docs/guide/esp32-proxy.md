@@ -199,6 +199,8 @@ A broadcast scale, such as the Xiaomi Mi Scale 2, is read from its advertisement
 
 A GATT scale is connected by the ESP32 itself the moment it sees a known scale's MAC (`auto_connect`, on by default). The ESP32 reports the characteristics, the server subscribes and writes the commands the scale needs, readings arrive as notifications, and the server sends `disconnect` when the reading is complete. With `auto_connect: false` the server sends `connect` instead, which adds an MQTT round trip that a fast-sleeping scale can miss. If the scale is still on afterwards, see [When a session ends](/guide/transports#when-a-session-ends).
 
+The ESP32 forwards the notifications of each characteristic in the order they arrive. If publishing to MQTT stalls, it holds up to 16 notifications per characteristic, then drops the oldest and prints `Notify ...: queue full, ...` on the serial console.
+
 The firmware ends a GATT session and resumes scanning when the link is down, when the server has not engaged within 20 s, or after 3 minutes. It prints `GATT session guard: ...` on the serial console.
 
 ## MQTT topics
@@ -253,3 +255,4 @@ A small `largest` means the board is out of RAM: use a PSRAM board for GATT scal
 - Set `ble.scale_mac`. The ESP32 connects only to MACs the server has sent it, and without one the server falls back to a slower host-initiated connect after a few scan cycles.
 - Run the server in continuous mode. If the server does not engage with a session, the firmware ends it after 20 s (`GATT session guard: ...`) and the reading is lost.
 - If the serial console logs `GATT connect attempt ... failed ... TimeoutError` on every weigh-in, [flash the current firmware](#flashing-the-firmware): it retries a timed-out connect once with the other address type, which a scale with a random address needs.
+- If the scale shows its result but the session ends with `GATT reading timeout for ...` or `GATT session cap exceeded for ...`, [flash the current firmware](#flashing-the-firmware) (`./flash.sh --app-only` is enough): it forwards every notification of a burst, and some scales send their result as several in a row.
