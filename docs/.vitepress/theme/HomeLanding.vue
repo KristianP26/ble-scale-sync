@@ -329,6 +329,9 @@ onBeforeUnmount(() => {
             <a class="bss-btn bss-btn--secondary" :href="withBase('/guide/supported-scales')"
               >Find your scale</a
             >
+            <a class="bss-btn bss-btn--secondary" :href="withBase('/exporters')"
+              >See all exporters</a
+            >
           </div>
           <p class="bss-proof">
             Linux, macOS or Windows.<br />
@@ -723,8 +726,20 @@ h3 {
 .bss-btns {
   display: flex;
   flex-wrap: wrap;
-  gap: 12px;
+  gap: 10px;
   margin-top: 32px;
+}
+/* Three buttons share one row on a desktop; the row may run into the empty
+   sixth column between the text and the log frame. */
+.bss-btns .bss-btn {
+  padding: 0 20px;
+  font-size: 15px;
+}
+@media (min-width: 1280px) {
+  .bss-btns {
+    flex-wrap: nowrap;
+    width: max-content;
+  }
 }
 .bss-proof {
   margin: 24px 0 0;
