@@ -8,14 +8,21 @@
  * scale hanging up on purpose from a radio link that timed out, without btmon,
  * which a Home Assistant OS host does not ship.
  *
+ * On BlueZ before 5.83 nothing says why, but the same listener also hears the
+ * device's PropertiesChanged (node-ble holds that rule for the device from the
+ * moment it is found until our own first Disconnect). A Connected=false that
+ * this app did not cause is written as a line with the time and without a
+ * reason (#497); after our own Disconnect it stays silent, or every normal
+ * weigh-in would get one.
+ *
  * One raw match rule on the whole D-Bus connection rather than a ProxyObject
  * per device (the D066 link observer in link-observer.ts builds one per
  * connect attempt after a failure): no Introspect, nothing to stop at the end
  * of a session, and no window in which a listener is not yet attached or
  * already gone. The rule lives as long as the connection, which
  * resetConnection() drops after every GATT session, and the listener goes
- * with the bus object. On BlueZ before 5.83 the rule matches nothing and no
- * line is ever written.
+ * with the bus object. On BlueZ before 5.83 the Disconnected rule matches
+ * nothing; only the reasonless line above can appear.
  *
  * Only addresses this process connected are reported: on a Home Assistant OS
  * host, HA and other D-Bus clients have BLE devices of their own, and the rule
@@ -69,15 +76,28 @@ interface RawMessage {
 
 let clock: () => number = () => performance.now();
 
-/** When this process's connect to each address succeeded, by formatted MAC. */
-const connectedAt = new Map<string, number>();
+/**
+ * When this process's connect to each address succeeded, by formatted MAC, and
+ * whether this app has since sent a Disconnect for it (`ours`).
+ */
+const connectedAt = new Map<string, { at: number; ours: boolean }>();
 
 /**
  * A connect to `mac` (formatted) succeeded just now. The entry goes with the
  * line for this connection's end.
  */
 export function noteConnected(mac: string): void {
-  connectedAt.set(mac, clock());
+  connectedAt.set(mac, { at: clock(), ours: false });
+}
+
+/**
+ * This app is about to send Device1.Disconnect for `mac` (formatted). The
+ * Connected=false that follows is ours, so BlueZ before 5.83 gets no reasonless
+ * line for it. Nothing happens for an address that has no entry.
+ */
+export function noteDisconnecting(mac: string): void {
+  const entry = connectedAt.get(mac);
+  if (entry) entry.ours = true;
 }
 
 /**
@@ -105,15 +125,51 @@ function describeDisconnect(raw: unknown): string | undefined {
   const m = DEVICE_PATH.exec(msg.path);
   if (!m) return undefined;
   const mac = m[1].replace(/_/g, ':').toUpperCase();
-  const at = connectedAt.get(mac);
-  if (at === undefined) return undefined;
+  const entry = connectedAt.get(mac);
+  if (entry === undefined) return undefined;
   const [reason, message] = Array.isArray(msg.body) ? (msg.body as unknown[]) : [];
   if (typeof reason !== 'string' || typeof message !== 'string') return undefined;
   connectedAt.delete(mac);
-  const secs = ((clock() - at) / 1000).toFixed(2);
+  const secs = ((clock() - entry.at) / 1000).toFixed(2);
   const detail = message ? ` (${message})` : '';
   const gloss = REASON_GLOSS[reason] ?? OTHER_GLOSS;
   return `BlueZ: ${mac} disconnected ${secs} s after connect: ${reason}${detail} - ${gloss}`;
+}
+
+/**
+ * The debug line for a device going to Connected=false that this app did not
+ * ask for, on a BlueZ that sends no Device1.Disconnected, or undefined. The
+ * entry goes either way: BlueZ 5.83 and later have already removed it with the
+ * signal, which comes before Connected.
+ */
+function describeLinkDown(raw: unknown): string | undefined {
+  const msg = raw as RawMessage | null | undefined;
+  if (
+    msg?.type !== DBUS_MESSAGE_TYPE_SIGNAL ||
+    msg.interface !== 'org.freedesktop.DBus.Properties' ||
+    msg.member !== 'PropertiesChanged' ||
+    typeof msg.path !== 'string'
+  ) {
+    return undefined;
+  }
+  const m = DEVICE_PATH.exec(msg.path);
+  if (!m) return undefined;
+  const mac = m[1].replace(/_/g, ':').toUpperCase();
+  const entry = connectedAt.get(mac);
+  if (entry === undefined) return undefined;
+  const [iface, changed] = Array.isArray(msg.body) ? (msg.body as unknown[]) : [];
+  if (iface !== 'org.bluez.Device1' || typeof changed !== 'object' || changed === null) {
+    return undefined;
+  }
+  const connected = (changed as { Connected?: { value?: unknown } }).Connected;
+  if (connected?.value !== false) return undefined;
+  connectedAt.delete(mac);
+  if (entry.ours) return undefined;
+  const secs = ((clock() - entry.at) / 1000).toFixed(2);
+  return (
+    `BlueZ: ${mac} disconnected ${secs} s after connect without a Disconnect from this app; ` +
+    'this BlueZ does not say why (Device1.Disconnected needs BlueZ 5.83), btmon shows the reason'
+  );
 }
 
 /**
@@ -137,7 +193,7 @@ export function watchDisconnectReasons(bus: unknown): void {
     // with an error: this listener must never throw.
     raw.on('message', (msg: unknown) => {
       try {
-        const line = describeDisconnect(msg);
+        const line = describeDisconnect(msg) ?? describeLinkDown(msg);
         if (line) bleLog.debug(line);
       } catch {
         // A malformed message: no line.

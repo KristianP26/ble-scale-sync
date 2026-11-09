@@ -98,7 +98,15 @@ What to do for each reason:
 - `org.bluez.Reason.Authentication`: the scale refused the stored pairing key. Clear the pairing as described in [Every connect fails after the first session](/guide/scales/beurer#every-connect-fails-after-the-first-session).
 - Any other reason: BlueZ does not say which; `btmon` shows the code.
 
-Only BlueZ 5.83 and later (Home Assistant OS 16.2 and later) report the reason. With older BlueZ no such line appears. Debug mode is read when the app opens its D-Bus connection, so after you switch it on in a running app the lines can start one weigh-in later; a restart starts them at once.
+Only BlueZ 5.83 and later (Home Assistant OS 16.2 and later) report the reason. Older BlueZ logs a connection that ended without a Disconnect from this app, with the time but no reason, and `sudo btmon` shows the reason:
+
+```text
+BlueZ: AA:BB:CC:DD:EE:FF disconnected 5.53 s after connect without a Disconnect from this app; this BlueZ does not say why (Device1.Disconnected needs BlueZ 5.83), btmon shows the reason
+```
+
+The line also appears when a scale hangs up on its own after a complete reading, so it matters only when it comes before the reading.
+
+Debug mode is read when the app opens its D-Bus connection, so after you switch it on in a running app the lines can start one weigh-in later; a restart starts them at once.
 
 The proxy transports end a session on their own after a reading; see [when a session ends](/guide/transports#when-a-session-ends).
 
