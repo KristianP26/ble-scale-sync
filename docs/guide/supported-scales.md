@@ -21,7 +21,9 @@ Three scale families have their own guide:
 
 ## Scale list
 
-_Weight only_ means the weight is read and body composition is estimated from BMI. [Known limitations](#known-limitations) says why for most of them.
+_Weight only_ means the weight is read and body composition is estimated from BMI.
+
+[Known limitations](#known-limitations) says why for most of them.
 
 | Brand / models                                                         | Body composition | Notes |
 | ---------------------------------------------------------------------- | ---------------- | ----- |

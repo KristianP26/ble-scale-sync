@@ -101,7 +101,9 @@ Without `rmsc04_profile_byte` that is expected. See [Use the scale's own body fa
 
 ### The R-MSC04 drops the connection a few seconds in
 
-Some weigh-ins lose the connection about 5 seconds after it opened. The settled weight is still read, but that weigh-in gets no body composition from the scale. On Linux, [debug mode shows why the connection ended](/troubleshooting#connection-ended). Report the lines on [#434](https://github.com/KristianP26/ble-scale-sync/issues/434).
+Some weigh-ins lose the connection about 5 seconds after it opened. The settled weight is still read, but that weigh-in gets no body composition from the scale.
+
+On Linux, [debug mode shows why the connection ended](/troubleshooting#connection-ended). Report the lines on [#434](https://github.com/KristianP26/ble-scale-sync/issues/434).
 
 ### The R-MSC04 connects again about 30 seconds after a weigh-in
 

@@ -22,7 +22,9 @@ The first-generation Raspberry Pi Zero W (ARMv6) is not supported: `npm install`
 
 ### Hosts without Bluetooth {#esp32-proxy}
 
-If the host has no Bluetooth or is out of range of the scale, read the scale through an ESP32 or ESPHome proxy near it, or through the Bluetooth proxies Home Assistant already has. [Bluetooth transports](/guide/transports) compares them.
+If the host has no Bluetooth or is out of range of the scale, read the scale through an ESP32 or ESPHome proxy near it, or through the Bluetooth proxies Home Assistant already has.
+
+[Bluetooth transports](/guide/transports) compares them.
 
 ## Docker (Linux only) {#docker}
 

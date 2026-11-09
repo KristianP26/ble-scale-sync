@@ -70,7 +70,9 @@ docker run --rm -it \
   ghcr.io/kristianp26/ble-scale-sync:latest setup-garmin --all-users
 ```
 
-The Home Assistant add-on signs in on its first start. For an account with MFA see [Sign in to Garmin with MFA](/guide/home-assistant-addon#mfa-workaround).
+The Home Assistant add-on signs in on its first start.
+
+For an account with MFA see [Sign in to Garmin with MFA](/guide/home-assistant-addon#mfa-workaround).
 
 ### Weight only
 
@@ -492,7 +494,9 @@ With [`estimate_body_composition: false`](/guide/configuration#users), a weigh-i
 
 ## Secrets
 
-Put passwords and tokens in `${ENV_VAR}` references, as in the examples above; see [Secret references](/guide/configuration#secret-references).
+Put passwords and tokens in `${ENV_VAR}` references, as in the examples above.
+
+See [Secret references](/guide/configuration#secret-references).
 
 ## Historical readings
 

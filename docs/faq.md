@@ -114,7 +114,9 @@ Yes. Pin a pod to a node with a Bluetooth radio, with `NET_ADMIN`, `NET_RAW` and
 
 ### Docker on macOS or Windows?
 
-Docker Desktop runs containers in a VM with no access to the host's Bluetooth. Use the [standalone install](/guide/getting-started#standalone) there, or a Bluetooth proxy with Docker on another machine. See [choose a transport](/guide/transports#choose-a-transport).
+Docker Desktop runs containers in a VM with no access to the host's Bluetooth.
+
+Use the [standalone install](/guide/getting-started#standalone) there, or a Bluetooth proxy with Docker on another machine. See [choose a transport](/guide/transports#choose-a-transport).
 
 ### HA add-on or Docker? {#ha-add-on-vs-docker}
 

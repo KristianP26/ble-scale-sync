@@ -25,7 +25,9 @@ Images exist for amd64, aarch64 and armv7. To reach the host's Bluetooth adapter
 4. Start the add-on on the **Info** tab and step on the scale.
 5. Copy the scale's address from the `Auto-discovered:` or `Matched:` log line into **Scale MAC address** and restart the add-on. It then never reads a neighbor's scale.
 
-The sensors appear under **Settings** > **Devices & services** > **MQTT** after the first reading. [Home Assistant sensors](/exporters#home-assistant-sensors) lists them.
+The sensors appear under **Settings** > **Devices & services** > **MQTT** after the first reading.
+
+[Home Assistant sensors](/exporters#home-assistant-sensors) lists them.
 
 ## Bluetooth transports
 

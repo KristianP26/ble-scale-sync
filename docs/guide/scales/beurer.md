@@ -143,7 +143,9 @@ remove AA:BB:CC:DD:EE:FF
 pair AA:BB:CC:DD:EE:FF
 ```
 
-If it happens every session, set `ble.auto_clear_stale_bond: true`. If the next connect always rejects the new pairing, see [Pair with a host identity key](#pair-with-a-host-identity-key).
+If it happens every session, set `ble.auto_clear_stale_bond: true`.
+
+If the next connect always rejects the new pairing, see [Pair with a host identity key](#pair-with-a-host-identity-key).
 
 ### The scale shows a pairing code again and again
 

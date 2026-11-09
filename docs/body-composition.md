@@ -87,7 +87,9 @@ A scale's own BMR and body age replace the last two when it sends them with its 
 
 ## Athlete mode
 
-`is_athlete: true` in a user's profile adjusts the formulas for people who train regularly. The [setup wizard](/guide/configuration#setup-wizard-recommended) asks for it. What changes:
+`is_athlete: true` in a user's profile adjusts the formulas for people who train regularly.
+
+The [setup wizard](/guide/configuration#setup-wizard-recommended) asks for it. What changes:
 
 - Lean body mass: the athlete BIA coefficients in the table above.
 - Water: 74 % of lean body mass instead of 73 %.
