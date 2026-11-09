@@ -331,7 +331,8 @@ onBeforeUnmount(() => {
             >
           </div>
           <p class="bss-proof">
-            Linux, macOS or Windows. Local Bluetooth, an ESP32 or an ESPHome proxy.
+            Linux, macOS or Windows.<br />
+            Local Bluetooth, an ESP32 or an ESPHome proxy.
           </p>
           <dl class="bss-stats">
             <div v-for="s in stats" :key="s.label">
