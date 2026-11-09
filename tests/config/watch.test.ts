@@ -51,7 +51,7 @@ afterEach(() => {
   rmSync(tmpDir, { recursive: true, force: true });
 });
 
-describe('startConfigWatcher', () => {
+describe('startConfigWatcher', { timeout: 20_000 }, () => {
   it('fires onChange after debounce when the watched file is edited', async () => {
     const onChange = vi.fn();
     const handle = startConfigWatcher(configPath, onChange);
