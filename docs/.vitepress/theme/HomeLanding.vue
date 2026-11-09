@@ -1,11 +1,13 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { withBase } from 'vitepress';
+
+type Card = 'garmin' | 'ha' | 'strava';
 
 // Lines from a real run: every message below is printed by src/ as written
 // (run.ts, ble/shared.ts, runtime/processor.ts, orchestrator.ts, exporters/).
 // Only the timestamp is shortened to the time of day.
-const log: { t: string; scope: string; msg: string; ok?: boolean }[] = [
+const log: { t: string; scope: string; msg: string; ok?: boolean; card?: Card }[] = [
   { t: '07:12:01', scope: 'Sync', msg: 'Scanning for any recognized scale...' },
   { t: '07:12:09', scope: 'BLE', msg: 'Subscribed to notifications. Step on the scale.' },
   { t: '07:12:16', scope: 'BLE', msg: 'Reading complete: 78.42 kg / 512 Ohm' },
@@ -16,16 +18,54 @@ const log: { t: string; scope: string; msg: string; ok?: boolean }[] = [
   { t: '07:12:16', scope: 'Sync', msg: '  waterPercent: 56.9' },
   { t: '07:12:16', scope: 'Sync', msg: '  muscleMass: 60.71 kg' },
   { t: '07:12:16', scope: 'Sync', msg: '  visceralFat: 7' },
-  { t: '07:12:16', scope: 'Sync', msg: 'Exporting to: garmin, mqtt...' },
-  { t: '07:12:19', scope: 'Garmin', msg: 'Garmin upload succeeded.', ok: true },
+  { t: '07:12:16', scope: 'Sync', msg: 'Exporting to: garmin, mqtt, strava...' },
+  { t: '07:12:18', scope: 'Garmin', msg: 'Garmin upload succeeded.', ok: true, card: 'garmin' },
   {
-    t: '07:12:19',
+    t: '07:12:18',
     scope: 'MQTT',
     msg: 'Published to scale/body-composition (qos=1, retain=true).',
     ok: true,
+    card: 'ha',
+  },
+  {
+    t: '07:12:19',
+    scope: 'Strava',
+    msg: 'Strava weight updated to 78.42 kg.',
+    ok: true,
+    card: 'strava',
   },
   { t: '07:12:19', scope: 'Sync', msg: 'Waiting 30s before next scan...' },
-  { t: '07:12:49', scope: 'Sync', msg: 'Scanning for any recognized scale...' },
+];
+
+const cards: { id: Card; name: string; icon: string; detail: string; status: string }[] = [
+  {
+    id: 'garmin',
+    name: 'Garmin Connect',
+    icon: 'garmin.png',
+    detail: '78.42 kg, body fat 18.6 %',
+    status: 'Uploaded',
+  },
+  {
+    id: 'ha',
+    name: 'Home Assistant',
+    icon: 'homeassistant',
+    detail: 'Weight and composition over MQTT',
+    status: 'Published',
+  },
+  {
+    id: 'strava',
+    name: 'Strava',
+    icon: 'strava',
+    detail: 'Profile weight 78.42 kg',
+    status: 'Updated',
+  },
+];
+
+// Hero stats. check:counts guards the two derived numbers by these exact lines.
+const stats = [
+  { n: 42, label: 'scale protocols' },
+  { n: 13, label: 'export targets' },
+  { n: 4, label: 'ways to reach the scale' },
 ];
 
 const transports = [
@@ -41,10 +81,10 @@ const groups = [
   {
     name: 'Fitness apps',
     items: [
-      { name: 'Garmin Connect', icon: 'garmin', link: '/exporters#garmin' },
+      { name: 'Garmin Connect', icon: 'garmin.png', link: '/exporters#garmin' },
       { name: 'Strava', icon: 'strava', link: '/exporters#strava' },
-      { name: 'Intervals.icu', icon: 'intervals', link: '/exporters#intervals' },
-      { name: 'Runalyze', icon: 'runalyze', link: '/exporters#runalyze' },
+      { name: 'Intervals.icu', icon: 'intervals.png', link: '/exporters#intervals' },
+      { name: 'Runalyze', icon: 'runalyze.png', link: '/exporters#runalyze' },
     ],
   },
   {
@@ -111,6 +151,50 @@ const installs: {
   },
 ];
 
+// The setup wizard as it prints, prompts and messages copied from
+// src/wizard/steps/ble.ts and exporters.ts, the theme from @inquirer/prompts.
+// The scale and its address are an example.
+const wizard: { k: 'q' | 'a' | 'ok' | 'dim' | 'sel' | 'off' | ''; text: string }[] = [
+  {
+    k: 'a',
+    text: '\u2714 How do you want to identify your scale? Scan for nearby scales (Recommended)',
+  },
+  { k: '', text: '' },
+  { k: '', text: 'Scanning for BLE devices... (15 seconds)' },
+  { k: 'dim', text: 'Make sure your scale is powered on (step on it to wake it up).' },
+  { k: '', text: '' },
+  { k: 'ok', text: '\u2714  Found 1 recognized scale(s):' },
+  { k: '', text: '' },
+  { k: '', text: '  5C:E5:0C:4A:7B:21  MIBFS  [Xiaomi Mi Scale 2]' },
+  { k: '', text: '' },
+  { k: 'a', text: '\u2714 Use MIBFS (5C:E5:0C:4A:7B:21)? Yes' },
+  { k: 'ok', text: '  \u2714  Scale MAC set to: 5C:E5:0C:4A:7B:21' },
+  { k: '', text: '' },
+  { k: '', text: 'Select export targets:' },
+  { k: '', text: '' },
+  { k: 'q', text: '? Exporters:' },
+  {
+    k: 'sel',
+    text: '\u276f\u25c9 Garmin Connect (per-user) \u2014 Upload body composition data to Garmin Connect',
+  },
+  {
+    k: 'sel',
+    text: ' \u25c9 MQTT (shared) \u2014 Publish body composition data to an MQTT broker (supports Home Assistant auto-discovery)',
+  },
+  {
+    k: 'off',
+    text: ' \u25ef InfluxDB (shared) \u2014 Write body composition data to InfluxDB (v2, and v3 via its v2-compatible write API)',
+  },
+  {
+    k: 'sel',
+    text: ' \u25c9 Strava (per-user) \u2014 Update weight in your Strava athlete profile',
+  },
+  {
+    k: 'off',
+    text: ' \u25ef Telegram (shared) \u2014 Send measurement notifications to a Telegram chat via a bot',
+  },
+];
+
 // Both sides are four equal rows, so in the 400-unit tall line art (stretched to
 // the row height) each row's centre sits at 50, 150, 250 and 350.
 const flowH = 400;
@@ -120,41 +204,67 @@ const curve = (a: number, b: number) => `M0 ${a} C 50 ${a}, 50 ${b}, 100 ${b}`;
 const haRepo =
   'https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2FKristianP26%2Fble-scale-sync';
 
-const icon = (id: string) => withBase(`/icons/${id}.svg`);
+const icon = (id: string) => withBase(`/icons/${id.includes('.') ? id : `${id}.svg`}`);
 
-// The result card replays its three steps on load and when the pointer enters.
-const step = ref(3);
-let timers: ReturnType<typeof setTimeout>[] = [];
 const reduced = () =>
   typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
-function replay() {
+
+// The log streams in line by line on load and when the pointer enters; a result
+// card arrives with the exporter line that names it. Server render shows it all.
+const shown = ref(log.length);
+const arrived = computed(
+  () => new Set(log.slice(0, shown.value).flatMap((l) => (l.card ? [l.card] : []))),
+);
+let streamTimer: ReturnType<typeof setInterval> | undefined;
+function stream() {
   if (reduced()) return;
-  timers.forEach(clearTimeout);
-  step.value = 0;
-  timers = [1, 2, 3].map((n) => setTimeout(() => (step.value = n), 500 + n * 700));
+  clearInterval(streamTimer);
+  shown.value = 1;
+  streamTimer = setInterval(() => {
+    shown.value += 1;
+    if (shown.value >= log.length) clearInterval(streamTimer);
+  }, 260);
 }
 
+// The flow draws in once when the band comes into view.
 const band = ref<HTMLElement | null>(null);
-let moment: { destroy?: () => void } | null = null;
+const armed = ref(false);
+const inView = ref(false);
+let io: IntersectionObserver | undefined;
 
-onMounted(async () => {
-  setTimeout(replay, 1800);
-  // The dealt scroll moment is the taste-skill kit's own module, loaded as a
-  // plain file so it stays out of the docs bundle.
+const copied = ref('');
+let copiedTimer: ReturnType<typeof setTimeout> | undefined;
+async function copy(cmd: string) {
   try {
-    (window as unknown as { __momentsManual: boolean }).__momentsManual = true;
-    const url = withBase('/taste/moments/moments.js');
-    const m = await import(/* @vite-ignore */ url);
-    if (band.value) moment = await m.mount(band.value);
+    await navigator.clipboard.writeText(cmd);
+    copied.value = cmd;
+    clearTimeout(copiedTimer);
+    copiedTimer = setTimeout(() => (copied.value = ''), 1600);
   } catch {
-    // The section reads the same without the moment.
+    // No clipboard access: the command stays selectable.
   }
+}
+
+onMounted(() => {
+  stream();
+  if (reduced() || typeof IntersectionObserver !== 'function' || !band.value) return;
+  armed.value = true;
+  io = new IntersectionObserver(
+    (entries) => {
+      if (entries.some((e) => e.isIntersecting)) {
+        inView.value = true;
+        io?.disconnect();
+      }
+    },
+    { threshold: 0.25 },
+  );
+  io.observe(band.value);
 });
 
 onBeforeUnmount(() => {
-  timers.forEach(clearTimeout);
-  moment?.destroy?.();
-  if (band.value) delete (band.value as unknown as { __momentP?: unknown }).__momentP;
+  clearInterval(streamTimer);
+  clearTimeout(copiedTimer);
+  io?.disconnect();
 });
 </script>
 
@@ -180,13 +290,19 @@ onBeforeUnmount(() => {
           <p class="bss-proof">
             Linux, macOS or Windows. Local Bluetooth, an ESP32 or an ESPHome proxy.
           </p>
+          <dl class="bss-stats">
+            <div v-for="s in stats" :key="s.label">
+              <dt>{{ s.label }}</dt>
+              <dd>{{ s.n }}</dd>
+            </div>
+          </dl>
         </div>
 
         <div
           class="bss-hero__art"
           role="img"
-          aria-label="BLE Scale Sync log: a weigh-in of 78.42 kg read over Bluetooth, its body composition, and the upload to Garmin Connect and MQTT"
-          @mouseenter="replay"
+          aria-label="BLE Scale Sync log: a weigh-in of 78.42 kg read over Bluetooth, its body composition, and the upload to Garmin Connect, Home Assistant and Strava"
+          @mouseenter="stream"
         >
           <div class="bss-term" aria-hidden="true">
             <div class="bss-term__bar">
@@ -196,6 +312,7 @@ onBeforeUnmount(() => {
             <div class="bss-term__body">
               <div
                 v-for="(l, i) in log"
+                v-show="i < shown"
                 :key="i"
                 class="bss-term__ln"
                 :class="{ 'is-ok': l.ok, 'is-detail': l.msg.startsWith('  ') }"
@@ -206,19 +323,18 @@ onBeforeUnmount(() => {
               </div>
             </div>
           </div>
-          <div class="bss-card" aria-hidden="true">
-            <div class="bss-card__row">
-              <img :src="icon('garmin')" alt="" width="20" height="20" />
-              <b>Garmin Connect</b>
-              <span class="bss-chip" :class="{ 'is-on': step >= 3 }">{{
-                step >= 3 ? 'Uploaded' : 'Sending'
-              }}</span>
+          <div class="bss-results" aria-hidden="true">
+            <div
+              v-for="c in cards"
+              :key="c.id"
+              class="bss-result"
+              :class="{ 'is-on': arrived.has(c.id) }"
+            >
+              <img :src="icon(c.icon)" alt="" width="20" height="20" />
+              <b>{{ c.name }}</b>
+              <span class="bss-result__d">{{ c.detail }}</span>
+              <span class="bss-chip is-on">{{ c.status }}</span>
             </div>
-            <div class="bss-card__ln" :class="{ 'is-on': step >= 1 }">Weight 78.42 kg</div>
-            <div class="bss-card__ln" :class="{ 'is-on': step >= 2 }">
-              Body fat 18.6 %, muscle 60.71 kg
-            </div>
-            <div class="bss-card__ln" :class="{ 'is-on': step >= 3 }">Synced at 07:12:19</div>
           </div>
         </div>
       </div>
@@ -227,17 +343,15 @@ onBeforeUnmount(() => {
     <section
       ref="band"
       class="bss-sec bss-band"
+      :class="{ 'is-armed': armed, 'is-in': inView }"
       aria-labelledby="bss-flow"
-      data-moment="line-carries-colour"
-      data-moment-opts='{"from": "base"}'
     >
       <div class="bss-wrap">
         <h2 id="bss-flow">
           From the scale to your apps. <span class="bss-muted">No phone in between.</span>
         </h2>
         <p class="bss-intro">
-          Scales from Xiaomi, Renpho, Eufy, Yunmai, Beurer, Sanitas and Medisana are recognised from
-          their Bluetooth advertisements.
+          The scale is recognised from its Bluetooth advertisement.
           <a class="bss-link" :href="withBase('/guide/supported-scales')">See the scale list</a>
         </p>
 
@@ -246,6 +360,30 @@ onBeforeUnmount(() => {
           role="group"
           aria-label="How a weigh-in travels from the scale to your apps"
         >
+          <div class="bss-scale">
+            <img :src="withBase('/img/scale.webp')" alt="" width="480" height="480" />
+          </div>
+          <svg
+            class="bss-flow__lines bss-flow__lines--scale"
+            viewBox="0 0 100 400"
+            preserveAspectRatio="none"
+            aria-hidden="true"
+          >
+            <path
+              v-for="y in rowsY"
+              :key="y"
+              :d="curve(flowH / 2, y)"
+              pathLength="1"
+              style="--ld: 0s"
+            />
+            <circle
+              v-for="(y, i) in rowsY"
+              :key="'s' + y"
+              r="2.2"
+              class="bss-pulse"
+              :style="{ '--pd': `${i * 1.4}s`, offsetPath: `path('${curve(flowH / 2, y)}')` }"
+            />
+          </svg>
           <div class="bss-flow__col">
             <span class="bss-flow__head">Read by</span>
             <a v-for="t in transports" :key="t.name" class="bss-node" :href="withBase(t.link)">
@@ -258,21 +396,46 @@ onBeforeUnmount(() => {
             preserveAspectRatio="none"
             aria-hidden="true"
           >
-            <path v-for="y in rowsY" :key="y" :d="curve(y, flowH / 2)" />
+            <path
+              v-for="y in rowsY"
+              :key="y"
+              :d="curve(y, flowH / 2)"
+              pathLength="1"
+              style="--ld: 0.45s"
+            />
             <circle
               v-for="(y, i) in rowsY"
               :key="'p' + y"
               r="2.2"
               class="bss-pulse"
               :style="{
-                animationDelay: `${i * 0.7}s`,
+                '--pd': `${0.7 + i * 1.4}s`,
                 offsetPath: `path('${curve(y, flowH / 2)}')`,
               }"
             />
           </svg>
           <div class="bss-hub">
-            <img :src="withBase('/logo.svg')" alt="" width="56" height="56" />
-            <b>BLE Scale Sync</b>
+            <div class="bss-hub__name">
+              <img :src="withBase('/logo.svg')" alt="" width="28" height="28" />
+              <b>BLE Scale Sync</b>
+            </div>
+            <div class="bss-read">
+              <span class="bss-read__w">78.42<small> kg</small></span>
+              <dl>
+                <div>
+                  <dt>Body fat</dt>
+                  <dd>18.6 %</dd>
+                </div>
+                <div>
+                  <dt>Water</dt>
+                  <dd>56.9 %</dd>
+                </div>
+                <div>
+                  <dt>Muscle</dt>
+                  <dd>60.71 kg</dd>
+                </div>
+              </dl>
+            </div>
             <div class="bss-hub__runs">
               <img
                 v-for="r in runsOn"
@@ -284,7 +447,6 @@ onBeforeUnmount(() => {
                 height="20"
               />
             </div>
-            <span>Body fat, water, muscle, bone and BMR from weight and impedance</span>
             <a class="bss-link" :href="withBase('/body-composition')">See the formulas</a>
           </div>
           <svg
@@ -293,21 +455,32 @@ onBeforeUnmount(() => {
             preserveAspectRatio="none"
             aria-hidden="true"
           >
-            <path v-for="y in rowsY" :key="y" :d="curve(flowH / 2, y)" />
+            <path
+              v-for="y in rowsY"
+              :key="y"
+              :d="curve(flowH / 2, y)"
+              pathLength="1"
+              style="--ld: 0.9s"
+            />
             <circle
               v-for="(y, i) in rowsY"
               :key="'q' + y"
               r="2.2"
               class="bss-pulse"
               :style="{
-                animationDelay: `${1.4 + i * 0.7}s`,
+                '--pd': `${1.4 + i * 1.4}s`,
                 offsetPath: `path('${curve(flowH / 2, y)}')`,
               }"
             />
           </svg>
           <div class="bss-flow__col bss-flow__col--out">
             <span class="bss-flow__head">Sent to</span>
-            <div v-for="g in groups" :key="g.name" class="bss-group">
+            <div
+              v-for="(g, i) in groups"
+              :key="g.name"
+              class="bss-group"
+              :style="{ '--pd': `${1.4 + i * 1.4}s` }"
+            >
               <span class="bss-group__name">{{ g.name }}</span>
               <div class="bss-group__items">
                 <a v-for="t in g.items" :key="t.name" class="bss-target" :href="withBase(t.link)">
@@ -327,26 +500,56 @@ onBeforeUnmount(() => {
     <section id="quick-start" class="bss-sec bss-install" aria-labelledby="bss-install">
       <div class="bss-wrap">
         <h2 id="bss-install">Install on the machine near your scale</h2>
-        <div class="bss-cards">
-          <div v-for="c in installs" :key="c.name" class="bss-icard">
-            <img :src="icon(c.icon)" alt="" width="32" height="32" />
-            <h3>
-              <a class="bss-icard__link" :href="withBase(c.link)">{{ c.name }}</a>
-            </h3>
-            <p>{{ c.where }}</p>
-            <a v-if="c.badge" class="bss-badge" :href="haRepo">
-              <img
-                src="https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg"
-                alt="Add the BLE Scale Sync repository to your Home Assistant"
-                height="40"
-              />
-            </a>
-            <code v-else>{{ c.cmd }}</code>
+        <div class="bss-install__grid">
+          <div class="bss-cards">
+            <div v-for="c in installs" :key="c.name" class="bss-icard">
+              <img :src="icon(c.icon)" alt="" width="28" height="28" />
+              <div class="bss-icard__body">
+                <h3>
+                  <a class="bss-icard__link" :href="withBase(c.link)">{{ c.name }}</a>
+                </h3>
+                <p>{{ c.where }}</p>
+                <a v-if="c.badge" class="bss-badge" :href="haRepo">
+                  <img
+                    src="https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg"
+                    alt="Add the BLE Scale Sync repository to your Home Assistant"
+                    height="32"
+                  />
+                </a>
+                <div v-else class="bss-cmd">
+                  <code>{{ c.cmd }}</code>
+                  <button type="button" class="bss-copy" @click="copy(c.cmd)">
+                    {{ copied === c.cmd ? 'Copied' : 'Copy' }}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div
+            class="bss-wiz"
+            role="img"
+            aria-label="The setup wizard finds a Xiaomi Mi Scale 2 and asks which export targets to use"
+          >
+            <div class="bss-term__bar" aria-hidden="true">
+              <span class="bss-dots"><i></i><i></i><i></i></span>
+              <span>ble-scale-sync setup</span>
+            </div>
+            <div class="bss-wiz__body" aria-hidden="true">
+              <div
+                v-for="(w, i) in wizard"
+                :key="i"
+                class="bss-wiz__ln"
+                :class="w.k && `is-${w.k}`"
+              >
+                {{ w.text }}
+              </div>
+            </div>
           </div>
         </div>
         <div class="bss-close">
           <p>
             Free and open source under GPL-3.0. Measurements go only to the targets you configure.
+            The setup wizard finds the scale and writes <code>config.yaml</code>.
           </p>
           <a class="bss-btn bss-btn--primary" :href="withBase('/guide/getting-started')"
             >Install BLE Scale Sync</a
@@ -477,21 +680,50 @@ h3 {
   line-height: 24px;
   color: var(--bss-ink);
 }
+.bss-stats {
+  display: flex;
+  gap: 40px;
+  margin: 40px 0 0;
+  padding-top: 24px;
+  border-top: 1px solid var(--bss-line);
+}
+.bss-stats div {
+  display: flex;
+  flex-direction: column-reverse;
+}
+.bss-stats dd {
+  margin: 0;
+  font-size: 36px;
+  line-height: 1.1;
+  font-weight: 500;
+  letter-spacing: -0.02em;
+}
+.bss-stats dt {
+  font-size: 14px;
+  line-height: 20px;
+  color: var(--bss-muted);
+}
+
+/* The log window is cut by the frame's right edge; the result cards sit under it. */
 .bss-hero__art {
   grid-column: 7 / span 6;
-  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
   height: 100%;
   max-height: 716px;
+  box-sizing: border-box;
+  padding: 56px 32px 32px 56px;
   border-radius: var(--bss-r-lg);
   background: var(--bss-lit);
   overflow: hidden;
 }
 .bss-term {
-  position: absolute;
-  left: 64px;
-  top: 64px;
-  right: -28px;
-  bottom: -40px;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  margin-right: -60px;
   background: #0f172a;
   color: #e2e8f0;
   border-radius: var(--bss-r-md);
@@ -520,8 +752,15 @@ h3 {
   border-radius: 50%;
   background: #334155;
 }
+/* Newest line at the bottom; older lines leave by the top edge. */
 .bss-term__body {
-  padding: 16px 56px 16px 20px;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  padding: 16px 80px 16px 20px;
 }
 .bss-term__ln {
   display: grid;
@@ -541,33 +780,51 @@ h3 {
   color: #86efac;
 }
 
-.bss-card {
-  position: absolute;
-  left: 32px;
-  bottom: 32px;
-  width: 300px;
-  padding: 16px;
+.bss-results {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.bss-result {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
   background: var(--bss-bg);
   color: var(--bss-ink);
   border: 1px solid var(--bss-line);
   border-radius: var(--bss-r-md);
-  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.14);
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.1);
   font-size: 14px;
   line-height: 20px;
+  opacity: 0.35;
+  transform: translateY(6px);
+  transition:
+    opacity 0.4s ease,
+    transform 0.4s ease;
 }
-.bss-card__row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 8px;
+.bss-result.is-on {
+  opacity: 1;
+  transform: none;
 }
-.bss-card__row img {
+.bss-result img {
+  flex: none;
+  padding: 2px;
+  box-sizing: content-box;
   background: #fff;
   border-radius: 4px;
 }
-.bss-card__row b {
+.bss-result b {
   font-weight: 500;
+  white-space: nowrap;
+}
+.bss-result__d {
   flex: 1;
+  min-width: 0;
+  color: var(--bss-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .bss-chip {
   font-size: 13px;
@@ -584,19 +841,6 @@ h3 {
   background: #dcfce7;
   color: #166534;
 }
-.bss-card__ln {
-  color: var(--bss-muted);
-  opacity: 0.25;
-  transform: translateY(4px);
-  transition:
-    opacity 0.4s,
-    transform 0.4s;
-}
-.bss-card__ln.is-on {
-  opacity: 1;
-  transform: none;
-}
-
 /* Buttons: solid, one pair, step on hover, press on click. */
 .bss-btn {
   display: inline-flex;
@@ -638,7 +882,9 @@ h3 {
 .bss-link:focus-visible,
 .bss-node:focus-visible,
 .bss-icard__link:focus-visible,
-.bss-badge:focus-visible {
+.bss-badge:focus-visible,
+.bss-target:focus-visible,
+.bss-copy:focus-visible {
   outline: 2px solid var(--bss-action);
   outline-offset: 2px;
 }
@@ -661,10 +907,6 @@ h3 {
   background: var(--bss-inv-bg);
   color: var(--bss-inv-ink);
   --bss-muted: var(--bss-inv-muted);
-  /* The moment's cover runs edge to edge in the hero's ground, so the wipe reads
-     as the hero lifting off the band, not as a light card framed inside it. */
-  --mo-gap: 0px;
-  --r-lg: 0px;
 }
 .bss-intro {
   margin: 24px 0 0;
@@ -680,11 +922,21 @@ h3 {
 }
 .bss-flow {
   display: grid;
-  grid-template-columns: minmax(0, 2.6fr) minmax(0, 1fr) minmax(0, 2.6fr) minmax(0, 1fr) minmax(
-      0,
-      5.6fr
-    );
+  grid-template-columns:
+    minmax(0, 1.7fr) minmax(0, 0.5fr) minmax(0, 2.6fr) minmax(0, 0.5fr) minmax(0, 1.9fr)
+    minmax(0, 0.5fr) minmax(0, 4.6fr);
   margin-top: 48px;
+}
+.bss-scale {
+  align-self: center;
+}
+.bss-scale img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: var(--bss-r-lg);
+  /* The render's own navy ground fades into the band. */
+  mask-image: radial-gradient(closest-side, #000 70%, transparent 100%);
 }
 /* Both sides are four equal rows, sized by the tallest group card, so a line
    from the hub meets the centre of each row. */
@@ -704,6 +956,24 @@ h3 {
   border-radius: var(--bss-r-md);
   background: rgba(248, 250, 252, 0.04);
 }
+/* A group lights up when its pulse arrives; same period and delay as the pulse. */
+.bss-band:not(.is-armed) .bss-group,
+.bss-band.is-in .bss-group {
+  animation: bss-glow 5.6s ease-in-out calc(var(--pd) + 1.6s) infinite;
+}
+@keyframes bss-glow {
+  0%,
+  44%,
+  70%,
+  100% {
+    border-color: var(--bss-inv-line);
+    background-color: rgba(248, 250, 252, 0.04);
+  }
+  52% {
+    border-color: rgba(147, 197, 253, 0.6);
+    background-color: rgba(147, 197, 253, 0.1);
+  }
+}
 .bss-group__name {
   font-size: 13px;
   font-weight: 500;
@@ -712,7 +982,7 @@ h3 {
 .bss-group__items {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px 20px;
+  gap: 8px 12px;
 }
 .bss-target {
   display: inline-flex;
@@ -780,26 +1050,72 @@ h3 {
   stroke-width: 1;
   vector-effect: non-scaling-stroke;
 }
+/* Pulses run once every 5.6 s, each line in turn, after the lines have drawn. */
 .bss-pulse {
   fill: #93c5fd;
   offset-distance: 0%;
-  animation: bss-run 2.8s linear infinite;
+  opacity: 0;
+}
+.bss-band:not(.is-armed) .bss-pulse,
+.bss-band.is-in .bss-pulse {
+  animation: bss-run 5.6s linear calc(var(--pd) + 1.6s) infinite;
 }
 @keyframes bss-run {
-  from {
+  0% {
     offset-distance: 0%;
     opacity: 0;
   }
-  15% {
+  6% {
     opacity: 1;
   }
-  85% {
+  44% {
     opacity: 1;
   }
-  to {
+  50%,
+  100% {
     offset-distance: 100%;
     opacity: 0;
   }
+}
+
+/* Draw-in: lines trace from the scale to the targets, the boxes rise in step. */
+.bss-band.is-armed .bss-flow__lines path {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  transition: stroke-dashoffset 0.8s ease var(--ld);
+}
+.bss-band.is-armed.is-in .bss-flow__lines path {
+  stroke-dashoffset: 0;
+}
+.bss-band.is-armed .bss-scale,
+.bss-band.is-armed .bss-node,
+.bss-band.is-armed .bss-hub,
+.bss-band.is-armed .bss-group {
+  opacity: 0;
+  transform: translateY(8px);
+  transition:
+    opacity 0.5s ease var(--rd, 0s),
+    transform 0.5s ease var(--rd, 0s),
+    border-color 0.2s ease;
+}
+.bss-band.is-armed .bss-node {
+  --rd: 0.35s;
+}
+.bss-band.is-armed .bss-hub {
+  --rd: 0.8s;
+}
+.bss-band.is-armed .bss-group {
+  --rd: 1.2s;
+}
+.bss-band.is-armed.is-in .bss-scale,
+.bss-band.is-armed.is-in .bss-node,
+.bss-band.is-armed.is-in .bss-hub,
+.bss-band.is-armed.is-in .bss-group {
+  opacity: 1;
+  transform: none;
+}
+.bss-band.is-armed.is-in .bss-node:hover {
+  transform: translateY(-2px);
 }
 .bss-hub {
   align-self: center;
@@ -811,9 +1127,47 @@ h3 {
   background: #16213a;
   border: 1px solid rgba(147, 197, 253, 0.35);
 }
-.bss-hub b {
-  font-size: 20px;
+.bss-hub__name {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.bss-hub__name b {
+  font-size: 18px;
   font-weight: 500;
+}
+.bss-read {
+  padding: 12px 0;
+  border-top: 1px solid var(--bss-inv-line);
+  border-bottom: 1px solid var(--bss-inv-line);
+}
+.bss-read__w {
+  display: block;
+  font-size: 36px;
+  line-height: 1.1;
+  font-weight: 500;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+.bss-read__w small {
+  font-size: 18px;
+  color: var(--bss-inv-muted);
+}
+.bss-read dl {
+  margin: 8px 0 0;
+}
+.bss-read dl div {
+  display: flex;
+  justify-content: space-between;
+  font-size: 14px;
+  line-height: 22px;
+}
+.bss-read dt {
+  color: var(--bss-inv-muted);
+}
+.bss-read dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
 }
 .bss-hub__runs {
   display: flex;
@@ -824,11 +1178,6 @@ h3 {
   box-sizing: content-box;
   background: #fff;
   border-radius: 6px;
-}
-.bss-hub span {
-  font-size: 15px;
-  line-height: 22px;
-  color: var(--bss-inv-muted);
 }
 .bss-hub .bss-link {
   font-size: 15px;
@@ -841,73 +1190,91 @@ h3 {
   color: var(--bss-inv-muted);
 }
 
-/* Install. */
-.bss-cards {
+/* Install: three ways in a column, the setup wizard beside them. */
+.bss-install__grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
   gap: 24px;
   margin-top: 48px;
+  align-items: stretch;
 }
-.bss-icard {
+.bss-cards {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  padding: 32px;
+}
+.bss-icard {
+  position: relative;
+  display: flex;
+  gap: 16px;
+  padding: 20px 24px;
   border-radius: var(--bss-r-lg);
   background: var(--bss-surface);
   color: var(--bss-ink);
-  text-decoration: none;
   transition: transform 0.2s ease;
 }
-.bss-icard:has(a:hover) {
+.bss-icard:has(.bss-icard__link:hover) {
   transform: translateY(-2px);
+}
+.bss-icard > img {
+  flex: none;
+  align-self: flex-start;
+  padding: 6px;
+  box-sizing: content-box;
+  background: #fff;
+  border-radius: 8px;
+}
+.bss-icard__body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
 }
 .bss-icard__link {
   color: inherit;
   text-decoration: none;
 }
-/* The whole card opens the guide; the badge sits above that layer. */
+/* The whole card opens the guide; the badge and the copy button sit above that layer. */
 .bss-icard__link::after {
   content: '';
   position: absolute;
   inset: 0;
   border-radius: inherit;
 }
-.bss-icard {
-  position: relative;
+.bss-icard p {
+  margin: 0;
+  font-size: 15px;
+  line-height: 24px;
+  color: var(--bss-ink);
 }
 .bss-badge {
   position: relative;
   z-index: 1;
   align-self: flex-start;
-  margin-top: 8px;
-  height: 40px;
+  margin-top: 4px;
+  height: 32px;
 }
-.bss-icard .bss-badge img {
+.bss-badge img {
   display: block;
-  height: 40px;
+  height: 32px;
   width: auto;
-  padding: 0;
-  margin: 0;
-  background: none;
 }
-.bss-icard img {
-  padding: 6px;
-  box-sizing: content-box;
-  background: #fff;
-  border-radius: 8px;
-  margin-bottom: 8px;
+.bss-cmd {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 4px;
+  padding: 6px 6px 6px 12px;
+  border: 1px solid var(--bss-line);
+  border-radius: var(--bss-r-btn);
+  background: var(--bss-bg);
 }
-.bss-icard p {
-  margin: 0;
-  font-size: 16px;
-  line-height: 26px;
-  color: var(--bss-ink);
+.bss-cmd code {
   flex: 1;
-}
-.bss-icard code {
-  display: block;
-  margin-top: 8px;
+  min-width: 0;
   padding: 0;
   background: none;
   font-family: var(--bss-mono);
@@ -915,6 +1282,65 @@ h3 {
   line-height: 20px;
   color: var(--bss-ink);
   overflow-wrap: anywhere;
+}
+.bss-copy {
+  flex: none;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--bss-line);
+  border-radius: 6px;
+  background: var(--bss-surface);
+  color: var(--bss-ink);
+  font: 500 13px/1 var(--bss-font);
+  cursor: pointer;
+  transition:
+    transform 0.16s ease,
+    border-color 0.16s ease;
+}
+.bss-copy:hover {
+  border-color: var(--bss-ink);
+}
+.bss-copy:active {
+  transform: scale(0.96);
+}
+.bss-wiz {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-radius: var(--bss-r-lg);
+  background: #0f172a;
+  color: #e2e8f0;
+  overflow: hidden;
+}
+.bss-wiz__body {
+  flex: 1;
+  padding: 16px 0 16px 20px;
+  font-family: var(--bss-mono);
+  font-size: 13px;
+  line-height: 20px;
+  overflow: hidden;
+}
+.bss-wiz__ln {
+  min-height: 20px;
+  white-space: pre;
+}
+.bss-wiz__ln.is-a,
+.bss-wiz__ln.is-ok {
+  color: #86efac;
+}
+.bss-wiz__ln.is-q {
+  color: #7dd3fc;
+}
+.bss-wiz__ln.is-dim,
+.bss-wiz__ln.is-off {
+  color: #64748b;
+}
+.bss-wiz__ln.is-sel {
+  color: #e2e8f0;
+}
+.bss-close code {
+  font-family: var(--bss-mono);
+  font-size: 0.85em;
 }
 .bss-close {
   display: flex;
@@ -959,6 +1385,21 @@ h3 {
   }
 }
 
+/* Under 1400px there is no room for the scale beside four columns; it comes back
+   stacked on a tablet. */
+@media (max-width: 1399px) {
+  .bss-flow {
+    grid-template-columns: minmax(0, 3fr) minmax(0, 0.6fr) minmax(0, 2.2fr) minmax(0, 0.6fr) minmax(
+        0,
+        5.8fr
+      );
+  }
+  .bss-scale,
+  .bss-flow__lines--scale {
+    display: none;
+  }
+}
+
 @media (max-width: 1279px) {
   .bss {
     --bss-gut: 48px;
@@ -971,6 +1412,12 @@ h3 {
         0,
         5.8fr
       );
+  }
+  .bss-stats {
+    gap: 28px;
+  }
+  .bss-stats dd {
+    font-size: 30px;
   }
   .bss-node,
   .bss-target {
@@ -986,21 +1433,20 @@ h3 {
 
 /* Tablet: the split stacks, text first, the frame takes what is left. */
 @media (max-width: 1023px) {
+  /* Stacked, the hero grows with its content instead of one fixed screen. */
+  .bss-hero {
+    height: auto;
+    min-height: calc(100svh - var(--vp-nav-height));
+  }
   .bss-hero .bss-grid {
     display: flex;
     flex-direction: column;
   }
   .bss-hero__art {
     flex: 1;
-    min-height: 260px;
+    min-height: 440px;
     margin-top: 40px;
-  }
-  .bss-term {
-    left: 32px;
-    top: 32px;
-  }
-  .bss-card {
-    display: none;
+    padding: 32px 24px 24px 32px;
   }
   h2 {
     font-size: 40px;
@@ -1011,6 +1457,10 @@ h3 {
   }
   .bss-flow__lines {
     display: none;
+  }
+  .bss-scale {
+    display: block;
+    width: 160px;
   }
   .bss-flow__col {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1028,12 +1478,8 @@ h3 {
     height: auto;
     min-height: 44px;
   }
-  .bss-cards {
-    grid-template-columns: 1fr;
-    gap: 12px;
-  }
-  .bss-icard {
-    padding: 24px;
+  .bss-install__grid {
+    grid-template-columns: minmax(0, 1fr);
   }
   .bss-close {
     flex-direction: column;
@@ -1048,7 +1494,6 @@ h3 {
     --bss-padb: 48px;
   }
   .bss-hero {
-    height: calc(100svh - var(--vp-nav-height));
     padding-top: 32px;
     padding-bottom: 24px;
   }
@@ -1072,16 +1517,34 @@ h3 {
   .bss-proof {
     display: none;
   }
-  .bss-card {
-    display: none;
+  .bss-stats {
+    margin-top: 28px;
+    padding-top: 16px;
+    gap: 20px;
+  }
+  .bss-stats dd {
+    font-size: 24px;
+  }
+  .bss-stats dt {
+    font-size: 13px;
+    line-height: 18px;
   }
   .bss-hero__art {
-    min-height: 220px;
+    min-height: 340px;
     margin-top: 32px;
+    padding: 16px 16px 16px 16px;
   }
   .bss-term {
-    left: 16px;
-    top: 16px;
+    margin-right: -32px;
+  }
+  .bss-result__d {
+    display: none;
+  }
+  .bss-result b {
+    flex: 1;
+  }
+  .bss-icard {
+    padding: 16px;
   }
   .bss-term__t,
   .bss-term__ln.is-detail {
@@ -1097,14 +1560,14 @@ h3 {
   [data-enter] .bss-hero__art {
     animation: none;
   }
-  .bss-pulse {
+  .bss-band .bss-pulse,
+  .bss-band .bss-group {
     animation: none;
-    opacity: 0;
   }
   .bss-btn,
   .bss-node,
   .bss-icard,
-  .bss-card__ln {
+  .bss-result {
     transition: none;
   }
 }

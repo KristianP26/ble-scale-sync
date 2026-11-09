@@ -134,6 +134,18 @@ export const OCCURRENCES: Occurrence[] = [
     label: 'home page hero',
   },
   {
+    file: 'docs/.vitepress/theme/HomeLanding.vue',
+    pattern: /\{ n: (\d+), label: 'scale protocols' \}/,
+    counts: ['protocol'],
+    label: 'home page stats, scale protocols',
+  },
+  {
+    file: 'docs/.vitepress/theme/HomeLanding.vue',
+    pattern: /\{ n: (\d+), label: 'export targets' \}/,
+    counts: ['exporters'],
+    label: 'home page stats, export targets',
+  },
+  {
     file: 'CONTRIBUTING.md',
     pattern: /for all (\d+) adapters/,
     counts: ['protocol'],
