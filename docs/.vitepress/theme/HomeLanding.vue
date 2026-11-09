@@ -119,11 +119,27 @@ const runsOn = [
   { name: 'Node.js', icon: 'nodedotjs' },
 ];
 
+// `cmd` is what Copy puts on the clipboard, `show` the short form on the card.
+// The Docker one is the setup wizard from docs/guide/getting-started.md (step 1),
+// the one-shot container that finds the scale and writes config.yaml.
+const dockerSetup = [
+  'docker run --rm -it \\',
+  '  --network host \\',
+  '  --cap-add NET_ADMIN --cap-add NET_RAW \\',
+  '  --group-add "$(getent group bluetooth | cut -d: -f3)" \\',
+  '  -v /var/run/dbus:/var/run/dbus:ro \\',
+  '  -v ./config.yaml:/app/config.yaml \\',
+  '  -v ./garmin-tokens:/app/garmin-tokens \\',
+  '  -v ./strava-tokens:/app/strava-tokens \\',
+  '  ghcr.io/kristianp26/ble-scale-sync:latest setup',
+].join('\n');
+
 const installs: {
   name: string;
   icon: string;
   where: string;
   cmd: string;
+  show?: string;
   link: string;
   badge?: boolean;
 }[] = [
@@ -131,7 +147,8 @@ const installs: {
     name: 'Docker container',
     icon: 'docker',
     where: 'Linux, including Raspberry Pi and NAS.',
-    cmd: 'docker compose up -d',
+    cmd: dockerSetup,
+    show: 'docker run --rm -it ... setup',
     link: '/guide/getting-started#docker',
   },
   {
@@ -199,6 +216,10 @@ const wizard: { k: 'q' | 'a' | 'ok' | 'dim' | 'sel' | 'off' | ''; text: string }
 // the row height) each row's centre sits at 50, 150, 250 and 350.
 const flowH = 400;
 const rowsY = [50, 150, 250, 350];
+// The transports sit in one tight stack, 200px tall (four 44px nodes, 8px apart),
+// so their lines are drawn 1:1 in a 200-unit art centred on the hub.
+const leftY = [22, 74, 126, 178];
+const leftMid = 100;
 const curve = (a: number, b: number) => `M0 ${a} C 50 ${a}, 50 ${b}, 100 ${b}`;
 
 const haRepo =
@@ -364,59 +385,59 @@ onBeforeUnmount(() => {
             <img :src="withBase('/img/scale.webp')" alt="" width="480" height="480" />
           </div>
           <svg
-            class="bss-flow__lines bss-flow__lines--scale"
-            viewBox="0 0 100 400"
+            class="bss-flow__lines bss-flow__lines--left bss-flow__lines--scale"
+            viewBox="0 0 100 200"
             preserveAspectRatio="none"
             aria-hidden="true"
           >
             <path
-              v-for="y in rowsY"
+              v-for="y in leftY"
               :key="y"
-              :d="curve(flowH / 2, y)"
+              :d="curve(leftMid, y)"
               pathLength="1"
               style="--ld: 0s"
             />
             <circle
-              v-for="(y, i) in rowsY"
+              v-for="(y, i) in leftY"
               :key="'s' + y"
               r="2.2"
               class="bss-pulse"
-              :style="{ '--pd': `${i * 1.4}s`, offsetPath: `path('${curve(flowH / 2, y)}')` }"
+              :style="{ '--pd': `${i * 1.4}s`, offsetPath: `path('${curve(leftMid, y)}')` }"
             />
           </svg>
-          <div class="bss-flow__col">
+          <div class="bss-flow__col bss-flow__col--in">
             <span class="bss-flow__head">Read by</span>
             <a v-for="t in transports" :key="t.name" class="bss-node" :href="withBase(t.link)">
               <img :src="icon(t.icon)" alt="" width="20" height="20" />{{ t.name }}
             </a>
           </div>
           <svg
-            class="bss-flow__lines"
-            viewBox="0 0 100 400"
+            class="bss-flow__lines bss-flow__lines--left"
+            viewBox="0 0 100 200"
             preserveAspectRatio="none"
             aria-hidden="true"
           >
             <path
-              v-for="y in rowsY"
+              v-for="y in leftY"
               :key="y"
-              :d="curve(y, flowH / 2)"
+              :d="curve(y, leftMid)"
               pathLength="1"
               style="--ld: 0.45s"
             />
             <circle
-              v-for="(y, i) in rowsY"
+              v-for="(y, i) in leftY"
               :key="'p' + y"
               r="2.2"
               class="bss-pulse"
               :style="{
                 '--pd': `${0.7 + i * 1.4}s`,
-                offsetPath: `path('${curve(y, flowH / 2)}')`,
+                offsetPath: `path('${curve(y, leftMid)}')`,
               }"
             />
           </svg>
           <div class="bss-hub">
             <div class="bss-hub__name">
-              <img :src="withBase('/logo.svg')" alt="" width="28" height="28" />
+              <img :src="withBase('/logo.svg')" alt="" width="44" height="44" />
               <b>BLE Scale Sync</b>
             </div>
             <div class="bss-read">
@@ -517,7 +538,7 @@ onBeforeUnmount(() => {
                   />
                 </a>
                 <div v-else class="bss-cmd">
-                  <code>{{ c.cmd }}</code>
+                  <code :title="c.show ? c.cmd : undefined">{{ c.show ?? c.cmd }}</code>
                   <button type="button" class="bss-copy" @click="copy(c.cmd)">
                     {{ copied === c.cmd ? 'Copied' : 'Copy' }}
                   </button>
@@ -923,8 +944,8 @@ h3 {
 .bss-flow {
   display: grid;
   grid-template-columns:
-    minmax(0, 1.7fr) minmax(0, 0.5fr) minmax(0, 2.6fr) minmax(0, 0.5fr) minmax(0, 1.9fr)
-    minmax(0, 0.5fr) minmax(0, 4.6fr);
+    minmax(0, 1.4fr) minmax(0, 0.4fr) minmax(0, 2.6fr) minmax(0, 0.4fr) minmax(0, 2.6fr)
+    minmax(0, 0.4fr) minmax(0, 4.7fr);
   margin-top: 48px;
 }
 .bss-scale {
@@ -1044,6 +1065,16 @@ h3 {
   height: 100%;
   overflow: visible;
 }
+.bss-flow__lines--left {
+  align-self: center;
+  height: 200px;
+}
+/* The transports stay one tight stack, centred on the hub. */
+.bss-flow__col--in {
+  grid-template-rows: none;
+  gap: 8px;
+  align-self: center;
+}
 .bss-flow__lines path {
   fill: none;
   stroke: rgba(148, 197, 255, 0.35);
@@ -1117,24 +1148,37 @@ h3 {
 .bss-band.is-armed.is-in .bss-node:hover {
   transform: translateY(-2px);
 }
+/* The hub is the product: the largest box, lit in the brand blue. */
 .bss-hub {
+  position: relative;
+  z-index: 1;
   align-self: center;
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 24px;
+  gap: 12px;
+  padding: 28px;
   border-radius: var(--bss-r-lg);
-  background: #16213a;
-  border: 1px solid rgba(147, 197, 253, 0.35);
+  background: linear-gradient(160deg, #1e3a8a 0%, #172554 55%, #111b3a 100%);
+  border: 1px solid rgba(147, 197, 253, 0.55);
+  box-shadow:
+    0 0 0 6px rgba(59, 130, 246, 0.08),
+    0 24px 64px rgba(37, 99, 235, 0.35);
 }
 .bss-hub__name {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
+}
+.bss-hub__name img {
+  flex: none;
+  border-radius: 10px;
 }
 .bss-hub__name b {
-  font-size: 18px;
-  font-weight: 500;
+  font-size: 22px;
+  line-height: 1.2;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
 }
 .bss-read {
   padding: 12px 0;
@@ -1389,10 +1433,9 @@ h3 {
    stacked on a tablet. */
 @media (max-width: 1399px) {
   .bss-flow {
-    grid-template-columns: minmax(0, 3fr) minmax(0, 0.6fr) minmax(0, 2.2fr) minmax(0, 0.6fr) minmax(
-        0,
-        5.8fr
-      );
+    grid-template-columns:
+      minmax(0, 2.6fr) minmax(0, 0.5fr) minmax(0, 2.8fr) minmax(0, 0.5fr)
+      minmax(0, 5.4fr);
   }
   .bss-scale,
   .bss-flow__lines--scale {
@@ -1408,13 +1451,22 @@ h3 {
     font-size: 52px;
   }
   .bss-flow {
-    grid-template-columns: minmax(0, 3fr) minmax(0, 0.6fr) minmax(0, 2.2fr) minmax(0, 0.6fr) minmax(
-        0,
-        5.8fr
-      );
+    grid-template-columns:
+      minmax(0, 2.9fr) minmax(0, 0.4fr) minmax(0, 2.6fr) minmax(0, 0.4fr)
+      minmax(0, 5.3fr);
   }
   .bss-stats {
     gap: 28px;
+  }
+  .bss-hub {
+    padding: 22px;
+  }
+  .bss-hub__name img {
+    width: 36px;
+    height: 36px;
+  }
+  .bss-hub__name b {
+    font-size: 18px;
   }
   .bss-stats dd {
     font-size: 30px;
