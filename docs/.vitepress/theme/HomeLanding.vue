@@ -29,19 +29,27 @@ const log: { t: string; scope: string; msg: string; ok?: boolean }[] = [
 ];
 
 const transports = [
-  { name: 'This host’s Bluetooth', icon: 'raspberrypi', link: '/guide/transports' },
-  { name: 'ESP32 proxy', icon: 'esphome', link: '/guide/esp32-proxy' },
+  { name: "This host's Bluetooth", icon: 'raspberrypi', link: '/guide/transports' },
+  { name: 'ESP32 proxy', icon: 'espressif', link: '/guide/esp32-proxy' },
   { name: 'ESPHome proxy', icon: 'esphome', link: '/guide/esphome-proxy' },
   { name: 'Home Assistant Bluetooth', icon: 'homeassistant', link: '/guide/ha-bluetooth' },
 ];
 
+// Every exporter in src/exporters/registry.ts, so the column matches the count in the hero.
 const targets = [
   { name: 'Garmin Connect', icon: 'garmin', link: '/exporters#garmin' },
   { name: 'Strava', icon: 'strava', link: '/exporters#strava' },
-  { name: 'Home Assistant', icon: 'homeassistant', link: '/exporters#mqtt' },
+  { name: 'Home Assistant (MQTT)', icon: 'homeassistant', link: '/exporters#mqtt' },
   { name: 'InfluxDB', icon: 'influxdb', link: '/exporters#influxdb' },
+  { name: 'Intervals.icu', icon: 'intervals', link: '/exporters#intervals' },
+  { name: 'Runalyze', icon: 'runalyze', link: '/exporters#runalyze' },
   { name: 'Telegram', icon: 'telegram', link: '/exporters#telegram' },
   { name: 'Ntfy', icon: 'ntfy', link: '/exporters#ntfy' },
+  { name: 'Wger', icon: 'wger', link: '/exporters#wger' },
+  { name: 'HealthLog', icon: 'healthlog', link: '/exporters#healthlog' },
+  { name: 'Dreeve', icon: 'dreeve', link: '/exporters#dreeve' },
+  { name: 'Webhook', icon: 'webhook', link: '/exporters#webhook' },
+  { name: 'CSV or JSONL file', icon: 'file', link: '/exporters#file' },
 ];
 
 const installs: {
@@ -76,10 +84,13 @@ const installs: {
   },
 ];
 
-// Node centres in the 304px tall flow: 44px nodes, 8px apart; the left
-// column of four sits centred against the right column of six.
-const leftY = [74, 126, 178, 230];
-const rightY = [22, 74, 126, 178, 230, 282];
+// Node centres in the 356px tall flow: 44px nodes, 8px apart. The left column
+// of four sits centred against the seven rows of the two-column right side.
+const rowY = (n: number, h: number) =>
+  Array.from({ length: n }, (_, i) => (h - (n * 52 - 8)) / 2 + 22 + i * 52);
+const flowH = 356;
+const leftY = rowY(4, flowH);
+const rightY = rowY(Math.ceil(targets.length / 2), flowH);
 const curve = (a: number, b: number) => `M0 ${a} C 50 ${a}, 50 ${b}, 100 ${b}`;
 
 const haRepo =
@@ -219,17 +230,20 @@ onBeforeUnmount(() => {
           </div>
           <svg
             class="bss-flow__lines"
-            viewBox="0 0 100 304"
+            viewBox="0 0 100 356"
             preserveAspectRatio="none"
             aria-hidden="true"
           >
-            <path v-for="y in leftY" :key="y" :d="curve(y, 152)" />
+            <path v-for="y in leftY" :key="y" :d="curve(y, flowH / 2)" />
             <circle
               v-for="(y, i) in leftY"
               :key="'p' + y"
               r="2.2"
               class="bss-pulse"
-              :style="{ animationDelay: `${i * 0.7}s`, offsetPath: `path('${curve(y, 152)}')` }"
+              :style="{
+                animationDelay: `${i * 0.7}s`,
+                offsetPath: `path('${curve(y, flowH / 2)}')`,
+              }"
             />
           </svg>
           <div class="bss-hub">
@@ -240,11 +254,11 @@ onBeforeUnmount(() => {
           </div>
           <svg
             class="bss-flow__lines"
-            viewBox="0 0 100 304"
+            viewBox="0 0 100 356"
             preserveAspectRatio="none"
             aria-hidden="true"
           >
-            <path v-for="y in rightY" :key="y" :d="curve(152, y)" />
+            <path v-for="y in rightY" :key="y" :d="curve(flowH / 2, y)" />
             <circle
               v-for="(y, i) in rightY"
               :key="'q' + y"
@@ -252,11 +266,11 @@ onBeforeUnmount(() => {
               class="bss-pulse"
               :style="{
                 animationDelay: `${1.4 + i * 0.45}s`,
-                offsetPath: `path('${curve(152, y)}')`,
+                offsetPath: `path('${curve(flowH / 2, y)}')`,
               }"
             />
           </svg>
-          <div class="bss-flow__col">
+          <div class="bss-flow__col bss-flow__col--out">
             <span class="bss-flow__head">Sent to</span>
             <a v-for="t in targets" :key="t.name" class="bss-node" :href="withBase(t.link)">
               <img :src="icon(t.icon)" alt="" width="20" height="20" />{{ t.name }}
@@ -336,7 +350,7 @@ onBeforeUnmount(() => {
   font-family: var(--bss-font);
   font-stretch: 96%;
 }
-:global(.dark) .bss {
+:global(.dark .bss) {
   --bss-action: #3b82f6;
   --bss-action-hover: #2563eb;
   --bss-inv-bg: #0b1222;
@@ -607,6 +621,10 @@ h3 {
   background: var(--bss-inv-bg);
   color: var(--bss-inv-ink);
   --bss-muted: var(--bss-inv-muted);
+  /* The moment's cover runs edge to edge in the hero's ground, so the wipe reads
+     as the hero lifting off the band, not as a light card framed inside it. */
+  --mo-gap: 0px;
+  --r-lg: 0px;
 }
 .bss-intro {
   margin: 24px 0 0;
@@ -622,9 +640,9 @@ h3 {
 }
 .bss-flow {
   display: grid;
-  grid-template-columns: minmax(0, 3.2fr) minmax(0, 1.4fr) minmax(0, 3fr) minmax(0, 1.4fr) minmax(
+  grid-template-columns: minmax(0, 2.6fr) minmax(0, 1fr) minmax(0, 2.6fr) minmax(0, 1fr) minmax(
       0,
-      3.2fr
+      5.6fr
     );
   align-items: center;
   margin-top: 48px;
@@ -634,6 +652,11 @@ h3 {
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+/* Thirteen targets sit in two columns, seven rows; a line meets each row. */
+.bss-flow__col--out {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 .bss-flow__head {
   position: absolute;
@@ -672,7 +695,7 @@ h3 {
 }
 .bss-flow__lines {
   width: 100%;
-  height: 304px;
+  height: 356px;
   overflow: visible;
 }
 .bss-flow__lines path {
@@ -857,10 +880,13 @@ h3 {
     font-size: 52px;
   }
   .bss-flow {
-    grid-template-columns: minmax(0, 3.4fr) minmax(0, 0.9fr) minmax(0, 3fr) minmax(0, 0.9fr) minmax(
+    grid-template-columns: minmax(0, 3fr) minmax(0, 0.6fr) minmax(0, 2.2fr) minmax(0, 0.6fr) minmax(
         0,
-        3.4fr
+        5.8fr
       );
+  }
+  .bss-node {
+    font-size: 14px;
   }
 }
 
