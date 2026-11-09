@@ -154,7 +154,7 @@ A stored weigh-in is exported once: the newest exported one is recorded in `.sca
 
 ### The scale connects, the handshake completes, no weight arrives
 
-Work through [Options](#options) in order. Make sure someone stands on the scale during the connection, because a scale nobody stands on looks the same. If no option helps, open an issue with a `runtime.debug: true` log of one weigh-in, the scale model, the transport and the options you tried.
+Work through [Options](#options) in order. Make sure someone stands on the scale during the connection, because a scale nobody stands on looks the same. Over an ESP32 proxy, a log line such as `QN: 0xb1 part 3 of 3 arrived without part 1` likely means the board dropped notifications: [flash the current firmware](/guide/esp32-proxy#flashing-the-firmware). If no option helps, open an issue with a `runtime.debug: true` log of one weigh-in, the scale model, the transport and the options you tried.
 
 ### The display shows only the weight
 

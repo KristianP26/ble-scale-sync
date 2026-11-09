@@ -27,9 +27,10 @@ import { dialect as va19 } from './va19.js';
  * reads only its slot, status and weight, to judge the scale's own
  * composition. The reading comes from these 0xB1/0xB4 result frames. The
  * burst's non-weight parts (repeated 0xB4s, the 0xB1 parts after the first)
- * come back null, so they are not logged as ignored. A 0xB1 in one part also
- * carries the scale's own results (decodeExtendedResult), pinned to the
- * reading for computeMetrics to judge (#331, D096).
+ * come back null, so they are not logged as ignored; only a 0xB1 part that
+ * comes with no first part before it gets one line (noteResultPart). A 0xB1
+ * in one part also carries the scale's own results (decodeExtendedResult),
+ * pinned to the reading for computeMetrics to judge (#331, D096).
  *
  * The Arboleaf CS10K also sends a 20-byte 0x12, but without the dynamic-package
  * bit, and weighs in with the 19-byte dialect's frames: frame() offers each one
@@ -97,6 +98,27 @@ function noteLiveFrame(s: QnSession, data: Buffer): void {
 }
 
 /**
+ * A 0xB1 part after the first with no first part before it in this session:
+ * the part with the weight and the slot never reached the host. Over an ESP32
+ * proxy that is firmware older than the notification queue, which kept only the
+ * last notification of a burst; other transports are not known to do it, so the
+ * line names the likely cause and not a certain one. One line per session (#501).
+ */
+function noteResultPart(s: QnSession, data: Buffer): void {
+  if (data[3] === 0x01) {
+    s.resultFirstPartSeen = true;
+    return;
+  }
+  if (s.resultFirstPartSeen || s.resultPartHintLogged) return;
+  s.resultPartHintLogged = true;
+  bleLog.info(
+    `QN: 0xb1 part ${data[3]} of ${data[2]} arrived without part 1, which carries the weight. ` +
+      'On an ESP32 proxy that is likely firmware that drops notifications of a burst: flash the ' +
+      'current firmware, https://blescalesync.dev/guide/esp32-proxy#flashing-the-firmware (#501)',
+  );
+}
+
+/**
  * Decode an extended-dialect completed-weigh-in result frame (#235).
  *
  * Accepts the consolidated 0xB4 (weight at [11]) or the first part of the
@@ -114,6 +136,8 @@ function resultFrame(s: QnSession, data: Buffer): ScaleReading | null {
   // frame; a cheap guard against a truncated or mis-framed notification being
   // read as a weight.
   if (!hasValidSumChecksum(data)) return null;
+
+  if (data[0] === RESULT_OPCODE_B1) noteResultPart(s, data);
 
   let rawWeight: number | null = null;
   // [2] is how many parts the scale split the record into and [3] which part

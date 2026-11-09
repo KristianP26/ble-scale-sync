@@ -236,6 +236,15 @@ export class QnSession {
   extendedResultEmitted = false;
 
   /**
+   * Whether a 0xB1 first part ([3] 01, the only part with the weight) arrived
+   * this session, and whether the line that says a later part came without
+   * it was logged (once per session). A host that sees part 2 or 3 first lost
+   * part 1 on the way, which an ESP32 proxy on old firmware does (#501).
+   */
+  resultFirstPartSeen = false;
+  resultPartHintLogged = false;
+
+  /**
    * Timestamp (Date.now()) of the first stable R1=R2=0 frame seen on a
    * long-frame variant. After IMPEDANCE_GRACE_MS without an impedance frame,
    * subsequent R1=R2=0 stable frames are accepted.

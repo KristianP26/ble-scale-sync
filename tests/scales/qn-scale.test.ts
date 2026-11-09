@@ -279,6 +279,12 @@ const B1_501_PART3 = Buffer.from(
 );
 
 /**
+ * Derived from B1_501: the weight at [5..6] set to 0, so the first part is
+ * read but reads no weight (out of range) and no reading is emitted.
+ */
+const B1_501_NO_WEIGHT = derive(B1_501, { 5: 0x00, 6: 0x00 });
+
+/**
  * #331, a 20-byte Arboleaf CS10E over an ESPHome proxy (v1.39.0): its live
  * 0x10 and its 0xB1, byte for byte from the reporter's public comment, both
  * checksums valid. The 0xB1 comes in one part of 119 bytes ([2] 01, [3] 01):
@@ -391,6 +397,7 @@ const DERIVED: [string, Buffer, Buffer, number[]][] = [
   ['RECORD_463_SLOT2', RECORD_463_SLOT2, RECORD_463, [5]],
   ['VISIT_REFUSED_CS10E', VISIT_REFUSED_CS10E, VISIT_OK_CS10E_1104, [4]],
   ['VISIT_OK_CS10E_NOT_ITS_LENGTH', VISIT_OK_CS10E_NOT_ITS_LENGTH, VISIT_OK_CS10E_1104, [1]],
+  ['B1_501_NO_WEIGHT', B1_501_NO_WEIGHT, B1_501, [5, 6]],
   ['B1_CS10E_TWO_PARTS', B1_CS10E_TWO_PARTS, B1_CS10E_331, [2]],
   ['B1_CS10E_NOT_ITS_LENGTH', B1_CS10E_NOT_ITS_LENGTH, B1_CS10E_331, [1]],
   ['B1_CS10E_SLOT2', B1_CS10E_SLOT2, B1_CS10E_331, [4]],
@@ -1445,6 +1452,98 @@ describe('QnScaleAdapter', () => {
       const adapter = await extendedAdapter();
       expect(adapter.parseNotification(B1_501_PART2)).toBeNull();
       expect(adapter.parseNotification(B1_501_PART3)).toBeNull();
+    });
+
+    describe('the line for a 0xB1 part that comes without the first (#501)', () => {
+      const HINT =
+        'QN: 0xb1 part 2 of 3 arrived without part 1, which carries the weight. On an ESP32 ' +
+        'proxy that is likely firmware that drops notifications of a burst: flash the current ' +
+        'firmware, https://blescalesync.dev/guide/esp32-proxy#flashing-the-firmware (#501)';
+
+      const withInfo = async (run: (lines: string[]) => Promise<void>): Promise<void> => {
+        const lines: string[] = [];
+        const info = vi.spyOn(bleLog, 'info').mockImplementation((m) => void lines.push(m));
+        try {
+          await run(lines);
+        } finally {
+          info.mockRestore();
+        }
+      };
+
+      it('says so once when parts 2 and 3 arrive without part 1', async () => {
+        await withInfo(async (lines) => {
+          const adapter = await extendedAdapter();
+          expect(adapter.parseNotification(B1_501_PART2)).toBeNull();
+          expect(adapter.parseNotification(B1_501_PART3)).toBeNull();
+          expect(lines).toEqual([HINT]);
+        });
+      });
+
+      it('says nothing when part 1 comes first, parts 2 and 3 after it', async () => {
+        await withInfo(async (lines) => {
+          const adapter = await extendedAdapter();
+          expect(adapter.parseNotification(B1_501)).toEqual({ weight: 77.95, impedance: 0 });
+          expect(adapter.parseNotification(B1_501_PART2)).toBeNull();
+          expect(adapter.parseNotification(B1_501_PART3)).toBeNull();
+          expect(lines).toEqual([]);
+        });
+      });
+
+      it('says nothing for a 0xB1 sent in one part', async () => {
+        await withInfo(async (lines) => {
+          const adapter = await extendedAdapter();
+          expect(adapter.parseNotification(B1_CS10E_331)).toEqual({ weight: 93.15, impedance: 0 });
+          expect(lines.filter((l) => l.includes('arrived without part 1'))).toEqual([]);
+        });
+      });
+
+      it('says nothing for parts after a first part that read no weight', async () => {
+        await withInfo(async (lines) => {
+          const adapter = await extendedAdapter();
+          expect(adapter.parseNotification(B1_501_NO_WEIGHT)).toBeNull();
+          expect(adapter.parseNotification(B1_501_PART2)).toBeNull();
+          expect(adapter.parseNotification(B1_501_PART3)).toBeNull();
+          expect(lines).toEqual([]);
+        });
+      });
+
+      it('ignores a part with a bad checksum', async () => {
+        await withInfo(async (lines) => {
+          const adapter = await extendedAdapter();
+          const bad = Buffer.from(B1_501_PART2);
+          bad[bad.length - 1] ^= 0xff;
+          expect(adapter.parseNotification(bad)).toBeNull();
+          expect(lines).toEqual([]);
+          expect(adapter.parseNotification(B1_501_PART2)).toBeNull();
+          expect(lines).toEqual([HINT]);
+        });
+      });
+
+      it('says nothing for parts that follow a reading taken from another frame', async () => {
+        await atConnect3(async () => {
+          await withInfo(async (lines) => {
+            const adapter = await extendedAdapter();
+            const fresh = stampB4(B4_PREVIOUS_SESSION, scaleSeconds('2026-08-19T18:06:30.000Z'));
+            expect(adapter.parseNotification(fresh)?.weight).toBe(75.2);
+            expect(adapter.parseNotification(B1_501_PART2)).toBeNull();
+            expect(adapter.parseNotification(B1_501_PART3)).toBeNull();
+            expect(lines).toEqual([]);
+          });
+        });
+      });
+
+      it('says it again in the next session of the same adapter', async () => {
+        await withInfo(async (lines) => {
+          const adapter = await extendedAdapter();
+          expect(adapter.parseNotification(B1_501_PART2)).toBeNull();
+          expect(lines).toEqual([HINT]);
+          adapter.onSessionStart();
+          expect(adapter.parseNotification(EXT_INFO)).toBeNull();
+          expect(adapter.parseNotification(B1_501_PART3)).toBeNull();
+          expect(lines).toHaveLength(2);
+          expect(lines[1]).toContain('part 3 of 3');
+        });
+      });
     });
 
     it('does not decode result frames on a non-extended dialect', async () => {
