@@ -19,6 +19,14 @@ import {
 import { qnAdvertTraits } from '../../src/scales/qn-scale/matching.js';
 import { ext20 } from '../../src/scales/qn-scale/dialects/ext20.js';
 import { splitB1 } from '../fixtures/qn/frames.js';
+import {
+  COHERENT_501,
+  FIRST_PARTS_501,
+  LIVE_FINAL_501,
+  MIXED_501,
+  PAIRS_501,
+  VISIT_ACK_501,
+} from '../fixtures/qn/cs10g-501-parts.js';
 import { classifyInfoFrame, infoDynamicPackage } from '../../src/scales/qn-scale/dialect.js';
 import {
   EXTENDED_RESULT_PARTS_HOLD_MS,
@@ -5600,6 +5608,7 @@ describe("20-byte dialect: the scale's own body composition (#331)", () => {
   async function weighIn(
     opts: Record<string, unknown>,
     steps: Step[],
+    profile: UserProfile = P,
   ): Promise<{ adapter: QnScaleAdapter; reading: ScaleReading | null }> {
     vi.useFakeTimers();
     try {
@@ -5609,7 +5618,7 @@ describe("20-byte dialect: the scale's own body composition (#331)", () => {
         write: async () => {},
         read: async () => Buffer.alloc(0),
         subscribe: async () => {},
-        profile: P,
+        profile,
         deviceAddress: '',
         availableChars: new Set<string>(),
       } as unknown as ConnectionContext;
@@ -6175,6 +6184,157 @@ describe("20-byte dialect: the scale's own body composition (#331)", () => {
       expect(adapter.s.resultAssembly).toBeNull();
       expect(adapter.completionHoldMs).toBeUndefined();
     });
+
+    // #501: the CS10G's own parts through the session. The first part is
+    // captured; the parts 2 and 3 are of another weigh-in (derived composite),
+    // so what this proves is the hold, the join and the log lines on real bytes.
+    describe("the reporter's CS10G parts through the session (#501)", () => {
+      /**
+       * The reporter's session as user slot 2: the CS10E handshake, the CS10G's
+       * answer to the profile frame of that slot, its stable live frame (which
+       * only counts for the slot of the profile frame sent) and a real first part.
+       */
+      const SLOT_2 = { ...ALGO, qnUserSlot: 2 };
+      const realSteps = (p1: Buffer, live = true): Step[] => [
+        ...HANDSHAKE,
+        { frame: VISIT_ACK_501.frame, advance: 100 },
+        ...(live ? [{ frame: LIVE_FINAL_501.frame, advance: 1000 }] : []),
+        { frame: p1 },
+      ];
+      const weightOf = (p1: Buffer): number => p1.readUInt16LE(5) / 100;
+      /** The whole-cm height the BMI of the pairs implies, and a profile with a height. */
+      const impliedCm = Math.round(
+        extendedResultChecks(
+          decodeExtendedResult(
+            joinExtendedResultParts([COHERENT_501.p1, COHERENT_501.p2, COHERENT_501.p3])!,
+          )!,
+        ).impliedHeightCm!,
+      );
+      const profileOf = (heightCm: number): UserProfile =>
+        defaultProfile({ age: 30, height: heightCm, lastKnownWeight: 90 });
+      const dryRun = (lines: string[]): string =>
+        lines.find((l) => l.startsWith("QN: dry run of the scale's own composition"))!;
+      const ACCEPTED_DRY =
+        "QN: dry run of the scale's own composition (not exported): gate says accepted; " +
+        'without the ble.qn_algorithm check: accepted; plausibility: ok (#501)';
+
+      /** The lines the adapter logs while the parts 2 and 3 come, and the last reading. */
+      async function joinLines(adapter: QnScaleAdapter, p2: Buffer, p3: Buffer) {
+        const info = vi.spyOn(bleLog, 'info').mockImplementation(() => {});
+        let last: ScaleReading | null = null;
+        let second: ScaleReading | null = null;
+        const lines = await debugLines(() => {
+          second = adapter.parseNotification(p2);
+          last = adapter.parseNotification(p3);
+        });
+        const infos = info.mock.calls.map((c) => String(c[0]));
+        info.mockRestore();
+        return {
+          lines,
+          infos,
+          second: second as ScaleReading | null,
+          last: last as ScaleReading | null,
+        };
+      }
+
+      /** The numbers of the checks line: lean + fat, muscle, BMI, BMR. */
+      const checkNumbers = (lines: string[]): number[] => {
+        const line = lines.find((l) => l.startsWith('QN: extended result checks: '))!;
+        const m =
+          /lean \+ fat (-?[\d.]+), muscle - \(lean - bone\) (-?[\d.]+), BMI - bmiFine (-?[\d.]+), BMR - Katch-McArdle (-?[\d.]+) kcal/.exec(
+            line,
+          )!;
+        return m.slice(1).map(Number);
+      };
+
+      it.each(FIRST_PARTS_501.map((f) => [f.at, f] as const))(
+        'holds the weight of the real first part of %s',
+        async (_at, first) => {
+          const { adapter, reading } = await weighIn(SLOT_2, realSteps(first.p1));
+          expect(reading).toEqual({ weight: weightOf(first.p1), impedance: 0 });
+          expect(adapter.isFinal(reading!)).toBe(false);
+          expect(adapter.completionHoldMs).toBe(5000);
+        },
+      );
+
+      it.each(PAIRS_501.map((p) => [p.at2, p] as const))(
+        'joins and logs the real parts 2 and 3 of %s after a real first part',
+        async (_at, pair) => {
+          const { adapter, reading } = await weighIn(
+            SLOT_2,
+            realSteps(COHERENT_501.p1),
+            profileOf(impliedCm),
+          );
+          const { lines, infos, second, last } = await joinLines(adapter, pair.p2, pair.p3);
+          expect(second).toBeNull();
+          expect(last).toEqual(reading);
+          expect(adapter.isFinal(last!)).toBe(true);
+          expect(adapter.completionHoldMs).toBeUndefined();
+          expect(last).not.toHaveProperty('scaleComposition');
+          expect(lines.filter((l) => l.startsWith('QN: 0xb1 part'))).toHaveLength(2);
+          expect(
+            lines.some((l) => l.includes('put together from 3 parts (45, 45, 39 bytes,')),
+          ).toBe(true);
+          const [leanFat, muscle, bmi, bmr] = checkNumbers(lines);
+          expect(leanFat).toBe(100);
+          expect(muscle).toBe(0);
+          // The line is rounded to 0.01 as well: one step is the most BMI and bmiFine differ by.
+          expect(Math.abs(bmi)).toBeLessThanOrEqual(0.01 + 1e-9);
+          expect(Math.abs(bmr)).toBeLessThanOrEqual(2);
+          // The live frame was consumed and the height sent is the whole-cm one the
+          // scale's BMI fits, so the D096 gate would take this set.
+          expect(dryRun(lines)).toBe(ACCEPTED_DRY);
+          expect(infos).toContain(
+            "QN: the 0xb1 came in 3 parts; the scale's own body composition in it is read but " +
+              'not exported yet (#501)',
+          );
+          // Nothing is pinned: computeMetrics neither uses nor rejects the scale's set.
+          const m = metrics(adapter, last!);
+          expect(m.lines.filter((l) => l === USED || l.startsWith(NOT_USED))).toEqual([]);
+        },
+      );
+
+      it('logs a mix of two weigh-ins with the BMR check off, and still exports the weight', async () => {
+        const { adapter, reading } = await weighIn(SLOT_2, realSteps(MIXED_501.p1));
+        expect(reading).toEqual({ weight: weightOf(MIXED_501.p1), impedance: 0 });
+        expect(weightOf(MIXED_501.p1)).not.toBe(weightOf(COHERENT_501.p1));
+        const { lines, last } = await joinLines(adapter, MIXED_501.p2, MIXED_501.p3);
+        expect(last).toEqual(reading);
+        expect(adapter.isFinal(last!)).toBe(true);
+        const [leanFat, , , bmr] = checkNumbers(lines);
+        expect(leanFat).toBe(100);
+        expect(Math.abs(bmr)).toBeGreaterThan(2);
+        // The first part is of another weigh-in than the live frame the session saw.
+        expect(dryRun(lines)).toContain(
+          "the result's weight is not the one the scale streamed after it accepted the profile",
+        );
+      });
+
+      it('shows the live frame is read: without it the dry run names the missing weight', async () => {
+        const { adapter } = await weighIn(
+          SLOT_2,
+          realSteps(COHERENT_501.p1, false),
+          profileOf(impliedCm),
+        );
+        const { lines } = await joinLines(adapter, COHERENT_501.p2, COHERENT_501.p3);
+        expect(dryRun(lines)).toContain(
+          'gate says the scale sent no live weight after it accepted the profile',
+        );
+      });
+
+      it("rejects a fractional-cm height the way the reporter's visit sent it (hypothesis)", async () => {
+        // Half a centimetre over the whole-cm height moves the BMI by more than the gate's 0.1.
+        const { adapter } = await weighIn(
+          SLOT_2,
+          realSteps(COHERENT_501.p1),
+          profileOf(impliedCm + 0.5),
+        );
+        const { lines } = await joinLines(adapter, COHERENT_501.p2, COHERENT_501.p3);
+        expect(dryRun(lines)).toContain(
+          "gate says the scale's BMI does not fit the height sent to it",
+        );
+      });
+    });
   });
 
   describe('joinExtendedResultParts and the checks (#501, D103)', () => {
@@ -6223,6 +6383,96 @@ describe("20-byte dialect: the scale's own body composition (#331)", () => {
       const mixed = [SPLIT_CS10E_1104[0], SPLIT_CS10E[1], SPLIT_CS10E[2]];
       const c = checksOf(mixed);
       expect(Math.abs(c.bmrVsKatchMcArdle)).toBeGreaterThan(2);
+    });
+
+    // #501: the CS10G's own parts (fixtures/qn/cs10g-501-parts.ts). The six
+    // pairs are captured; the first part that gives them a weight is of a
+    // weigh-in a minute away at the same stable weight, so every composite is
+    // derived. No literal value of the reporter's is repeated here.
+    describe("the reporter's CS10G parts (#501)", () => {
+      const sessionWeight = COHERENT_501.p1.readUInt16LE(5) / 100;
+      const withFirst = (p1: Buffer, p2: Buffer, p3: Buffer) => checksOf([p1, p2, p3]);
+
+      it.each(PAIRS_501.map((p) => [p.at2, p] as const))(
+        'has parts 2 and 3 of %s that join as the shape says',
+        (_at, pair) => {
+          for (const [part, index, length] of [
+            [pair.p2, 2, 45],
+            [pair.p3, 3, 39],
+          ] as const) {
+            expect(part).toHaveLength(length);
+            expect(part[0]).toBe(0xb1);
+            expect(part[1]).toBe(length);
+            expect(part[2]).toBe(3);
+            expect(part[3]).toBe(index);
+            expect(hasValidSumChecksum(part)).toBe(true);
+          }
+        },
+      );
+
+      it('has first parts of the shape, and a stable live frame at the weight of the 00:40 weigh-in (COHERENT_501)', () => {
+        for (const f of FIRST_PARTS_501) {
+          expect(f.p1).toHaveLength(45);
+          expect([f.p1[0], f.p1[1], f.p1[2], f.p1[3]]).toEqual([0xb1, 45, 3, 1]);
+          expect(hasValidSumChecksum(f.p1)).toBe(true);
+        }
+        const live = LIVE_FINAL_501.frame;
+        expect(hasValidSumChecksum(live)).toBe(true);
+        expect([live[0], live[3]]).toEqual([0x10, 0x01]); // status: stable
+        // The weight of the 0x10 is big-endian at [5..6], the 0xB1's little-endian.
+        expect(live.readUInt16BE(5) / 100).toBe(sessionWeight);
+      });
+
+      it.each(PAIRS_501.map((p) => [p.at2, p] as const))(
+        'holds the relations of the scale record in the pair of %s, at the weight of the 00:40 weigh-in (COHERENT_501)',
+        (_at, pair) => {
+          const c = withFirst(COHERENT_501.p1, pair.p2, pair.p3);
+          expect(c.leanPlusFat).toBeCloseTo(100, 5);
+          expect(c.muscleVsLeanLessBone).toBeCloseTo(0, 5); // exact on the CS10G
+          // BMI has 0.1 and bmiFine 0.01 resolution, and extendedResultChecks rounds the
+          // difference to 0.01: one such step is all the two may differ by.
+          expect(Math.abs(c.bmiVsBmiFine)).toBeLessThanOrEqual(0.01 + 1e-9);
+          // The Katch-McArdle difference may hold only the rounding of its inputs: the BMR
+          // is a whole kcal (0.5), the lean mass has 0.1 % (+-0.05 % of the weight, 21.6 kcal
+          // per kg) and the weight 0.01 kg (+-0.005 kg of the lean mass).
+          const lean = decodeExtendedResult(
+            joinExtendedResultParts([COHERENT_501.p1, pair.p2, pair.p3])!,
+          )!.composition.lbm;
+          const rounding = 0.5 + 21.6 * sessionWeight * 0.0005 + 21.6 * (lean / 100) * 0.005;
+          expect(Math.abs(c.bmrVsKatchMcArdle)).toBeLessThanOrEqual(rounding);
+          expect(Math.abs(c.bmrVsKatchMcArdle)).toBeLessThanOrEqual(2);
+          // The BMI fits a whole-cm height (hypothesis), not a fractional one.
+          expect(Math.abs(c.impliedHeightCm! - Math.round(c.impliedHeightCm!))).toBeLessThan(0.1);
+        },
+      );
+
+      it('has one whole-cm height for all the pairs, at the weight of the 00:40 weigh-in (COHERENT_501)', () => {
+        const heights = PAIRS_501.map((p) =>
+          Math.round(withFirst(COHERENT_501.p1, p.p2, p.p3).impliedHeightCm!),
+        );
+        expect(new Set(heights).size).toBe(1);
+      });
+
+      it('passes the derived triple whose parts are one weight, and fails the mixed one', () => {
+        const coherent = checksOf([COHERENT_501.p1, COHERENT_501.p2, COHERENT_501.p3]);
+        expect(Math.abs(coherent.bmrVsKatchMcArdle)).toBeLessThanOrEqual(2);
+        const mixed = checksOf([MIXED_501.p1, MIXED_501.p2, MIXED_501.p3]);
+        expect(Math.abs(mixed.bmrVsKatchMcArdle)).toBeGreaterThan(2);
+        // The other relations do not see the mix: they are inside the parts 2 and 3.
+        expect(mixed.leanPlusFat).toBeCloseTo(100, 5);
+        expect(Math.abs(mixed.bmiVsBmiFine)).toBeLessThanOrEqual(0.05);
+      });
+
+      it('shows every first part not at the weight of the 00:40 weigh-in (COHERENT_501) off against the pair of 00:39:28', () => {
+        const off = FIRST_PARTS_501.map((f) => {
+          const c = withFirst(f.p1, PAIRS_501[1].p2, PAIRS_501[1].p3);
+          return f.p1.readUInt16LE(5) / 100 === sessionWeight
+            ? null
+            : Math.abs(c.bmrVsKatchMcArdle);
+        }).filter((v) => v !== null);
+        expect(off.length).toBeGreaterThan(0);
+        for (const v of off) expect(v).toBeGreaterThan(2);
+      });
     });
   });
 

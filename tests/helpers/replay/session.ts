@@ -206,12 +206,17 @@ export async function replaySession(
 }
 
 /**
- * Modules under tests/fixtures/ that only share frames and constants with the
- * fixtures next to them. Every other module exports `session` or `adverts`, so
+ * Modules under tests/fixtures/ that are not a fixture themselves: they share
+ * frames and constants with the fixtures next to them, or hold real frames
+ * that tests import directly. Every other module exports `session` or `adverts`, so
  * a fixture whose export is misspelled fails the loaders instead of dropping
  * out of the goldens without a word.
  */
-const FIXTURE_HELPERS: ReadonlySet<string> = new Set(['qn/frames.ts', 'sig/frames.ts']);
+const FIXTURE_HELPERS: ReadonlySet<string> = new Set([
+  'qn/cs10g-501-parts.ts',
+  'qn/frames.ts',
+  'sig/frames.ts',
+]);
 
 /** Throws for a module under tests/fixtures/ that is neither a fixture nor in FIXTURE_HELPERS. */
 export function assertFixtureModule(
