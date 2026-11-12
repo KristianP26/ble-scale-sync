@@ -4,7 +4,8 @@ import type { Trace } from '../../helpers/replay/trace.js';
 /**
  * 1byone (Eufy C1/P1/A1, "Health Scale"): the FD 37 mode/unit command and the
  * F1 clock (local time) at connect, both as Write Requests (#533), then 0xCF frames
- * on FFF4 held until two in a row report the same weight (#284).
+ * on FFF4 held until a frame carries the impedance (#534), or, as long as byte [9] says
+ * the scale measures, up to 23 s.
  *
  * The traces here are characterization, built as tests/scales/one-byone.test.ts
  * builds its frames: [1..2] impedance x10 (LE as the adapter reads it), [3..4]
@@ -33,7 +34,8 @@ const traces: Record<string, Trace> = {
       { atMs: 800, dir: 'rx', hex: 'cf8813401f0000000000' },
     ],
   },
-  // The weight never repeats: the 3 s hold resolves the last frame.
+  // The weight never repeats and [9] stays 1: the hold runs its 3 s and every 5 s
+  // step up to 23 s, then resolves the last frame.
   'eufy-hold-expiry': {
     provenance: 'characterization',
     source:

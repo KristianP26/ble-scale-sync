@@ -121,6 +121,10 @@ Some units only broadcast, so body composition is estimated from BMI. See [QN sc
 
 Newer revisions use Renpho's own protocol. See [Renpho scales](./scales/renpho#es-cs20m-on-service-0x1a10).
 
+### 1byone / Eufy C1
+
+Stay on the scale until the display shows the result: the export waits for the impedance, and a weigh-in in socks gets the BMI estimate.
+
 ### Eufy Smart Scale P2 / P2 Pro
 
 Over a connection, body fat comes from the impedance with the generic BIA formula and can differ by a few points from the Eufy app. A weigh-in in socks, or one read from the broadcast, gets the BMI estimate.

@@ -11,16 +11,27 @@ import type {
 } from '../interfaces/scale-adapter.js';
 import { uuid16, xorChecksum, WEIGHT_ONLY_HOLD_MS, biaPayload } from './body-comp-helpers.js';
 import { matchesDescriptor, type MatchDescriptor } from './match-descriptor.js';
+import { bleLog } from '../ble/types.js';
 
 /**
- * Hold window (ms) for the weight-stability gate (#284). 1byone frames stream
- * continuously with no "measurement locked" flag, so resolving on the first
- * weight>0 frame could export a value while the person was still settling.
- * Instead we hold the link open and resolve once two consecutive frames report
- * the same weight (isFinal). If that never happens within the window, shared.ts
- * resolves the last held reading, so no reading is ever lost.
+ * Hold window (ms) from the first weight, before the scale has said anything
+ * about its measurement. Byte [9] of a 0xCF frame is a status: the Eufy C1
+ * sends 0x01 on every frame while it measures, from the first one on, then
+ * goes silent for about 5 s, then sends one frame with 0x00 that carries the
+ * impedance (#534, full log of one session). The window is short, and
+ * isCompositionPending extends it in steps (at most 3 s + 20 s) while the last
+ * frame still says "measuring", which covers the silence. The frame with the
+ * impedance ends the hold (isFinal); otherwise shared.ts resolves the last held
+ * reading, so no weigh-in is lost (socks, a scale that never sends the impedance).
  */
-const WEIGHT_STABLE_HOLD_MS = 3000;
+const MEASURING_HOLD_MS = 3000;
+
+/**
+ * Byte [9] values with a known meaning: measuring (C1) and the lock values of
+ * openScale's "Health Scale".
+ */
+const STATUS_MEASURING = 0x01;
+const STATUS_LOCKED = [0x00, 0x36];
 
 // ─── OneByoneAdapter (Eufy C1/P1, Health Scale) ─────────────────────────────
 
@@ -32,8 +43,20 @@ const WEIGHT_STABLE_HOLD_MS = 3000;
 class OneByoneSession {
   /** Raw weight (hundredths of kg) of the previous frame this session. */
   previousRawWeight: number | null = null;
-  /** True once two consecutive frames reported the same weight. */
+  /** True when the last frame reported the same weight as the one before it. */
   weightStable = false;
+  /**
+   * A weight above 0 came twice in a row; from then on only a repeated weight
+   * is held (isComplete).
+   */
+  settled = false;
+  /**
+   * The last 0xCF frame has a weight and a status in [9] that is not a lock
+   * value; see isCompositionPending.
+   */
+  measuring = false;
+  /** The debug line for an unknown [9] went out this session. */
+  unknownStatusLogged = false;
 }
 
 /**
@@ -44,8 +67,11 @@ class OneByoneSession {
  * Measurement frames begin with 0xCF header.
  *   Weight at bytes [3-4] little-endian uint16 / 100 (kg).
  *   Impedance: ((data[2]<<8)+data[1]) * 0.1, valid when byte[9] != 1 and != 0.
+ *   Byte[9] is a status: 0x01 while the scale measures (Eufy C1, log), 0x00 on
+ *   the frame with the impedance; openScale also takes 0x36 as locked ("Health
+ *   Scale", from the vendor app). Anything else is treated as still measuring.
  */
-export class OneByoneAdapter implements ScaleAdapterCore, GattWiring {
+export class OneByoneAdapter implements ScaleAdapterCore, GattWiring, HoldForComposition {
   readonly name = '1byone (Eufy)';
   readonly match: MatchDescriptor = {
     priority: 70,
@@ -123,36 +149,60 @@ export class OneByoneAdapter implements ScaleAdapterCore, GattWiring {
     }
 
     this.s.weightStable = this.s.previousRawWeight === rawWeight;
+    if (this.s.weightStable && rawWeight > 0) this.s.settled = true;
     this.s.previousRawWeight = rawWeight;
+
+    const status = data.length >= 10 ? data[9] : undefined;
+    const locked = status === undefined || STATUS_LOCKED.includes(status);
+    this.s.measuring = rawWeight > 0 && !locked;
+    if (this.s.measuring && status !== STATUS_MEASURING && !this.s.unknownStatusLogged) {
+      this.s.unknownStatusLogged = true;
+      bleLog.debug(
+        `1byone: byte 9 is 0x${status!.toString(16).padStart(2, '0')}, not a known status; treating it as measuring`,
+      );
+    }
 
     return { weight, impedance };
   }
 
+  /**
+   * HoldTimer holds the last complete reading, and a longer hold must not export
+   * a frame from the person stepping on. Until a weight has repeated this
+   * session any weight above 0 counts, so a lone frame is never lost; after
+   * that only a repeated weight or a frame with the impedance does.
+   */
   isComplete(reading: ScaleReading): boolean {
-    return reading.weight > 0;
+    if (reading.weight <= 0) return false;
+    return reading.impedance > 0 || this.s.weightStable || !this.s.settled;
+  }
+
+  /** Hold the link open after the first weight so the scale can measure the impedance. */
+  readonly completionHoldMs = MEASURING_HOLD_MS;
+
+  /**
+   * The frame with the impedance ends the weigh-in; the scale marks it, the
+   * weight need not repeat.
+   */
+  isFinal(reading: ScaleReading): boolean {
+    return reading.impedance > 0;
   }
 
   /**
-   * Hold the link open after the first weight so it can settle, rather than
-   * exporting the first frame while the person is still stepping on.
+   * The last frame has a weight and a status that is not a lock value: the
+   * scale is still measuring.
    */
-  readonly completionHoldMs = WEIGHT_STABLE_HOLD_MS;
-
-  /** Resolve immediately once the weight has stabilized across two frames. */
-  isFinal(_reading: ScaleReading): boolean {
-    return this.s.weightStable;
+  isCompositionPending(): boolean {
+    return this.s.measuring;
   }
 
   computeMetrics(reading: ScaleReading, profile: UserProfile): BodyComposition {
     // buildPayload does NOT run the BIA estimator: without a fat percentage it
     // falls back to the Deurenberg BMI estimate, so an adapter that parses an
     // impedance and then passes an empty comp publishes the impedance and
-    // ignores it (#386). biaFatIfPlausible bounds the value first, because the
-    // scaling of this field has never been checked against a capture.
-    // It earns its keep here more than anywhere: this adapter multiplies the
-    // raw field by 0.1 on the strength of an openScale port, so if that factor
-    // is wrong a real 300-900 ohm body arrives as 30-90 and is refused, which
-    // leaves the reading exactly where it was before this change.
+    // ignores it (#386). biaFatIfPlausible bounds the value first. The C1 frames
+    // of #533 and #534 read inside the band with the 0.1 factor, but no app
+    // value confirms it; a wrong factor would arrive as 30-90 ohm
+    // and be refused, leaving the BMI estimate.
     return biaPayload(reading, profile);
   }
 }

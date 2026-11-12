@@ -7,6 +7,20 @@ import {
   assertPayloadRanges,
 } from '../helpers/scale-test-utils.js';
 import { uuid16, WEIGHT_ONLY_HOLD_MS } from '../../src/scales/body-comp-helpers.js';
+import { bleLog } from '../../src/ble/types.js';
+import { hex, type Trace } from '../helpers/replay/trace.js';
+import { replaySession } from '../helpers/replay/session.js';
+import {
+  session as c1,
+  C1_STEP_ON,
+  C1_534_FIRST_FRAME_MS,
+  C1_SETTLING,
+  C1_SETTLED,
+  C1_FINAL_534,
+  C1_CLOCK_ACK,
+  C1_SOCKS,
+  C1_EMPTY_MEASURING,
+} from '../fixtures/onebyone/eufy-c1-534.js';
 
 // ─── OneByoneAdapter ─────────────────────────────────────────────────────────
 
@@ -180,31 +194,68 @@ describe('OneByoneAdapter', () => {
     });
   });
 
-  describe('weight-stability gate (#284)', () => {
-    function cfFrame(weightKg: number): Buffer {
-      const buf = Buffer.alloc(10);
+  describe('weight gate and hold (#284, #534)', () => {
+    function cfFrame(weightKg: number, status = 1, rawImpedance = 0): Buffer {
+      const buf = Buffer.alloc(11);
       buf[0] = 0xcf;
+      buf.writeUInt16LE(rawImpedance, 1);
       buf.writeUInt16LE(Math.round(weightKg * 100), 3);
-      buf[9] = 1; // impedance invalid — isolate the weight-stability behaviour
+      buf[9] = status;
       return buf;
     }
 
-    it('resolves only once two consecutive frames report the same weight', () => {
+    it('completes the first frame, and an unequal one before any weight has repeated', () => {
       const adapter = makeAdapter();
-
       const f1 = adapter.parseNotification(cfFrame(80.2))!;
-      expect(adapter.isComplete(f1)).toBe(true); // permissive: arms the hold
-      expect(adapter.isFinal!(f1)).toBe(false);
-
+      expect(adapter.isComplete(f1)).toBe(true); // arms the hold
       const f2 = adapter.parseNotification(cfFrame(80.0))!;
-      expect(adapter.isFinal!(f2)).toBe(false); // changed
-
-      const f3 = adapter.parseNotification(cfFrame(80.0))!;
-      expect(adapter.isFinal!(f3)).toBe(true); // stable
-      expect(adapter.completionHoldMs).toBeGreaterThan(0);
+      expect(adapter.isComplete(f2)).toBe(true);
     });
 
-    it('re-arms stability on reconnect', async () => {
+    it('holds only a repeated weight once one has repeated', () => {
+      const adapter = makeAdapter();
+      adapter.parseNotification(cfFrame(80.0));
+      expect(adapter.isComplete(adapter.parseNotification(cfFrame(80.0))!)).toBe(true);
+      expect(adapter.isComplete(adapter.parseNotification(cfFrame(80.4))!)).toBe(false);
+      expect(adapter.isComplete(adapter.parseNotification(cfFrame(79.9))!)).toBe(false);
+      expect(adapter.isComplete(adapter.parseNotification(cfFrame(79.9))!)).toBe(true);
+    });
+
+    it('does not count a pair of 0 kg frames as a repeated weight', () => {
+      const adapter = makeAdapter();
+      for (let i = 0; i < 3; i++) adapter.parseNotification(cfFrame(0));
+      expect(adapter.isComplete(adapter.parseNotification(cfFrame(70.1))!)).toBe(true);
+      expect(adapter.isComplete(adapter.parseNotification(cfFrame(70.3))!)).toBe(true);
+    });
+
+    it('completes a frame with an impedance whatever the weight did', () => {
+      const adapter = makeAdapter();
+      adapter.parseNotification(cfFrame(80.0));
+      adapter.parseNotification(cfFrame(80.0));
+      const r = adapter.parseNotification(cfFrame(79.5, 0, 4610))!;
+      expect(r.impedance).toBe(461);
+      expect(adapter.isComplete(r)).toBe(true);
+    });
+
+    it('is final on an impedance only, not on a repeated weight', () => {
+      const adapter = makeAdapter();
+      adapter.parseNotification(cfFrame(80.0));
+      const same = adapter.parseNotification(cfFrame(80.0))!;
+      expect(adapter.isFinal!(same)).toBe(false);
+      const withImpedance = adapter.parseNotification(cfFrame(80.0, 0, 4610))!;
+      expect(adapter.isFinal!(withImpedance)).toBe(true);
+    });
+
+    it('is final on a frame with an impedance and the 0x36 lock status', () => {
+      const adapter = makeAdapter();
+      expect(adapter.isFinal!(adapter.parseNotification(cfFrame(80.0, 0x36, 4610))!)).toBe(true);
+    });
+
+    it('holds for 3 s from the first weight', () => {
+      expect(makeAdapter().completionHoldMs).toBe(3000);
+    });
+
+    it('re-arms the whole gate on reconnect', async () => {
       const adapter = makeAdapter();
       const ctx = makeConnectionContext({
         write: async () => {},
@@ -215,10 +266,107 @@ describe('OneByoneAdapter', () => {
       });
 
       adapter.parseNotification(cfFrame(80));
-      expect(adapter.isFinal!(adapter.parseNotification(cfFrame(80))!)).toBe(true);
+      adapter.parseNotification(cfFrame(80));
+      adapter.parseNotification(cfFrame(80));
+      expect(adapter.isCompositionPending()).toBe(true);
 
       await adapter.onConnected(ctx);
-      expect(adapter.isFinal!(adapter.parseNotification(cfFrame(80))!)).toBe(false);
+      expect(adapter.isCompositionPending()).toBe(false);
+      adapter.parseNotification(cfFrame(80.5));
+      expect(adapter.isComplete(adapter.parseNotification(cfFrame(80.9))!)).toBe(true);
+    });
+  });
+
+  describe('isCompositionPending()', () => {
+    const pendingAfter = (frame: Buffer | string): boolean => {
+      const adapter = makeAdapter();
+      adapter.parseNotification(typeof frame === 'string' ? hex(frame) : frame);
+      return adapter.isCompositionPending();
+    };
+
+    it('is false before any frame', () => {
+      expect(makeAdapter().isCompositionPending()).toBe(false);
+    });
+
+    it('is true on a weight with the measuring status', () => {
+      expect(pendingAfter(C1_SETTLED)).toBe(true);
+    });
+
+    it('is false on the frame with the impedance and on a weight with status 0x00', () => {
+      expect(pendingAfter(C1_FINAL_534)).toBe(false);
+      expect(pendingAfter(C1_SOCKS)).toBe(false);
+    });
+
+    it('is false on a 0 kg frame that still says measuring', () => {
+      expect(pendingAfter(C1_EMPTY_MEASURING)).toBe(false);
+    });
+
+    it('follows the status byte: 0x02 is measuring, 0x00 and 0x36 are locked', () => {
+      const frame = (status: number): Buffer => {
+        const b = hex(C1_SETTLED);
+        b[9] = status;
+        return b;
+      };
+      expect(pendingAfter(frame(0x01))).toBe(true);
+      expect(pendingAfter(frame(0x02))).toBe(true);
+      expect(pendingAfter(frame(0x00))).toBe(false);
+      expect(pendingAfter(frame(0x36))).toBe(false);
+    });
+
+    it('clears when a frame ends the measurement after a measuring one', () => {
+      const adapter = makeAdapter();
+      adapter.parseNotification(hex(C1_SETTLED));
+      expect(adapter.isCompositionPending()).toBe(true);
+      adapter.parseNotification(hex(C1_FINAL_534));
+      expect(adapter.isCompositionPending()).toBe(false);
+    });
+
+    it('ignores the clock ack and a short frame', () => {
+      const adapter = makeAdapter();
+      adapter.parseNotification(hex(C1_SETTLED));
+      adapter.parseNotification(hex(C1_CLOCK_ACK));
+      adapter.parseNotification(hex('cf000054'));
+      expect(adapter.isCompositionPending()).toBe(true);
+    });
+
+    it('says why once per session when byte 9 is not a known status', async () => {
+      const debug = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+      const lines = (): string[] =>
+        debug.mock.calls.map((c) => String(c[0])).filter((l) => l.includes('1byone'));
+      const withStatus = (frame: string, status: number): Buffer => {
+        const b = hex(frame);
+        b[9] = status;
+        return b;
+      };
+      try {
+        const adapter = makeAdapter();
+        adapter.parseNotification(withStatus(C1_EMPTY_MEASURING, 0x02));
+        expect(lines()).toHaveLength(0); // no weight, nothing waits on the status
+
+        const odd = withStatus(C1_SETTLED, 0x02);
+        adapter.parseNotification(odd);
+        adapter.parseNotification(odd);
+        expect(lines()).toHaveLength(1);
+        expect(lines()[0]).toContain('0x02');
+
+        adapter.parseNotification(hex(C1_SETTLED));
+        adapter.parseNotification(hex(C1_FINAL_534));
+        adapter.parseNotification(withStatus(C1_SETTLED, 0x36));
+        expect(lines()).toHaveLength(1);
+
+        const ctx = makeConnectionContext({
+          write: async () => {},
+          read: async () => Buffer.alloc(0),
+          subscribe: async () => {},
+          profile: defaultProfile(),
+          deviceAddress: 'AA:BB:CC:DD:EE:FF',
+        });
+        await adapter.onConnected(ctx);
+        adapter.parseNotification(odd);
+        expect(lines()).toHaveLength(2);
+      } finally {
+        debug.mockRestore();
+      }
     });
   });
 
@@ -394,6 +542,60 @@ describe('OneByoneNewAdapter', () => {
   });
 });
 
+describe('Eufy C1 weigh-ins (#533, #534)', () => {
+  const trace = (name: string): Trace => c1.traces[name];
+
+  it('waits for the frame with the impedance instead of ending on two equal frames', async () => {
+    const r = await replaySession(new OneByoneAdapter(), trace('eufy-c1-534-weigh-in'), c1);
+    expect(r.settled).toEqual({ by: 'reading', atMs: C1_534_FIRST_FRAME_MS + 7988 });
+    expect(r.reading).toEqual({ weight: 69.65, impedance: 461 });
+    expect(r.payload?.impedance).toBe(461);
+  });
+
+  it('still takes an impedance that lands after the first 8 s', async () => {
+    const late: Trace = {
+      ...trace('eufy-c1-534-weigh-in'),
+      provenance: 'derived',
+      source: 'eufy-c1-534-weigh-in with the final frame 9000 ms after the first 0xCF frame',
+      steps: trace('eufy-c1-534-weigh-in').steps.map((s) =>
+        s.hex === C1_FINAL_534 ? { ...s, atMs: C1_534_FIRST_FRAME_MS + 9000 } : s,
+      ),
+    };
+    const r = await replaySession(new OneByoneAdapter(), late, c1);
+    expect(r.settled).toEqual({ by: 'reading', atMs: C1_534_FIRST_FRAME_MS + 9000 });
+    expect(r.reading?.impedance).toBe(461);
+  });
+
+  it('resolves at once on a final frame that comes alone', async () => {
+    const r = await replaySession(new OneByoneAdapter(), trace('eufy-c1-533-final-frame'), c1);
+    expect(r.settled).toEqual({ by: 'reading', atMs: 500 });
+    expect(r.reading).toEqual({ weight: 69.65, impedance: 458 });
+  });
+
+  it('exports the settled weight, not a step-off frame, when no impedance comes', async () => {
+    const r = await replaySession(new OneByoneAdapter(), trace('eufy-c1-534-step-off'), c1);
+    expect(r.settled).toEqual({ by: 'reading', atMs: C1_534_FIRST_FRAME_MS + 8000 });
+    expect(r.reading).toEqual({ weight: 69.65, impedance: 0 });
+  });
+
+  it('decodes no impedance from the frames sent while measuring', () => {
+    const a = new OneByoneAdapter();
+    expect(a.parseNotification(hex(C1_STEP_ON))!.impedance).toBe(0);
+    expect(a.parseNotification(hex(C1_SETTLING))!.impedance).toBe(0);
+    expect(a.parseNotification(hex(C1_SETTLED))!.impedance).toBe(0);
+  });
+
+  it('completes a weight without impedance and status 0x00, which is not final and not pending', () => {
+    const a = new OneByoneAdapter();
+    a.parseNotification(hex(C1_SETTLED));
+    const socks = a.parseNotification(hex(C1_SOCKS))!;
+    expect(socks.impedance).toBe(0);
+    expect(a.isComplete(socks)).toBe(true);
+    expect(a.isFinal!(socks)).toBe(false);
+    expect(a.isCompositionPending()).toBe(false);
+  });
+});
+
 // #386: this adapter parses an impedance out of the scale's frames and used to
 // hand buildPayload an empty comp, so the exported body fat was the Deurenberg
 // BMI estimate and the impedance was published but ignored.
@@ -425,9 +627,8 @@ describe('1byone / Eufy BIA from the parsed impedance (#386)', () => {
 
   it('falls back to the BMI estimate when the impedance is not a body', () => {
     // 50 is what this adapter's own synthetic fixture produces from a raw
-    // 500, because of the `* 0.1` it inherited from openScale. If that factor
-    // is wrong, a real body lands here and is refused rather than published as
-    // a 4 % body fat.
+    // 500, because of the `* 0.1` it inherited from openScale. It is not a real
+    // frame: the C1 frames of #533 and #534 decode inside the 150-1200 ohm band.
     for (const impedance of [1, 149, 1201, 65535]) {
       const payload = new OneByoneAdapter().computeMetrics(
         { weight: 80, impedance },
@@ -496,9 +697,9 @@ describe('1byone Scale (new protocol) BIA from the parsed impedance (#386)', () 
 
 describe('1byone / Eufy: the 0.1 factor and the band (#386)', () => {
   it('refuses a 50 ohm reading, which is what raw 500 decodes to here', () => {
-    // Not a hypothetical: tests above assert exactly 50.0 from raw 500. A body
-    // does not read 50 ohm, so either the factor is wrong or that fixture is
-    // not a real frame. Either way it must not drive a body composition.
+    // Raw 500 in the synthetic frames decodes to 50.0, and a body does not read
+    // 50 ohm. A real C1 frame decodes inside the band, so that fixture is not a
+    // real frame. Either way 50 must not drive a body composition.
     const payload = new OneByoneAdapter().computeMetrics(
       { weight: 80, impedance: 50 },
       defaultProfile(),

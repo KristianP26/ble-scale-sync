@@ -1,10 +1,10 @@
 {
   "settled": {
     "by": "reading",
-    "atMs": 13836
+    "atMs": 21574
   },
   "reading": {
-    "weight": 68.3,
+    "weight": 69.65,
     "impedance": 0
   },
   "history": [],
@@ -33,16 +33,16 @@
   ],
   "rxDropped": 0,
   "payload": {
-    "weight": 68.3,
+    "weight": 69.65,
     "impedance": 0,
-    "bmi": 20.39,
-    "bodyFatPercent": 15.17,
-    "waterPercent": 61.92,
-    "boneMass": 2.43,
-    "muscleMass": 55.5,
-    "visceralFat": 6,
+    "bmi": 20.8,
+    "bodyFatPercent": 15.66,
+    "waterPercent": 61.57,
+    "boneMass": 2.47,
+    "muscleMass": 56.28,
+    "visceralFat": 7,
     "physiqueRating": 9,
-    "bmr": 1681,
+    "bmr": 1695,
     "metabolicAge": 31
   }
 }
