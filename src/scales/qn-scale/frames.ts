@@ -531,7 +531,7 @@ export function decodeExtendedResult(frame: Buffer): ExtendedResult | null {
  * [2], its index 1..count at [3] in order and the sum checksum; the payloads
  * ([4 .. len-2]) add up to EXTENDED_RESULT_RECORD_LEN bytes, which the vendor's
  * SDK reads as the record. The frame is rebuilt as `b1 77 01 01 <record> <cs>`,
- * the one the same scale sends to its vendor app (PROTOCOLS.md); its checksum
+ * the one the same scale sends to its vendor app (#331, #501); its checksum
  * is new and proves nothing, the per-part checks are the integrity.
  *
  * Null for anything else, never a throw: the caller sits in parseNotification.
@@ -555,9 +555,9 @@ export function joinExtendedResultParts(parts: readonly Buffer[]): Buffer | null
 
 /**
  * Relations the scale's own results satisfy in every extended 0xB1 looked at
- * (hypothesis, PROTOCOLS.md): the checks that tell a record put together from
+ * (hypothesis): the checks that tell a record put together from
  * the parts of one weigh-in from a mix of two. All differences, 0 when it
- * holds; read as a log line, not as a gate (#501, D103).
+ * holds; read as a log line, not as a gate (#501).
  */
 export interface ExtendedResultChecks {
   /** lean body mass % + body fat %, 100 when it holds. */

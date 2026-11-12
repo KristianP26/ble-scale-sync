@@ -20,8 +20,8 @@
  * Derived, never captured: COHERENT_501 and MIXED_501 put the first part of
  * one weigh-in together with parts 2 and 3 of another, to run the join and the
  * session with the real bytes. A derived triple says nothing about the order
- * or timing of the parts of one burst (D074); what PROTOCOLS.md claims about
- * the relations rests on the captured parts.
+ * or timing of the parts of one burst; the relations the tests check rest on
+ * the captured parts.
  *
  * Rewritten: nothing. No 0xB1 part and no 0x10 frame holds the MAC or any
  * other identifier; the scale's 0x12 and advertisement, which echo the MAC,
