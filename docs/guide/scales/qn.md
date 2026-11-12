@@ -134,7 +134,7 @@ Experimental. Eight-electrode scales on this dialect, such as the Arboleaf CS10E
 
 The Arboleaf CS10K is covered under [Arboleaf scales](#arboleaf-scales-19-byte-dialect).
 
-The scale must send its result in one frame, as it does over an ESPHome proxy. When the result arrives split, which happens over the ESP32 proxy, only the weight goes out. Without `qn_algorithm` the normal log names it as the reason and the weigh-in gets the BMI estimate.
+The scale must send its result in one frame, as it does over an ESPHome proxy. When the result arrives split, which happens over the ESP32 proxy, only the weight goes out. With `qn_user_key` set, the session first waits up to 5 seconds for the other parts, and the debug log lists the scale's values from them; report how they compare with the vendor app on [#501](https://github.com/KristianP26/ble-scale-sync/issues/501). Without `qn_algorithm` the normal log names it as the reason and the weigh-in gets the BMI estimate.
 
 ```yaml
 ble:

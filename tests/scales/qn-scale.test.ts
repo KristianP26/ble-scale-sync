@@ -11,12 +11,20 @@ import {
   decodeExtendedResult,
   decodeStoredRecord,
   decryptQnResistance,
+  extendedResultChecks,
   hasValidSumChecksum,
+  joinExtendedResultParts,
   timeZoneByte,
 } from '../../src/scales/qn-scale/frames.js';
 import { qnAdvertTraits } from '../../src/scales/qn-scale/matching.js';
+import { ext20 } from '../../src/scales/qn-scale/dialects/ext20.js';
+import { splitB1 } from '../fixtures/qn/frames.js';
 import { classifyInfoFrame, infoDynamicPackage } from '../../src/scales/qn-scale/dialect.js';
-import { NINETEEN_BYTE_RESULT_HOLD_MS } from '../../src/scales/qn-scale/constants.js';
+import {
+  EXTENDED_RESULT_PARTS_HOLD_MS,
+  NINETEEN_BYTE_RESULT_HOLD_MS,
+  SCALE_EPOCH_OFFSET,
+} from '../../src/scales/qn-scale/constants.js';
 import { bleLog } from '../../src/ble/types.js';
 import { uuid16 } from '../../src/scales/body-comp-helpers.js';
 import type {
@@ -327,6 +335,10 @@ const B1_CS10E_LEAN_OFF = derive(B1_CS10E_331, { 66: B1_CS10E_331[66] + 3 });
  */
 const B1_CS10E_SKELETAL_0 = derive(B1_CS10E_331, { 70: 0x00, 71: 0x00 });
 const B1_CS10E_SKELETAL_FFFF = derive(B1_CS10E_331, { 70: 0xff, 71: 0xff });
+/** The CS10E weigh-ins of 2026-11-03 and 2026-11-04, split like the CS10G's 0xB1. */
+const SPLIT_CS10E = splitB1(B1_CS10E_331, [40, 40, 34]);
+const SPLIT_CS10E_1104 = splitB1(B1_CS10E_1104, [40, 40, 34]);
+
 /**
  * Derived from LIVE_CS10E_331: another weight at [5..6] (24 00, [6] changed), status 02 at
  * [3], and user slot 2 at [2].
@@ -5795,9 +5807,423 @@ describe("20-byte dialect: the scale's own body composition (#331)", () => {
     ]);
   });
 
-  it('gives a 0xB1 in several parts its weight only', async () => {
-    const { reading } = await weighIn(ALGO, ACCEPTED_THEN(B1_501));
-    expect(reading).toEqual({ weight: 77.95, impedance: 0 });
+  describe('a 0xB1 in several parts (#501, D103)', () => {
+    const [P1, P2, P3] = SPLIT_CS10E;
+    const WEIGHT = { weight: R.weight, impedance: 0 };
+
+    /** The session up to the first part; later parts go straight to the adapter. */
+    const afterFirstPart = async (opts: Record<string, unknown> = ALGO, first = P1) =>
+      weighIn(opts, ACCEPTED_THEN(first));
+
+    /** The debug lines the adapter logs while `run` goes. */
+    async function debugLines(run: () => Promise<void> | void): Promise<string[]> {
+      const debug = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+      try {
+        await run();
+        return debug.mock.calls.map((c) => String(c[0]));
+      } finally {
+        debug.mockRestore();
+      }
+    }
+
+    it('holds the weight of the first part for the others, and gives the weight only', async () => {
+      const { adapter, reading } = await weighIn(ALGO, ACCEPTED_THEN(B1_501));
+      expect(reading).toEqual({ weight: 77.95, impedance: 0 });
+      expect(adapter.isFinal(reading!)).toBe(false);
+      expect(adapter.completionHoldMs).toBe(EXTENDED_RESULT_PARTS_HOLD_MS);
+      expect(adapter.completionHoldMs).toBe(5000);
+      expect(ext20.hold(adapter.s)).toEqual({ ms: 5000, pending: false });
+    });
+
+    it('ends the hold with the weight when the last part has come', async () => {
+      const { adapter, reading } = await afterFirstPart();
+      expect(reading).toEqual(WEIGHT);
+      expect(adapter.isFinal(reading!)).toBe(false);
+      expect(adapter.parseNotification(P2)).toBeNull();
+      expect(adapter.completionHoldMs).toBe(5000);
+      const last = adapter.parseNotification(P3);
+      expect(last).toEqual(WEIGHT);
+      expect(adapter.isFinal(last!)).toBe(true);
+      expect(adapter.completionHoldMs).toBeUndefined();
+      expect(adapter.s.resultAssembly).toBeNull();
+    });
+
+    it('logs what the parts say but exports the weight and the estimate (log-only)', async () => {
+      const { adapter, reading } = await afterFirstPart();
+      const info = vi.spyOn(bleLog, 'info').mockImplementation(() => {});
+      let last: ScaleReading | null = null;
+      const lines = await debugLines(() => {
+        adapter.parseNotification(P2);
+        last = adapter.parseNotification(P3);
+      });
+      const infos = info.mock.calls.map((c) => String(c[0]));
+      info.mockRestore();
+      expect(reading).toEqual(WEIGHT);
+      expect(last).toEqual(WEIGHT);
+      expect(last).not.toHaveProperty('scaleComposition');
+      expect(lines.filter((l) => l.startsWith('QN: 0xb1 part'))).toEqual([
+        expect.stringMatching(
+          /^QN: 0xb1 part 2 of 3 \(45 bytes\), -?\d+ ms after part 1 \(#501\)$/,
+        ),
+        expect.stringMatching(
+          /^QN: 0xb1 part 3 of 3 \(39 bytes\), -?\d+ ms after part 1 \(#501\)$/,
+        ),
+      ]);
+      expect(
+        lines.some((l) =>
+          /^QN: 0xb1 put together from 3 parts \(45, 45, 39 bytes, 0, -?\d+, -?\d+ ms/.test(l),
+        ),
+      ).toBe(true);
+      expect(lines.some((l) => /^QN: extended result, user slot 1, /.test(l))).toBe(true);
+      expect(
+        lines.some((l) => /^QN: extended result checks: lean \+ fat 100, muscle/.test(l)),
+      ).toBe(true);
+      expect(lines.some((l) => l.startsWith('QN: dry run of the scale'))).toBe(true);
+      expect(infos).toContain(
+        "QN: the 0xb1 came in 3 parts; the scale's own body composition in it is read but not " +
+          'exported yet (#501)',
+      );
+      // Nothing is pinned, so computeMetrics neither uses nor rejects the set.
+      const m = metrics(adapter, last!);
+      expect(m.lines.filter((l) => l === USED || l.startsWith(NOT_USED))).toEqual([]);
+      expect(m.payload.bodyFatPercent).not.toBe(R.fatPercent);
+    });
+
+    it('says in the dry run that ble.qn_algorithm is the only thing missing', async () => {
+      const { adapter } = await afterFirstPart({ qnUserKey: 1000 });
+      const lines = await debugLines(() => {
+        adapter.parseNotification(P2);
+        adapter.parseNotification(P3);
+      });
+      const dry = lines.find((l) => l.startsWith('QN: dry run'))!;
+      expect(dry).toContain('gate says the profile frame went out without ble.qn_algorithm');
+      expect(dry).toContain('without the ble.qn_algorithm check: accepted');
+    });
+
+    it('puts a 39/39/36 split together as well', async () => {
+      const split = splitB1(B1_CS10E_331, [39, 39, 36]);
+      const { adapter, reading } = await afterFirstPart(ALGO, split[0]);
+      expect(reading).toEqual(WEIGHT);
+      expect(adapter.parseNotification(split[1])).toBeNull();
+      expect(adapter.isFinal(adapter.parseNotification(split[2])!)).toBe(true);
+    });
+
+    it.each([
+      ['a gap (part 1, then part 3)', (a: QnScaleAdapter) => a.parseNotification(P3)],
+      [
+        'a bad checksum',
+        (a: QnScaleAdapter) =>
+          a.parseNotification(Buffer.from([...P2.subarray(0, -1), P2.at(-1)! ^ 0xff])),
+      ],
+      [
+        '[1] that is not its length',
+        (a: QnScaleAdapter) => a.parseNotification(derive(P2, { 1: 0x2c })),
+      ],
+      ['another part count', (a: QnScaleAdapter) => a.parseNotification(derive(P2, { 2: 0x04 }))],
+      [
+        'a new part 1 with other bytes',
+        (a: QnScaleAdapter) => a.parseNotification(SPLIT_CS10E_1104[0]),
+      ],
+      [
+        'other bytes for a part held',
+        (a: QnScaleAdapter) => {
+          a.parseNotification(P2);
+          return a.parseNotification(derive(P2, { 10: P2[10] ^ 0x01 }));
+        },
+      ],
+      [
+        'more than the record holds',
+        (a: QnScaleAdapter) => {
+          a.parseNotification(P2);
+          return a.parseNotification(splitB1(B1_CS10E_331, [40, 40, 35])[2]);
+        },
+      ],
+    ])('gives the first part weight at once on %s', async (_what, feed) => {
+      const { adapter } = await afterFirstPart();
+      const out = feed(adapter);
+      expect(out).toEqual(WEIGHT);
+      expect(adapter.isFinal(out!)).toBe(true);
+      expect(adapter.completionHoldMs).toBeUndefined();
+      // The session has its reading: later parts come to nothing.
+      expect(adapter.parseNotification(P3)).toBeNull();
+    });
+
+    it('gives the weight as soon as the parts hold more than the record', async () => {
+      const body = [0xb1, 85, 3, 2, ...new Array<number>(80).fill(0x11)];
+      const tooMuch = Buffer.from([...body, body.reduce((a, b) => a + b, 0) & 0xff]);
+      const { adapter } = await afterFirstPart();
+      let out: ScaleReading | null = null;
+      const lines = await debugLines(() => {
+        out = adapter.parseNotification(tooMuch);
+      });
+      expect(out).toEqual(WEIGHT);
+      expect(adapter.isFinal(out!)).toBe(true);
+      expect(lines).toContain(
+        'QN: 0xb1 parts add up to more than 114 bytes; the weight of part 1 goes out as it is (#501)',
+      );
+    });
+
+    it('gives the weight when the diagnostics throw', async () => {
+      const { adapter } = await afterFirstPart();
+      expect(adapter.parseNotification(P2)).toBeNull();
+      const debug = vi.spyOn(bleLog, 'debug').mockImplementation((m: string) => {
+        if (m.startsWith('QN: 0xb1 put together')) throw new Error('log failed');
+      });
+      try {
+        const last = adapter.parseNotification(P3);
+        expect(last).toEqual(WEIGHT);
+        expect(adapter.isFinal(last!)).toBe(true);
+        expect(
+          debug.mock.calls.some((c) =>
+            String(c[0]).startsWith('QN: could not read the 0xb1 put together from its parts'),
+          ),
+        ).toBe(true);
+      } finally {
+        debug.mockRestore();
+      }
+    });
+
+    it('does not wait for a first part that is not whole, or that names one part', async () => {
+      const notItsLength = await weighIn(ALGO, ACCEPTED_THEN(derive(P1, { 1: 0x2c })));
+      expect(notItsLength.reading).toEqual(WEIGHT);
+      expect(notItsLength.adapter.isFinal(notItsLength.reading!)).toBe(true);
+      expect(notItsLength.adapter.completionHoldMs).toBeUndefined();
+      const onePart = await weighIn(ALGO, ACCEPTED_THEN(derive(P1, { 2: 0x01 })));
+      expect(onePart.reading).toEqual(WEIGHT);
+      expect(onePart.adapter.isFinal(onePart.reading!)).toBe(true);
+      expect(onePart.adapter.completionHoldMs).toBeUndefined();
+    });
+
+    it('reads a record without a measurement, and says the scale sent none', async () => {
+      const zeros: Record<number, number> = {};
+      for (let at = 7; at < 49; at++) zeros[at] = 0;
+      const [z1, z2, z3] = splitB1(derive(B1_CS10E_331, zeros), [40, 40, 34]);
+      const { adapter, reading } = await afterFirstPart(ALGO, z1);
+      expect(reading).toEqual(WEIGHT);
+      const info = vi.spyOn(bleLog, 'info').mockImplementation(() => {});
+      const lines = await debugLines(() => {
+        adapter.parseNotification(z2);
+        expect(adapter.isFinal(adapter.parseNotification(z3)!)).toBe(true);
+      });
+      const infos = info.mock.calls.map((c) => String(c[0]));
+      info.mockRestore();
+      expect(infos).toContain('QN: the scale sent no body composition for this weigh-in (#331)');
+      expect(infos.filter((l) => l.includes('read but not exported yet'))).toEqual([]);
+      expect(lines.filter((l) => l.startsWith('QN: dry run'))).toEqual([]);
+    });
+
+    it('keeps its own copy of every part, whatever the transport does with its buffer', async () => {
+      const mine = [Buffer.from(P1), Buffer.from(P2), Buffer.from(P3)];
+      const { adapter } = await weighIn(ALGO, ACCEPTED_THEN(mine[0]));
+      mine[0].fill(0);
+      const lines = await debugLines(() => {
+        adapter.parseNotification(mine[1]);
+        mine[1].fill(0);
+        expect(adapter.isFinal(adapter.parseNotification(mine[2])!)).toBe(true);
+      });
+      const record = [...B1_CS10E_331.subarray(4, -1)]
+        .map((b) => b.toString(16).padStart(2, '0'))
+        .join(' ');
+      expect(lines.some((l) => l.includes(`${record} (#501)`))).toBe(true);
+    });
+
+    it('says when a 0x23 is ignored while the parts are awaited', async () => {
+      const stored = Buffer.alloc(19);
+      stored[0] = 0x23;
+      stored[1] = 19;
+      const { adapter } = await afterFirstPart();
+      const lines = await debugLines(() => {
+        expect(adapter.parseNotification(stored)).toBeNull();
+      });
+      expect(lines).toContain('QN: 0x23 ignored while a 0xb1 waits for its parts (#501)');
+    });
+
+    it('ignores a byte-identical repeat of any part held', async () => {
+      for (const order of [
+        [P2, P2],
+        [P1, P2],
+        [P2, P1, P2],
+      ]) {
+        const { adapter } = await afterFirstPart();
+        for (const frame of order) expect(adapter.parseNotification(frame)).toBeNull();
+        expect(adapter.completionHoldMs).toBe(5000);
+        const last = adapter.parseNotification(P3);
+        expect(adapter.isFinal(last!)).toBe(true);
+      }
+    });
+
+    it('gives the weight, and logs that the parts do not add up, for a total other than the record', async () => {
+      const short = splitB1(B1_CS10E_331, [40, 40, 33]);
+      const { adapter } = await afterFirstPart(ALGO, short[0]);
+      expect(adapter.parseNotification(short[1])).toBeNull();
+      let last: ScaleReading | null = null;
+      const lines = await debugLines(() => {
+        last = adapter.parseNotification(short[2]);
+      });
+      expect(last).toEqual(WEIGHT);
+      expect(adapter.isFinal(last!)).toBe(true);
+      expect(lines).toContain('QN: the 0xb1 parts do not add up to one record, not read (#501)');
+    });
+
+    it('keeps the held weight through frames of other kinds in the window', async () => {
+      // A 0x23 stamped now: a stored record of this session, which on its own
+      // is a reading and ends the session on its weight.
+      const stored = Buffer.alloc(19);
+      stored[0] = 0x23;
+      stored[1] = 19;
+      stored[5] = 1;
+      stored.writeUInt32LE(Math.floor(Date.now() / 1000) - SCALE_EPOCH_OFFSET, 6);
+      stored.writeUInt16BE(7000, 10);
+      const alone = await weighIn(ALGO, [...ACCEPTED_THEN(LIVE_CS10E_331).slice(0, -1)]);
+      expect(alone.adapter.parseNotification(stored)?.weight).toBe(70);
+
+      const { adapter, reading } = await afterFirstPart();
+      expect(reading).toEqual(WEIGHT);
+      expect(adapter.parseNotification(stored)).toBeNull();
+      expect(adapter.parseNotification(B4_501)).toBeNull();
+      expect(adapter.parseNotification(LIVE_CS10E_331)).toBeNull();
+      expect(adapter.completionHoldMs).toBe(5000);
+      expect(adapter.parseNotification(P2)).toBeNull();
+      expect(adapter.isFinal(adapter.parseNotification(P3)!)).toBe(true);
+    });
+
+    it('stops the 0x22 re-query timer when the wait begins, and times the parts', async () => {
+      vi.useFakeTimers();
+      try {
+        const adapter = makeAdapter();
+        adapter.configure(ALGO);
+        adapter.onSessionStart?.();
+        await adapter.onConnected({
+          write: async () => {},
+          read: async () => Buffer.alloc(0),
+          subscribe: async () => {},
+          profile: P,
+          deviceAddress: '',
+          availableChars: new Set<string>(),
+        } as unknown as ConnectionContext);
+        for (const f of [INFO_CS10E_1104, READY_CS10E_1104, CONFIG_REQ_CS10E_1104]) {
+          adapter.parseNotification(f);
+          await vi.advanceTimersByTimeAsync(300);
+        }
+        adapter.parseNotification(VISIT_OK_CS10E_1104);
+        adapter.parseNotification(LIVE_CS10E_331);
+        adapter.scheduleStoredDataRetry();
+        expect(adapter.s.storedRetryTimer).not.toBeNull();
+        adapter.parseNotification(P1);
+        expect(adapter.s.storedRetryTimer).toBeNull();
+        const debug = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+        await vi.advanceTimersByTimeAsync(30);
+        adapter.parseNotification(P2);
+        await vi.advanceTimersByTimeAsync(1);
+        adapter.parseNotification(P3);
+        const lines = debug.mock.calls.map((c) => String(c[0]));
+        debug.mockRestore();
+        expect(lines).toContain('QN: 0xb1 part 2 of 3 (45 bytes), 30 ms after part 1 (#501)');
+        expect(lines).toContain('QN: 0xb1 part 3 of 3 (39 bytes), 31 ms after part 1 (#501)');
+        expect(
+          lines.some((l) =>
+            l.includes('put together from 3 parts (45, 45, 39 bytes, 0, 30, 31 ms'),
+          ),
+        ).toBe(true);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('does not wait without a profile frame sent, or for a first part it does not read', async () => {
+      const none = await weighIn({ qnAlgorithm: 7 }, ACCEPTED_THEN(B1_501));
+      expect(none.adapter.isFinal(none.reading!)).toBe(true);
+      expect(none.adapter.completionHoldMs).toBeUndefined();
+      const noWeight = await weighIn(ALGO, ACCEPTED_THEN(B1_501_NO_WEIGHT));
+      expect(noWeight.reading).toBeNull();
+      expect(noWeight.adapter.completionHoldMs).toBeUndefined();
+      const bad = await weighIn(
+        ALGO,
+        ACCEPTED_THEN(Buffer.from([...P1.subarray(0, -1), P1.at(-1)! ^ 0xff])),
+      );
+      expect(bad.reading).toBeNull();
+      expect(bad.adapter.completionHoldMs).toBeUndefined();
+      const light = await weighIn(ALGO, ACCEPTED_THEN(derive(P1, { 5: 0x01, 6: 0x00 })));
+      expect(light.reading).toBeNull();
+      expect(light.adapter.completionHoldMs).toBeUndefined();
+    });
+
+    it('does not wait for a first part that came after a later one', async () => {
+      const { adapter } = await weighIn(ALGO, [...ACCEPTED_THEN(P2)]);
+      const first = adapter.parseNotification(P1);
+      expect(first).toEqual(WEIGHT);
+      expect(adapter.isFinal(first!)).toBe(true);
+      expect(adapter.completionHoldMs).toBeUndefined();
+    });
+
+    it('leaves a 0xB1 in one part as it was, pinned and final', async () => {
+      const { adapter, reading } = await weighIn(ALGO, ACCEPTED_THEN(B1_CS10E_331));
+      expect(adapter.isFinal(reading!)).toBe(true);
+      expect(adapter.completionHoldMs).toBeUndefined();
+      expect(reading).toHaveProperty('scaleComposition');
+    });
+
+    it('logs a session that ends with parts missing, and starts the next one clean', async () => {
+      const { adapter } = await afterFirstPart();
+      adapter.parseNotification(P2);
+      const lines = await debugLines(() => adapter.onSessionEnd());
+      expect(lines).toContain(
+        'QN: the session ended with a 0xb1 still missing parts: 2 of 3 had come, the weight ' +
+          'of the first one is all there is (#501)',
+      );
+      adapter.onSessionStart?.();
+      expect(adapter.s.resultAssembly).toBeNull();
+      expect(adapter.completionHoldMs).toBeUndefined();
+    });
+  });
+
+  describe('joinExtendedResultParts and the checks (#501, D103)', () => {
+    it.each([
+      ['40/40/34', [40, 40, 34]],
+      ['39/39/36', [39, 39, 36]],
+      ['one part of 114', [114]],
+    ])('rebuilds the one-part frame byte for byte from %s', (_what, sizes) => {
+      for (const source of [B1_CS10E_331, B1_CS10E_1104]) {
+        const joined = joinExtendedResultParts(splitB1(source, sizes));
+        expect(joined).not.toBeNull();
+        expect(joined!.equals(source)).toBe(true);
+        expect(decodeExtendedResult(joined!)).toEqual(decodeExtendedResult(source));
+      }
+    });
+
+    it('reads nothing from parts that do not belong together', () => {
+      const [a, b, c] = SPLIT_CS10E;
+      const bad = Buffer.from([...b.subarray(0, -1), b.at(-1)! ^ 1]);
+      expect(joinExtendedResultParts([])).toBeNull();
+      expect(joinExtendedResultParts([a, b])).toBeNull(); // 3 announced, 2 given
+      expect(joinExtendedResultParts([a, c, b])).toBeNull(); // order
+      expect(joinExtendedResultParts([a, bad, c])).toBeNull(); // checksum
+      expect(joinExtendedResultParts([a, derive(b, { 1: 0x2c }), c])).toBeNull(); // [1]
+      expect(joinExtendedResultParts([a, b, derive(c, { 0: 0xb4 })])).toBeNull(); // opcode
+      expect(joinExtendedResultParts(splitB1(B1_CS10E_331, [40, 40, 33]))).toBeNull(); // short
+      expect(joinExtendedResultParts(splitB1(B1_CS10E_331, [40, 40, 35]))).toBeNull(); // long
+      expect(joinExtendedResultParts([Buffer.alloc(0)])).toBeNull();
+    });
+
+    const checksOf = (parts: Buffer[]) =>
+      extendedResultChecks(decodeExtendedResult(joinExtendedResultParts(parts)!)!);
+
+    it('holds the relations of the scale record for a record joined from one weigh-in', () => {
+      for (const parts of [SPLIT_CS10E, SPLIT_CS10E_1104]) {
+        const c = checksOf(parts);
+        expect(c.leanPlusFat).toBeCloseTo(100, 1);
+        expect(Math.abs(c.muscleVsLeanLessBone)).toBeLessThanOrEqual(0.1 + 1e-9);
+        expect(Math.abs(c.bmiVsBmiFine)).toBeLessThanOrEqual(0.05);
+        expect(Math.abs(c.bmrVsKatchMcArdle)).toBeLessThanOrEqual(2);
+        expect(c.impliedHeightCm).not.toBeNull();
+      }
+    });
+
+    it('shows a first part from one weigh-in and the others from another', () => {
+      const mixed = [SPLIT_CS10E_1104[0], SPLIT_CS10E[1], SPLIT_CS10E[2]];
+      const c = checksOf(mixed);
+      expect(Math.abs(c.bmrVsKatchMcArdle)).toBeGreaterThan(2);
+    });
   });
 
   it('reads the option from the profile frame sent, not from a later reload', async () => {

@@ -90,7 +90,10 @@ const LEAN_FAT_SUM_TOLERANCE = 0.2 + 1e-9;
  * with, so it is never used there. On the 20-byte dialect also see
  * `requiresAlgorithmOption`.
  */
-function scaleCompositionRejection(pin: ScaleCompositionPin, profile: UserProfile): string | null {
+export function scaleCompositionRejection(
+  pin: ScaleCompositionPin,
+  profile: UserProfile,
+): string | null {
   const { visit, reply, result, composition } = pin;
   if (!visit) return 'this session sent the scale no profile of a configured user';
   if (pin.requiresAlgorithmOption && !visit.algorithmFromOption) {

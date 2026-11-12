@@ -231,7 +231,9 @@ export class QnSession {
    * Whether a completed-weigh-in result frame (0xB4/0xB1) has already produced a
    * reading this session. The scale repeats the 0xB4 frame ~3x and then sends
    * the 0xB1 records, all describing the one weigh-in, so the reading is emitted
-   * exactly once and the repeats are suppressed (#235).
+   * exactly once and the repeats are suppressed (#235). It is set by the first
+   * part of a split 0xB1 too, so the parts that follow are not read as weights;
+   * while `resultAssembly` is open they are the record's parts instead (D103).
    */
   extendedResultEmitted = false;
 
@@ -243,6 +245,19 @@ export class QnSession {
    */
   resultFirstPartSeen = false;
   resultPartHintLogged = false;
+
+  /**
+   * A split 0xB1 whose first part carried the weight, while the session waits
+   * for the other parts (#501, D103): `reading` is the weight of the first
+   * part, `parts` the frames held in order and `atMs` when each came. Open
+   * only with a configured user's profile frame sent (`visitSent`); null
+   * before, and again once the record is joined or the wait is given up.
+   */
+  resultAssembly: {
+    reading: ScaleReading;
+    parts: Buffer[];
+    atMs: number[];
+  } | null = null;
 
   /**
    * Timestamp (Date.now()) of the first stable R1=R2=0 frame seen on a

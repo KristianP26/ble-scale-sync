@@ -8,6 +8,7 @@
 
 import type { Gender } from '../../interfaces/scale-adapter.js';
 import {
+  EXTENDED_RESULT_RECORD_LEN,
   RESULT_ACK_MEASURED,
   RESULT_ACK_OPCODE,
   RESULT_OPCODE_B1,
@@ -483,7 +484,7 @@ const tenthLE = (frame: Buffer, at: number): number => frame.readUInt16LE(at) / 
  * Muscle and bone are % of the body weight when the ready frame says so, as
  * on the 19-byte dialect. The SDK reads the channels as sent, without the
  * unscrambling of SCRAMBLE_FLAG_BIT. Null for anything else, a frame of
- * several parts included: those are not put together here.
+ * several parts included: joinExtendedResultParts puts those together first.
  */
 export function decodeExtendedResult(frame: Buffer): ExtendedResult | null {
   if (frame.length !== 119 || frame[0] !== RESULT_OPCODE_B1 || frame[1] !== frame.length) {
@@ -520,6 +521,71 @@ export function decodeExtendedResult(frame: Buffer): ExtendedResult | null {
     handle: frame[50],
     bmiFine: frame.readUInt16LE(115) / 100,
     biaType: frame[117],
+  };
+}
+
+/**
+ * Put the parts of a split extended-dialect 0xB1 back into the one-part frame
+ * decodeExtendedResult reads (#501, D103). Each part is `b1 <len> <count>
+ * <index> <payload> <cs>` with its own length at [1], the same part count at
+ * [2], its index 1..count at [3] in order and the sum checksum; the payloads
+ * ([4 .. len-2]) add up to EXTENDED_RESULT_RECORD_LEN bytes, which the vendor's
+ * SDK reads as the record. The frame is rebuilt as `b1 77 01 01 <record> <cs>`,
+ * the one the same scale sends to its vendor app (PROTOCOLS.md); its checksum
+ * is new and proves nothing, the per-part checks are the integrity.
+ *
+ * Null for anything else, never a throw: the caller sits in parseNotification.
+ */
+export function joinExtendedResultParts(parts: readonly Buffer[]): Buffer | null {
+  if (parts.length === 0) return null;
+  const count = parts[0].length > 2 ? parts[0][2] : 0;
+  if (count !== parts.length) return null;
+  const record: number[] = [];
+  for (const [i, part] of parts.entries()) {
+    if (part.length < 6 || part[0] !== RESULT_OPCODE_B1 || part[1] !== part.length) return null;
+    if (part[2] !== count || part[3] !== i + 1 || !hasValidSumChecksum(part)) return null;
+    for (let at = 4; at < part.length - 1; at++) record.push(part[at]);
+    if (record.length > EXTENDED_RESULT_RECORD_LEN) return null;
+  }
+  if (record.length !== EXTENDED_RESULT_RECORD_LEN) return null;
+  return Buffer.from(
+    withChecksum([RESULT_OPCODE_B1, EXTENDED_RESULT_RECORD_LEN + 5, 0x01, 0x01, ...record]),
+  );
+}
+
+/**
+ * Relations the scale's own results satisfy in every extended 0xB1 looked at
+ * (hypothesis, PROTOCOLS.md): the checks that tell a record put together from
+ * the parts of one weigh-in from a mix of two. All differences, 0 when it
+ * holds; read as a log line, not as a gate (#501, D103).
+ */
+export interface ExtendedResultChecks {
+  /** lean body mass % + body fat %, 100 when it holds. */
+  leanPlusFat: number;
+  /** muscle % - (lean body mass % - bone %), 0 when it holds. */
+  muscleVsLeanLessBone: number;
+  /** BMI (/10) - bmiFine (/100). */
+  bmiVsBmiFine: number;
+  /** BMR - (370 + 21.6 x lean body mass in kg), the Katch-McArdle formula. */
+  bmrVsKatchMcArdle: number;
+  /** The height in cm bmiFine and the weight imply; null without a BMI. */
+  impliedHeightCm: number | null;
+}
+
+const to2 = (v: number): number => Math.round(v * 100) / 100;
+
+export function extendedResultChecks(decoded: ExtendedResult): ExtendedResultChecks {
+  const { result, composition } = decoded;
+  const leanKg = (result.weight * composition.lbm) / 100;
+  return {
+    leanPlusFat: to2(composition.lbm + result.fatPercent),
+    muscleVsLeanLessBone: to2(composition.muscle - (composition.lbm - composition.bone)),
+    bmiVsBmiFine: to2(composition.bmi - decoded.bmiFine),
+    bmrVsKatchMcArdle: to2(composition.bmr - (370 + 21.6 * leanKg)),
+    impliedHeightCm:
+      decoded.bmiFine > 0 && result.weight > 0
+        ? to2(Math.sqrt(result.weight / decoded.bmiFine) * 100)
+        : null,
   };
 }
 
