@@ -21,14 +21,14 @@
       "atMs": 0,
       "uuid": "fff1",
       "hex": "fd37000100000000000000cb",
-      "withResponse": false
+      "withResponse": true
     },
     {
       "seq": 2,
       "atMs": 0,
       "uuid": "fff1",
       "hex": "f107ea0101000000",
-      "withResponse": false
+      "withResponse": true
     }
   ],
   "rxDropped": 0,

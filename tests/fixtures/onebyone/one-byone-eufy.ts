@@ -3,7 +3,7 @@ import type { Trace } from '../../helpers/replay/trace.js';
 
 /**
  * 1byone (Eufy C1/P1/A1, "Health Scale"): the FD 37 mode/unit command and the
- * F1 clock (local time) at connect, both without response, then 0xCF frames
+ * F1 clock (local time) at connect, both as Write Requests (#533), then 0xCF frames
  * on FFF4 held until two in a row report the same weight (#284).
  *
  * No frame of this scale is on record (#177, #251 and #319 carry adverts and

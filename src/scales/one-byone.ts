@@ -78,6 +78,11 @@ export class OneByoneAdapter implements ScaleAdapterCore, GattWiring {
    * Init sequence per openScale OneByoneHandler:
    *   1. Mode/unit command: [0xFD, 0x37, unit, group, ...padding, XOR]
    *   2. Clock sync: [0xF1, yearHi, yearLo, month, day, hour, min, sec]
+   *
+   * Both go out as Write Requests, as openScale's writeTo() does by default. On the
+   * Eufy C1 0xFFF1 only has the `write` property, and BlueZ forwards a Write Command
+   * anyway, so the scale rejects it with Write Not Permitted, never gets the clock
+   * sync and never streams readings (#533).
    */
   async onConnected(ctx: ConnectionContext): Promise<void> {
     this.s = new OneByoneSession();
@@ -85,7 +90,7 @@ export class OneByoneAdapter implements ScaleAdapterCore, GattWiring {
     // Step 1: Mode/unit command
     const unitCmd = [0xfd, 0x37, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
     unitCmd.push(xorChecksum(unitCmd, 0, unitCmd.length));
-    await ctx.write(this.charWriteUuid, unitCmd, false);
+    await ctx.write(this.charWriteUuid, unitCmd, true);
 
     // Step 2: Clock sync
     const now = new Date();
@@ -99,7 +104,7 @@ export class OneByoneAdapter implements ScaleAdapterCore, GattWiring {
       now.getMinutes(),
       now.getSeconds(),
     ];
-    await ctx.write(this.charWriteUuid, clockCmd, false);
+    await ctx.write(this.charWriteUuid, clockCmd, true);
   }
 
   parseNotification(data: Buffer): ScaleReading | null {

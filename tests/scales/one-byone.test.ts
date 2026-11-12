@@ -89,7 +89,7 @@ describe('OneByoneAdapter', () => {
       // Call 1: FD 37 mode/unit command with XOR checksum
       const [charUuid1, data1, withResponse1] = writeFn.mock.calls[0];
       expect(charUuid1).toBe(adapter.charWriteUuid);
-      expect(withResponse1).toBe(false);
+      expect(withResponse1).toBe(true);
       expect(data1[0]).toBe(0xfd);
       expect(data1[1]).toBe(0x37);
       expect(data1.length).toBe(12); // 11 bytes + XOR checksum
@@ -101,7 +101,7 @@ describe('OneByoneAdapter', () => {
       // Call 2: clock sync
       const [charUuid2, data2, withResponse2] = writeFn.mock.calls[1];
       expect(charUuid2).toBe(adapter.charWriteUuid);
-      expect(withResponse2).toBe(false);
+      expect(withResponse2).toBe(true);
       expect(data2[0]).toBe(0xf1);
       expect(data2.length).toBe(8);
       // Year should be current year
