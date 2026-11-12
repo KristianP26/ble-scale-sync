@@ -6,10 +6,11 @@ import type { Trace } from '../../helpers/replay/trace.js';
  * F1 clock (local time) at connect, both as Write Requests (#533), then 0xCF frames
  * on FFF4 held until two in a row report the same weight (#284).
  *
- * No frame of this scale is on record (#177, #251 and #319 carry adverts and
- * errors, no notifications), so every trace is characterization, built as
- * tests/scales/one-byone.test.ts builds its frames: [1..2] impedance x10 (LE
- * as the adapter reads it), [3..4] weight x100 LE, [9] = 1 impedance invalid.
+ * The traces here are characterization, built as tests/scales/one-byone.test.ts
+ * builds its frames: [1..2] impedance x10 (LE as the adapter reads it), [3..4]
+ * weight x100 LE, [9] = 1 impedance invalid. #177, #251 and #319 carry adverts
+ * and errors, no notifications. The frames of a real C1 weigh-in (#533, #534)
+ * are in eufy-c1-534.ts.
  */
 
 const W_80_0 = 'cf0000401f0000000001';
