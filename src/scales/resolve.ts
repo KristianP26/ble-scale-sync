@@ -1,9 +1,27 @@
 import type { BleDeviceInfo, ScaleAdapter } from '../interfaces/scale-adapter.js';
 import { adapters as defaultRegistry } from './index.js';
-import { miBeaconClaimHits, nameClaimHits, type MatchDescriptor } from './match-descriptor.js';
+import {
+  miBeaconClaimHits,
+  nameClaimHits,
+  normalizeLocalName,
+  type MatchDescriptor,
+} from './match-descriptor.js';
 import { StandardGattScaleAdapter } from './standard-gatt.js';
 
 const byPriority = new WeakMap<readonly ScaleAdapter[], ScaleAdapter[]>();
+
+/**
+ * The device as `matches()` should see it: the same object when the name is
+ * clean, else a copy with the trailing padding gone (#503). Transports, logs
+ * and the connection context keep the raw name; only matching is normalized, at
+ * the resolver seam (nameClaimHits repeats it as a guard), because many
+ * adapters compare `localName` in their own `matches()`.
+ */
+function withMatchName(device: BleDeviceInfo): BleDeviceInfo {
+  if (!device.localName) return device;
+  const localName = normalizeLocalName(device.localName);
+  return localName === device.localName ? device : { ...device, localName };
+}
 
 /**
  * The first adapter in `registry` by `match.priority` (higher wins, missing = 0,
@@ -19,7 +37,8 @@ export function resolveAdapter(
     ordered = [...registry].sort((a, b) => (b.match?.priority ?? 0) - (a.match?.priority ?? 0));
     byPriority.set(registry, ordered);
   }
-  return ordered.find((a) => a.matches(device));
+  const named = withMatchName(device);
+  return ordered.find((a) => a.matches(named));
 }
 
 /** What GATT discovery found on a connected device. */
@@ -110,15 +129,17 @@ export function resolveAfterDiscovery(
   gatt: GattDiscovery,
   registry: readonly ScaleAdapter[] = defaultRegistry,
 ): ScaleAdapter | undefined {
+  // Once, so the picks below and the evidence checks judge the same name.
+  const named = withMatchName(advertised);
   const characteristicUuids = [...gatt.characteristicUuids];
   const full: BleDeviceInfo = {
-    ...advertised,
+    ...named,
     serviceUuids: unionUuids(advertised.serviceUuids, gatt.serviceUuids),
     characteristicUuids,
   };
   const fromGatt = resolveAdapter(full, registry);
 
-  const { characteristicUuids: _drop, ...advertOnly } = advertised;
+  const { characteristicUuids: _drop, ...advertOnly } = named;
   const fromAdvert = resolveAdapter(advertOnly, registry);
   if (!fromAdvert || fromAdvert === fromGatt) return fromGatt;
 
@@ -127,10 +148,10 @@ export function resolveAfterDiscovery(
 
   if (!fromAdvert.matches(withChars)) return fromGatt;
   if (fromAdvert instanceof StandardGattScaleAdapter) return fromGatt;
-  if (!fromAdvert.match || !identifiedByAdvertisement(fromAdvert.match, advertised)) {
+  if (!fromAdvert.match || !identifiedByAdvertisement(fromAdvert.match, named)) {
     return fromGatt;
   }
-  if (fromGatt && groundedInAdvertisement(fromGatt, advertised) && fromGatt.matches(withChars)) {
+  if (fromGatt && groundedInAdvertisement(fromGatt, named) && fromGatt.matches(withChars)) {
     return fromGatt;
   }
   return fromAdvert;

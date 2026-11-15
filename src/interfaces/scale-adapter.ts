@@ -6,6 +6,12 @@ export type Gender = 'male' | 'female';
 
 /** Minimal BLE advertisement info needed for adapter matching. */
 export interface BleDeviceInfo {
+  /**
+   * The advertised name as the transport reported it, trailing padding
+   * included (a CH100 arrives as `CH100` plus 15 spaces, #503). The resolver
+   * hands `matches()` the name without that padding, so only a direct
+   * `matches()` call sees the raw one.
+   */
   localName: string;
   /**
    * The device's own BLE address, uppercase colon-separated, when the transport
@@ -530,6 +536,12 @@ export interface ScaleAdapterCore {
    */
   restoreDedupMark?(mark: number): void;
 
+  /**
+   * Whether this adapter claims the device. When called through resolveAdapter
+   * or resolveAfterDiscovery, device.localName arrives without its trailing
+   * padding (NUL, whitespace); compare it as a clean name. A name that is only
+   * padding stays as it came.
+   */
   matches(device: BleDeviceInfo): boolean;
   parseNotification(data: Buffer): ScaleReading | null;
   isComplete(reading: ScaleReading): boolean;
