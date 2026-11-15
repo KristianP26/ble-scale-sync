@@ -561,6 +561,22 @@ export const RESULT_MIN_WEIGHT_KG = 5;
 export const RESULT_MAX_WEIGHT_KG = 300;
 
 /**
+ * The extended dialect's 0xB1 record without the four header bytes and the
+ * checksum: what the parts of a split record add up to, and what the one-part
+ * frame (119 bytes) carries between them (#501, D103).
+ */
+export const EXTENDED_RESULT_RECORD_LEN = 114;
+
+/**
+ * How long a split 0xB1 whose first part carried the weight waits for its
+ * other parts when a configured user's profile frame went out (#501, D103).
+ * The parts of a burst came 0 to 97 ms apart in the one log that shows them
+ * and the first part 0.12 to 0.2 s after the last 0xB4, so 5 s is generous;
+ * the cost is only paid when parts are lost, as a weigh-in 5 s later.
+ */
+export const EXTENDED_RESULT_PARTS_HOLD_MS = 5_000;
+
+/**
  * The 19-byte dialect's weigh-in stream (Arboleaf, #331, D037).
  *
  * After START this dialect streams 20-byte 0x10 frames:

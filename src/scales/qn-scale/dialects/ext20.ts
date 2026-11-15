@@ -2,6 +2,8 @@ import { bleLog } from '../../../ble/types.js';
 import type { ScaleReading } from '../../../interfaces/scale-adapter.js';
 import {
   EIGHT_CHANNEL_ORDER,
+  EXTENDED_RESULT_PARTS_HOLD_MS,
+  EXTENDED_RESULT_RECORD_LEN,
   LIVE20_FRAME_LEN,
   LIVE20_STATUS_MEASURING,
   LIVE20_STATUS_RESULT,
@@ -13,10 +15,17 @@ import {
   RESULT_RECORD_CLOCK_TOLERANCE_SEC,
   SCALE_EPOCH_OFFSET,
 } from '../constants.js';
-import { storedSlotLabel, type QnDialectHandler } from '../dialect.js';
-import { r2 } from '../../body-comp-helpers.js';
-import { decodeExtendedResult, hasValidSumChecksum, type ExtendedResult } from '../frames.js';
-import type { ScaleCompositionPin } from '../own-composition.js';
+import { hex, storedSlotLabel, type QnDialectHandler } from '../dialect.js';
+import { compositionRejection, r2 } from '../../body-comp-helpers.js';
+import {
+  decodeExtendedResult,
+  extendedResultChecks,
+  hasValidSumChecksum,
+  joinExtendedResultParts,
+  type ExtendedResult,
+} from '../frames.js';
+import type { QnScaleAdapter } from '../index.js';
+import { scaleCompositionRejection, type ScaleCompositionPin } from '../own-composition.js';
 import type { QnSession } from '../session.js';
 import { dialect as va19 } from './va19.js';
 
@@ -32,6 +41,12 @@ import { dialect as va19 } from './va19.js';
  * in one part also carries the scale's own results (decodeExtendedResult),
  * pinned to the reading for computeMetrics to judge (#331, D096).
  *
+ * A 0xB1 in several parts (CS10G #501) is put together when a configured
+ * user's profile frame went out: the first part's weight is held for the other
+ * parts (hold, EXTENDED_RESULT_PARTS_HOLD_MS), the record is joined and decoded
+ * and its results are logged with a dry-run of the D096 verdict, but not
+ * exported yet (D103). Every failure gives the first part's weight at once.
+ *
  * The Arboleaf CS10K also sends a 20-byte 0x12, but without the dynamic-package
  * bit, and weighs in with the 19-byte dialect's frames: frame() offers each one
  * to va19 first (#530). Only the bit sends a scale that way. The CS10E, CS10G
@@ -39,22 +54,50 @@ import { dialect as va19 } from './va19.js';
  * a provisional reading and skip noteLiveFrame, which D096 relies on.
  * liveWeightAfterVisit stays null on the CS10K for the same reason.
  */
-export const ext20: QnDialectHandler = {
+export const ext20 = {
   frame(q, data) {
     if (q.s.dynamicPackage === false) {
       const own = va19.frame(q, data);
       if (own !== undefined) return own;
     }
     const opcode = data[0];
-    if (opcode === 0x23) return q.storedRecord(data);
-    if (opcode === RESULT_OPCODE_B4 || opcode === RESULT_OPCODE_B1) return resultFrame(q.s, data);
+    if (opcode === 0x23) {
+      // A stored record is a reading of its own and would end the session on
+      // another weight while the first part's one waits for its parts.
+      if (q.s.resultAssembly !== null) {
+        bleLog.debug('QN: 0x23 ignored while a 0xb1 waits for its parts (#501)');
+        return null;
+      }
+      return q.storedRecord(data);
+    }
+    if (opcode === RESULT_OPCODE_B4 || opcode === RESULT_OPCODE_B1) return resultFrame(q, data);
     if (opcode === 0x10) {
       noteLiveFrame(q.s, data);
       noteResultBlockOnDynamicPackage(q.s, data);
     }
     return undefined;
   },
-};
+
+  /**
+   * While a split 0xB1 waits for its other parts (D103). Not pending: the parts
+   * arrive back to back, so a lost one is not worth the extension steps.
+   */
+  hold(s) {
+    if (s.resultAssembly === null) return undefined;
+    return { ms: EXTENDED_RESULT_PARTS_HOLD_MS, pending: false };
+  },
+} satisfies QnDialectHandler;
+
+/** A line from onSessionEnd when the session ended with a split 0xB1 still waiting (D103). */
+export function logAssemblyAtSessionEnd(s: QnSession): void {
+  const a = s.resultAssembly;
+  if (a === null) return;
+  s.resultAssembly = null;
+  bleLog.debug(
+    `QN: the session ended with a 0xb1 still missing parts: ${a.parts.length} of ` +
+      `${a.parts[0][2]} had come, the weight of the first one is all there is (#501)`,
+  );
+}
 
 /**
  * The 19-byte dialect's result block (status 02, first of three parts) behind
@@ -128,8 +171,16 @@ function noteResultPart(s: QnSession, data: Buffer): void {
  * when the frame is not a recognised result frame, fails its
  * trailing sum checksum, carries an out-of-range weight, or a reading was
  * already emitted this session.
+ *
+ * The first part of a split 0xB1 with a profile frame sent gives a provisional
+ * reading and opens a wait for the other parts (startsAssembly): while it is
+ * open, 0xB1 frames go to nextResultPart and the reading comes back final, as
+ * a copy, from the last part or from whatever ends the wait (D103).
  */
-function resultFrame(s: QnSession, data: Buffer): ScaleReading | null {
+function resultFrame(q: QnScaleAdapter, data: Buffer): ScaleReading | null {
+  const s = q.s;
+  // A split 0xB1 waits for its parts before anything else is judged (D103).
+  if (data[0] === RESULT_OPCODE_B1 && s.resultAssembly !== null) return nextResultPart(q, data);
   if (s.extendedResultEmitted) return null;
 
   // Standard QN trailing checksum, verified against every captured 0xB4/0xB1
@@ -200,12 +251,208 @@ function resultFrame(s: QnSession, data: Buffer): ScaleReading | null {
       `${storedSlotLabel(data[4])} (no whole-body impedance, ` +
       `${withOwn ? "with the scale's own body composition" : 'emitting weight-only'}) #235`,
   );
-  if (data[0] === RESULT_OPCODE_B1) logExtendedResult(data, decoded);
   const reading: ScaleReading = { weight, impedance: 0 };
+  if (startsAssembly(s, data)) {
+    beginAssembly(q, reading, data);
+    return reading;
+  }
+  if (data[0] === RESULT_OPCODE_B1) logExtendedResult(data, decoded);
   // Only for a session that sent a configured user's profile: nothing else
   // could ever use it (#331).
   if (decoded !== null && s.visitSent !== null) pinOwnComposition(s, reading, decoded);
   return reading;
+}
+
+/**
+ * Whether this first part of a 0xB1 opens a wait for the others (D103): a
+ * split record (`[2]` 2 or more) whose first part is whole, with a configured
+ * user's profile frame sent, and no later part seen before it (resultPartHintLogged:
+ * the burst is out of order, nothing to join). Anything else is the weight as
+ * before.
+ */
+function startsAssembly(s: QnSession, data: Buffer): boolean {
+  return (
+    data[0] === RESULT_OPCODE_B1 &&
+    data[3] === 0x01 &&
+    data[2] >= 2 &&
+    data[1] === data.length &&
+    data.length - 5 < EXTENDED_RESULT_RECORD_LEN &&
+    s.visitSent !== null &&
+    !s.resultPartHintLogged
+  );
+}
+
+/**
+ * Open the wait: the first part's weight is provisional (the shared session
+ * holds it, HoldForComposition) and the 0x22 re-query timer stops, so no
+ * stored answer is asked for while the parts come (D103).
+ */
+function beginAssembly(q: QnScaleAdapter, reading: ScaleReading, data: Buffer): void {
+  const s = q.s;
+  if (s.storedRetryTimer) {
+    clearTimeout(s.storedRetryTimer);
+    s.storedRetryTimer = null;
+  }
+  q.provisionalReadings.add(reading);
+  s.resultAssembly = { reading, parts: [Buffer.from(data)], atMs: [Date.now()] };
+  bleLog.debug(
+    `QN: 0xb1 part 1 of ${data[2]} (${data.length} bytes); waiting up to ` +
+      `${EXTENDED_RESULT_PARTS_HOLD_MS / 1000} s for parts 2 to ${data[2]} (#501)`,
+  );
+}
+
+/** Give the first part's weight back as final and end the wait (D103). */
+function releaseAssembly(s: QnSession, why: string): ScaleReading | null {
+  const a = s.resultAssembly;
+  if (a === null) return null;
+  s.resultAssembly = null;
+  bleLog.debug(`QN: 0xb1 ${why}; the weight of part 1 goes out as it is (#501)`);
+  return { ...a.reading };
+}
+
+/**
+ * A 0xB1 frame while a split record waits for its parts (D103). A byte-identical
+ * repeat of a part held is ignored; the next part in order is kept, and the
+ * last one joins the record; anything else (a gap, another order, other bytes
+ * for an index held, another count, a bad checksum or length, too many bytes)
+ * ends the wait with the first part's weight.
+ */
+function nextResultPart(q: QnScaleAdapter, data: Buffer): ScaleReading | null {
+  const s = q.s;
+  const a = s.resultAssembly!;
+  if (a.parts.some((p) => p.equals(data))) {
+    bleLog.debug(`QN: 0xb1 part ${data[3]} repeated unchanged, ignored (#501)`);
+    return null;
+  }
+  const count = a.parts[0][2];
+  const index = a.parts.length + 1;
+  const held = a.parts.reduce((n, p) => n + p.length - 5, 0);
+  if (data.length < 6 || data[1] !== data.length) {
+    return releaseAssembly(s, `part has a length of ${data.length} bytes that is not its own`);
+  }
+  if (!hasValidSumChecksum(data)) return releaseAssembly(s, 'part has a bad checksum');
+  if (data[2] !== count) return releaseAssembly(s, `part says ${data[2]} parts, not ${count}`);
+  if (data[3] !== index) {
+    return releaseAssembly(s, `part ${data[3]} came where part ${index} was due`);
+  }
+  if (held + data.length - 5 > EXTENDED_RESULT_RECORD_LEN) {
+    return releaseAssembly(s, `parts add up to more than ${EXTENDED_RESULT_RECORD_LEN} bytes`);
+  }
+  a.parts.push(Buffer.from(data));
+  a.atMs.push(Date.now());
+  bleLog.debug(
+    `QN: 0xb1 part ${index} of ${count} (${data.length} bytes), ` +
+      `${a.atMs[index - 1] - a.atMs[0]} ms after part 1 (#501)`,
+  );
+  if (index < count) return null;
+  return completeAssembly(q);
+}
+
+/**
+ * The last part came: the weight goes out as the first part gave it, and the
+ * record put together from the parts is read and logged only (D103). The
+ * diagnostics are in a try/catch: parseNotification must not throw, and the
+ * weight is not to be lost to a line that could not be built.
+ */
+function completeAssembly(q: QnScaleAdapter): ScaleReading | null {
+  const s = q.s;
+  const a = s.resultAssembly!;
+  s.resultAssembly = null;
+  try {
+    logJoinedRecord(q, a.parts, a.atMs, a.reading);
+  } catch (e) {
+    bleLog.debug(`QN: could not read the 0xb1 put together from its parts: ${String(e)} (#501)`);
+  }
+  return { ...a.reading };
+}
+
+function logJoinedRecord(
+  q: QnScaleAdapter,
+  parts: readonly Buffer[],
+  atMs: readonly number[],
+  reading: ScaleReading,
+): void {
+  const joined = joinExtendedResultParts(parts);
+  if (joined === null) {
+    bleLog.debug('QN: the 0xb1 parts do not add up to one record, not read (#501)');
+    return;
+  }
+  // Joined parts always make a frame decodeExtendedResult reads: [2] and [3]
+  // 1, its own length and a fresh checksum.
+  const decoded = decodeExtendedResult(joined)!;
+  bleLog.debug(
+    `QN: 0xb1 put together from ${parts.length} parts (${parts.map((p) => p.length).join(', ')} ` +
+      `bytes, ${atMs.map((t) => t - atMs[0]).join(', ')} ms after part 1): ` +
+      `${hex(joined.subarray(4, joined.length - 1))} (#501)`,
+  );
+  logExtendedResult(joined, decoded);
+  const s = q.s;
+  const checks = extendedResultChecks(decoded);
+  // An assembly is only opened with a profile frame sent.
+  const { frame } = s.visitSent!;
+  const visitMm = (frame[8] << 8) | frame[9];
+  bleLog.debug(
+    `QN: extended result checks: lean + fat ${checks.leanPlusFat}, muscle - (lean - bone) ` +
+      `${checks.muscleVsLeanLessBone}, BMI - bmiFine ${checks.bmiVsBmiFine}, BMR - ` +
+      `Katch-McArdle ${checks.bmrVsKatchMcArdle} kcal, height implied by bmiFine ` +
+      `${checks.impliedHeightCm ?? 'unknown'} cm, profile frame ${visitMm} mm (#501)`,
+  );
+  if (!hasMeasurement(decoded)) {
+    bleLog.info('QN: the scale sent no body composition for this weigh-in (#331)');
+    return;
+  }
+  logDryRunVerdict(q, decoded, reading, s);
+  bleLog.info(
+    `QN: the 0xb1 came in ${parts.length} parts; the scale's own body composition in it is read ` +
+      'but not exported yet (#501)',
+  );
+}
+
+/**
+ * What the D096 gate would say about this record, for the debug log only: the
+ * verdict as it stands, and with the algorithm check left out, which tells a
+ * reporter whether `ble.qn_algorithm` is all that is missing (D103).
+ */
+function logDryRunVerdict(
+  q: QnScaleAdapter,
+  decoded: ExtendedResult,
+  reading: ScaleReading,
+  s: QnSession,
+): void {
+  const profile = q.connectionProfile;
+  if (profile === null) return;
+  const pin: ScaleCompositionPin = {
+    result: decoded.result,
+    composition: decoded.composition,
+    visit: s.visitSent,
+    reply: s.visitReply,
+    valueType: s.readyValueType,
+    measuredAfterVisit: s.measuredAfterVisit,
+    liveWeightAfterVisit: s.liveWeightAfterVisit,
+    a4PreludeSent: s.a4PreludeSent,
+    requiresAlgorithmOption: true,
+    exportsSkeletalMuscle: true,
+  };
+  const asSent = scaleCompositionRejection(pin, profile);
+  const withOption =
+    pin.visit === null
+      ? asSent
+      : scaleCompositionRejection(
+          { ...pin, visit: { ...pin.visit, algorithmFromOption: true } },
+          profile,
+        );
+  const w = reading.weight;
+  const implausible = compositionRejection({
+    fat: decoded.result.fatPercent,
+    water: decoded.composition.water,
+    muscle: decoded.composition.muscle,
+    bone: (decoded.composition.bone * w) / 100,
+  });
+  bleLog.debug(
+    `QN: dry run of the scale's own composition (not exported): gate says ` +
+      `${asSent ?? 'accepted'}; without the ble.qn_algorithm check: ${withOption ?? 'accepted'}; ` +
+      `plausibility: ${implausible ?? 'ok'} (#501)`,
+  );
 }
 
 /** The scale measured something: a body fat and at least one channel (#331). */

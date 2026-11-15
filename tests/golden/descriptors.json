@@ -920,7 +920,8 @@
     "completionHoldMs": 3000,
     "hooks": [
       "onConnected",
-      "isFinal"
+      "isFinal",
+      "isCompositionPending"
     ]
   },
   {

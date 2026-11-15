@@ -48,3 +48,22 @@ export const P182_ATHLETE: UserProfile = {
   gender: 'male',
   isAthlete: true,
 };
+
+/**
+ * DERIVED, not captured (#501, D103): a one-part 119-byte 0xB1 cut into the
+ * parts a split scale sends. `sizes` are the payload bytes of each part: a
+ * part is `b1 <len> <count> <index> <payload> <cs>`, so [40, 40, 34] gives
+ * the 45, 45 and 39 bytes the CS10G sends. The captured CS10G parts are the
+ * only evidence of that shape. These parts are not in qn-scale.test.ts DERIVED
+ * (which lists frames that differ from their source in a few named bytes); the
+ * join round trip there guards this helper instead.
+ */
+export function splitB1(source: Buffer, sizes: number[]): Buffer[] {
+  const record = [...source.subarray(4, source.length - 1)];
+  let from = 0;
+  return sizes.map((size, i) => {
+    const body = [0xb1, size + 5, sizes.length, i + 1, ...record.slice(from, from + size)];
+    from += size;
+    return Buffer.from([...body, body.reduce((a, b) => a + b, 0) & 0xff]);
+  });
+}

@@ -85,7 +85,7 @@ import {
   type QnDialectKind,
 } from './dialect.js';
 import { classic } from './dialects/classic.js';
-import { ext20 } from './dialects/ext20.js';
+import { ext20, logAssemblyAtSessionEnd } from './dialects/ext20.js';
 import { unknown } from './dialects/unknown.js';
 import * as va18 from './dialects/va18.js';
 import * as va19 from './dialects/va19.js';
@@ -150,6 +150,15 @@ export class QnScaleAdapter
 
   /** Stored connection context for notification-driven state machine writes. */
   private ctx: ConnectionContext | null = null;
+
+  /**
+   * The profile of the user this connection is for, null before a connection.
+   * The 20-byte dialect judges the scale's own composition with it in the log
+   * only (ext20.ts, D103).
+   */
+  get connectionProfile(): UserProfile | null {
+    return this.ctx?.profile ?? null;
+  }
 
   /**
    * Bumped on every session boundary (onSessionStart and onSessionEnd). The
@@ -261,22 +270,28 @@ export class QnScaleAdapter
   s = new QnSession();
 
   /**
-   * The hold of the 19- or the 18-byte dialect while one is armed (see their
-   * hold()); undefined otherwise, so nothing else this adapter returns is held.
+   * The hold of the 19-byte, the 18-byte or the 20-byte dialect while one is
+   * armed (see their hold()); undefined otherwise, so nothing else this adapter
+   * returns is held.
    */
   get completionHoldMs(): number | undefined {
-    return (va19.dialect.hold(this.s) ?? va18.dialect.hold(this.s))?.ms;
+    return (va19.dialect.hold(this.s) ?? va18.dialect.hold(this.s) ?? ext20.hold(this.s))?.ms;
   }
 
   /**
-   * Only the 19-byte stable weight, fresh 19-byte stored weigh-ins and the
-   * 18-byte weigh-in held for the stored ones are provisional.
+   * Only the 19-byte stable weight, fresh 19-byte stored weigh-ins, the
+   * 18-byte weigh-in held for the stored ones and the weight of a split 20-byte
+   * 0xB1 waiting for its other parts are provisional.
    */
   isFinal(reading: ScaleReading): boolean {
     return !this.provisionalReadings.has(reading);
   }
 
-  /** Whether either of those holds still has frames of its weigh-in to come. */
+  /**
+   * Whether either of the 19- or 18-byte holds still has frames of its weigh-in
+   * to come. The 20-byte hold never does: its few parts arrive back to back, and
+   * extending a wait for lost ones would only delay the weight (D103).
+   */
   isCompositionPending(): boolean {
     return (
       va19.dialect.hold(this.s)?.pending === true || va18.dialect.hold(this.s)?.pending === true
@@ -1580,6 +1595,7 @@ export class QnScaleAdapter
     this.sessionGeneration += 1;
     this.s.dispose();
     va18.logHeldAtSessionEnd(this);
+    logAssemblyAtSessionEnd(this.s);
     this.s.sessionStartedScaleSeconds = null;
     this.ctx = null;
   }
