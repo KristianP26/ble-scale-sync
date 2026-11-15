@@ -7,6 +7,24 @@
 The add-on version always matches the application version, so every entry below
 applies to this add-on.
 
+## [1.41.0](https://github.com/KristianP26/ble-scale-sync/compare/v1.40.0...v1.41.0) (2026-11-15)
+
+
+### Added
+
+* **qn:** wait for a split 0xb1 and log what its parts hold ([b0e7047](https://github.com/KristianP26/ble-scale-sync/commit/b0e7047d7ed52fddff03e7b473840aca9e20dafb)), closes [#501](https://github.com/KristianP26/ble-scale-sync/issues/501)
+
+
+### Fixed
+
+* **ble:** send the 1byone init writes as Write Requests ([fd0d9d0](https://github.com/KristianP26/ble-scale-sync/commit/fd0d9d030a5f33b24007113a34b21f69cec14dd7)), closes [#533](https://github.com/KristianP26/ble-scale-sync/issues/533)
+* **scales:** wait for the Eufy C1 frame that carries the impedance ([d04df9c](https://github.com/KristianP26/ble-scale-sync/commit/d04df9cdca3131dc3fb2c185ee26cca0590b12b8)), closes [#534](https://github.com/KristianP26/ble-scale-sync/issues/534)
+
+
+### Docs
+
+* **qn:** drop Experimental for the Arboleaf CS10K ([3641540](https://github.com/KristianP26/ble-scale-sync/commit/3641540b2884a400cc1c1ce3ef5cbadc04cd526f)), closes [#530](https://github.com/KristianP26/ble-scale-sync/issues/530)
+
 ## [1.40.0](https://github.com/KristianP26/ble-scale-sync/compare/v1.39.1...v1.40.0) (2026-11-09)
 
 
