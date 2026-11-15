@@ -10,6 +10,7 @@ import type {
   UserProfile,
 } from '../../src/interfaces/scale-adapter.js';
 import { defaultProfile } from '../helpers/scale-test-utils.js';
+import { INFO_530 } from '../fixtures/qn/cs10k-530.js';
 import {
   buildPayload,
   isPlausibleSkeletalMusclePercent,
@@ -117,14 +118,15 @@ const R06_SESSION = {
   STABLE: hex('10 14 01 01 11 1e 05 00 00 00 00 00 00 00 00 00 00 00 00 5a'),
 };
 /**
- * #530, the Arboleaf CS10K's 20-byte 0x12 from the reporter's issue text (MAC
+ * #530, the Arboleaf CS10K's 20-byte 0x12 from the reporter's DEBUG log (MAC
  * rewritten to `01 00 00 00 00 02`, sum recomputed): [18] is 0x0b, no
- * dynamic-package bit. The reporter describes the weigh-in frames as the
- * 19-byte dialect's, so the #331 frames below run behind it: tests that use it
- * are derived, not a CS10K capture. CS10K_CONFIG is the config the reporter
- * ran, the vendor visit key, since this handshake is the extended one.
+ * dynamic-package bit. The CS10K's own session is replayed in qn-scale.test.ts;
+ * the #331 frames below run behind this 0x12 in tests that are derived, because
+ * they need edge cases and CS10K-vs-CS10E pairs the capture does not hold.
+ * CS10K_CONFIG is the config the reporter ran, the vendor visit key, since this
+ * handshake is the extended one.
  */
-const INFO_CS10K = hex('12 14 ff 01 00 00 00 00 02 1a 0f 29 00 04 05 03 e0 6f 0b e0');
+const INFO_CS10K = INFO_530;
 const CS10K_CONFIG: AdapterRuntimeConfig = { qnUserKey: 1000 };
 const R07_SESSION = {
   INFO: hex('12 13 ff 54 0b 04 00 07 ff 15 0f 27 00 01 05 03 e0 6f 30'),

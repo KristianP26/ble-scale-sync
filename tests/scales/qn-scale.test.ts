@@ -19,6 +19,8 @@ import {
 import { qnAdvertTraits } from '../../src/scales/qn-scale/matching.js';
 import { ext20 } from '../../src/scales/qn-scale/dialects/ext20.js';
 import { splitB1 } from '../fixtures/qn/frames.js';
+import { INFO_530, session as session530 } from '../fixtures/qn/cs10k-530.js';
+import { freshAdapter, replaySession } from '../helpers/replay/session.js';
 import {
   COHERENT_501,
   FIRST_PARTS_501,
@@ -69,13 +71,14 @@ const READY_461 = Buffer.from([0x14, 0x0b, 0xff, 0x01, 0x00, 0x01, 0x09, 0x03, 0
 const CONFIG_REQ_461 = Buffer.from([0x21, 0x05, 0xff, 0x01, 0x26]);
 
 /**
- * #530, the Arboleaf CS10K's 20-byte 0x12 from the reporter's issue text, bytes
+ * #530, the Arboleaf CS10K's 20-byte 0x12 from the reporter's DEBUG log, bytes
  * as sent apart from the MAC (`01 00 00 00 00 02`, the sum recomputed). [18] is
- * 0x0b, so the dynamic-package bit is clear. This is the only CS10K frame in
- * the tests: the weigh-in frames behind it below are the 19-byte Arboleaf's
- * (#331), so those tests are derived, not a CS10K capture.
+ * 0x0b, so the dynamic-package bit is clear. The session behind it is replayed
+ * in 'Arboleaf CS10K session, captured (#530)' below; the tests that run the
+ * 19-byte Arboleaf's frames (#331) behind this frame are derived, because they
+ * need edge cases and CS10K-vs-CS10E pairs the capture does not hold.
  */
-const INFO_CS10K = Buffer.from('1214ff0100000000021a0f2900040503e06f0be0', 'hex');
+const INFO_CS10K = INFO_530;
 
 /** #283, a classic scale's 17-byte 0x12, from its public log. */
 const INFO_283 = Buffer.from([
@@ -4500,7 +4503,9 @@ describe('AE02 dispatch (#75, #235)', () => {
     // stable frame, runs its BIA for about 13 s, and closes the weigh-in with a
     // 0x23 marker, a three-part result block, 0x15 and 0x16.
     // The same stream runs behind the Arboleaf CS10K's 20-byte 0x12 (#530):
-    // that scale sends these frames under the extended handshake.
+    // that scale sends these frames under the extended handshake. That row is
+    // derived from the #331 frames; the CS10K's own session is replayed in
+    // 'Arboleaf CS10K session, captured (#530)'.
     describe.each([
       ['19-byte dialect weigh-in stream (#331, D037)', 'va19'],
       [
@@ -5476,7 +5481,7 @@ describe('infoDynamicPackage (#530)', () => {
     expect(infoDynamicPackage(info)).toBe(expected);
   });
 
-  // The CS10K frame is the issue's with the MAC rewritten, so its sum is ours.
+  // The CS10K frame is the log's with the MAC rewritten, so its sum is ours.
   it('closes the rewritten CS10K frame under the family checksum', () => {
     expect(hasValidSumChecksum(INFO_CS10K)).toBe(true);
   });
@@ -5499,6 +5504,60 @@ describe('infoDynamicPackage (#530)', () => {
     const noLength = Buffer.from(INFO_CS10K);
     noLength[1] = 0x00;
     expect(infoDynamicPackage(noLength)).toBeNull();
+  });
+});
+
+// #530: the whole weigh-in of an Arboleaf CS10K, from the reporter's DEBUG log
+// of v1.40.0. Before the fix a 20-byte 0x12 without the dynamic-package bit
+// read as the extended dialect and no reading came out.
+describe('Arboleaf CS10K session, captured (#530)', () => {
+  const trace = session530.traces['530-cs10k-weigh-in'];
+
+  it('carries a valid sum checksum on every frame of the session', () => {
+    const steps = trace.steps.filter((s) => s.uuid === 'fff1');
+    // 48 frames in the log, 2 of them on AE02.
+    expect(steps).toHaveLength(46);
+    for (const step of steps) {
+      expect(hasValidSumChecksum(Buffer.from(step.hex, 'hex')), step.hex).toBe(true);
+    }
+  });
+
+  it("settles on the 0x16 with the scale's own composition and the stored record as history", async () => {
+    const r = await replaySession(freshAdapter(session530), trace, session530);
+    expect(r.settled).toEqual({ by: 'reading', atMs: 22678 });
+    expect(r.reading).toMatchObject({ weight: 82.4, impedance: 0 });
+    expect(r.reading?.scaleComposition).toBeDefined();
+    expect(r.history).toEqual([
+      { weight: 81.55, impedance: 0, timestamp: new Date('2026-11-15T06:56:24.000Z') },
+    ]);
+    expect(r.payload).toMatchObject({
+      weight: 82.4,
+      impedance: 0,
+      bodyFatPercent: 19.5,
+      waterPercent: 58,
+      muscleMass: 63.04,
+      boneMass: 3.3,
+      visceralFat: 8,
+      bmr: 1802,
+      metabolicAge: 27,
+      bmi: 26.01,
+      physiqueRating: 5,
+    });
+  });
+
+  it('answers with the handshake of the extended dialect and the profile of the fixture', async () => {
+    const r = await replaySession(freshAdapter(session530), trace, session530);
+    expect(r.writes.map((w) => [w.uuid, w.hex])).toEqual([
+      ['ae01', 'fedcbac00600020101ef'],
+      ['fff2', '1309ff01100000002c'],
+      ['fff2', '2008ffd0158c32ca'],
+      ['ae01', '0270617373'],
+      ['ae01', '01cedf8434b5d86a3c591d4fa5632235ca'],
+      ['fff2', 'a00d020103e8002806f40402c3'],
+      ['fff2', '2206ff00032a'],
+      ['fff2', 'a206012328f4'],
+      ['fff2', 'a206012328f4'],
+    ]);
   });
 });
 
