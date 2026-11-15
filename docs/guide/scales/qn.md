@@ -11,7 +11,7 @@ The QN protocol runs on many Renpho, Arboleaf, FITINDEX, GE and Sencor scales an
 
 - Renpho ES-CS20M, ES-32MD, Elis 1, and FITINDEX and Sencor rebadges.
 - Arboleaf scales with eight electrodes (19-byte dialect).
-- Arboleaf CS10K with eight electrodes (Experimental). It sends a 20-byte scale-info frame and weighs in like the 19-byte dialect.
+- Arboleaf CS10K with eight electrodes. It sends a 20-byte scale-info frame and weighs in like the 19-byte dialect.
 - GE CS 10 G ("Fit Plus") and rebadges (20-byte extended dialect).
 - Arboleaf CS10E and CS10G with eight electrodes (20-byte extended dialect).
 
@@ -120,7 +120,7 @@ The log then says `QN: using the scale's own body composition for this weigh-in 
 
 Weigh-ins stored while nothing was connected arrive on the next connection. They go, with their own time and weight only, to the exporters that [can record a past measurement](/exporters#historical-readings).
 
-The Arboleaf CS10K (Experimental) sends a 20-byte scale-info frame but weighs in like these scales, so the measuring time, the held weight and the stored weigh-ins above apply to it. Instead of the two options at the top of this section, start with `qn_user_key: 1000` alone. The scale's own body composition needs it, and unlike on the CS10E it needs no `qn_algorithm`.
+The Arboleaf CS10K sends a 20-byte scale-info frame but weighs in like these scales, so the measuring time, the held weight and the stored weigh-ins above apply to it. Instead of the two options at the top of this section, start with `qn_user_key: 1000` alone. The scale's own body composition needs it, and unlike on the CS10E it needs no `qn_algorithm`.
 
 ## GE CS 10 G and extended-dialect scales
 
