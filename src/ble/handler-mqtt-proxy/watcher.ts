@@ -10,6 +10,7 @@ import {
 import { resolveAdapter } from '../../scales/resolve.js';
 import {
   BoundedMap,
+  BoundedSet,
   evaluateAdvertisement,
   GraceTimers,
   DedupWindow,
@@ -130,9 +131,9 @@ export class ReadingWatcher implements Watcher {
   /** Set at start and on every scan-results message; the liveness signal (#281). */
   private lastAdvertAt: number | null = null;
   /** Per-MAC count of consecutive scan deferrals with no autonomous connect (#231). */
-  private deferCounts = new Map<string, number>();
+  private deferCounts = new BoundedMap<string, number>(64, 'lru');
   /** Addresses already told at info level that their GATT session was refused (#422). */
-  private readonly refusedGattLogged = new Set<string>();
+  private readonly refusedGattLogged = new BoundedSet<string>(256);
 
   constructor(
     config: MqttProxyConfig,

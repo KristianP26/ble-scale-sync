@@ -4515,3 +4515,97 @@ describe('retained messages and listener guards', () => {
     ).toBe(true);
   });
 });
+
+// ─── Bounded state ───────────────────────────────────────────────────────────
+
+describe('scan entries with fresh addresses cannot grow the watcher state', () => {
+  const T = topics(MQTT_PROXY_CONFIG.topic_prefix, MQTT_PROXY_CONFIG.device_id);
+  const mac = (i: number) =>
+    `AA:BB:CC:${(i >> 8).toString(16).padStart(2, '0')}:${(i & 0xff).toString(16).padStart(2, '0')}:01`;
+
+  beforeEach(() => {
+    _resetPeerInput();
+    vi.spyOn(bleLog, 'warn').mockImplementation(() => {});
+    vi.spyOn(bleLog, 'info').mockImplementation(() => {});
+    vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+  });
+
+  it('200 broadcast frames with fresh addresses leave at most 64 known scales', async () => {
+    const watcher = new ReadingWatcher(MQTT_PROXY_CONFIG, [createBroadcastAdapter()]);
+    await watcher.start();
+    const { getDiscoveredMacs } = await import('../../src/ble/handler-mqtt-proxy/client.js');
+    mockClient._simulateMessage(
+      T.scanResults,
+      JSON.stringify(
+        Array.from({ length: 200 }, (_, i) => ({
+          address: mac(i),
+          name: '',
+          rssi: -50,
+          services: [],
+          manufacturer_id: 0xffff,
+          manufacturer_data: mfrHex(7000 + i),
+        })),
+      ),
+    );
+    await new Promise((r) => setTimeout(r, 20));
+    expect(getDiscoveredMacs().length).toBeLessThanOrEqual(64);
+    const configs = (mockClient.publishAsync as Mock).mock.calls.filter((c) => c[0] === T.config);
+    expect(configs.length).toBeGreaterThan(0);
+    for (const call of configs) {
+      expect(
+        (JSON.parse(String(call[1])) as { scales: string[] }).scales.length,
+      ).toBeLessThanOrEqual(64);
+    }
+    await watcher.stop();
+  });
+
+  it('200 GATT candidates leave at most 64 deferral counters', async () => {
+    const watcher = new ReadingWatcher(MQTT_PROXY_CONFIG, [createGattAdapter()]);
+    await watcher.start();
+    mockClient._simulateMessage(
+      T.scanResults,
+      JSON.stringify(
+        Array.from({ length: 200 }, (_, i) => ({
+          address: mac(i),
+          name: 'GattScale',
+          rssi: -50,
+          services: [],
+        })),
+      ),
+    );
+    const { deferCounts } = watcher as unknown as { deferCounts: Map<string, number> };
+    expect(deferCounts.size).toBeLessThanOrEqual(64);
+    expect(deferCounts.size).toBeGreaterThan(0);
+    await watcher.stop();
+  });
+
+  it('a scale that fell out of the set is registered again by its next reading', async () => {
+    const watcher = new ReadingWatcher(MQTT_PROXY_CONFIG, [createBroadcastAdapter()]);
+    await watcher.start();
+    const { getDiscoveredMacs, addDiscoveredMac } =
+      await import('../../src/ble/handler-mqtt-proxy/client.js');
+    const reading = (weight: number) =>
+      mockClient._simulateMessage(
+        T.scanResults,
+        JSON.stringify([
+          {
+            address: mac(5000),
+            name: '',
+            rssi: -50,
+            services: [],
+            manufacturer_id: 0xffff,
+            manufacturer_data: mfrHex(weight),
+          },
+        ]),
+      );
+    reading(7550);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(getDiscoveredMacs()).toContain(mac(5000).toUpperCase());
+    for (let i = 0; i < 100; i++) addDiscoveredMac(mac(1000 + i));
+    expect(getDiscoveredMacs()).not.toContain(mac(5000).toUpperCase());
+    reading(7560); // another weight: the same one inside the dedup window is dropped
+    await new Promise((r) => setTimeout(r, 20));
+    expect(getDiscoveredMacs()).toContain(mac(5000).toUpperCase());
+    await watcher.stop();
+  });
+});
