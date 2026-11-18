@@ -1072,7 +1072,8 @@ describe('ReadingWatcher advertisement-read scales are never connected (#537)', 
   let info: ReturnType<typeof vi.spyOn>;
   let debug: ReturnType<typeof vi.spyOn>;
   let warn: ReturnType<typeof vi.spyOn>;
-  const lines = (spy: ReturnType<typeof vi.spyOn>) => spy.mock.calls.map((c) => String(c[0]));
+  const lines = (spy: ReturnType<typeof vi.spyOn>): string[] =>
+    spy.mock.calls.map((c: unknown[]) => String(c[0]));
   const skipLines = (spy: ReturnType<typeof vi.spyOn>) =>
     lines(spy).filter((l) => l.includes(SKIP));
 
@@ -1263,7 +1264,7 @@ describe('ReadingWatcher advertisement-read scales are never connected (#537)', 
 
   it('still connects a scale that is not read from advertisements', async () => {
     const qn = registry.find((a) => a.name === 'QN Scale')!;
-    sessionChars = [normalizeUuid(qn.charNotifyUuid), normalizeUuid(qn.charWriteUuid!)];
+    sessionChars = [normalizeUuid(qn.charNotifyUuid!), normalizeUuid(qn.charWriteUuid!)];
     const { watcher, pool } = await start();
     try {
       pool.emitAdvert({ localName: 'QN-Scale', serviceUuids: [normalizeUuid('ffe0')] }, MAC);
