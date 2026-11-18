@@ -9,7 +9,12 @@ import type { QnDialectKind } from './dialect.js';
  */
 export class QnSession {
   constructor(
-    /** Protocol type byte captured from the scale's 0x12 frame, echoed in config commands. */
+    /**
+     * Protocol type byte echoed in config commands: from this session's 0x12,
+     * else, on the classic dialect, the one the same scale's last 0x12 gave
+     * (#501), else 0x00 at the start and 0xff once the fallback runs;
+     * ble.qn_protocol_byte wins over all.
+     */
     public seenProtocolType = 0x00,
     /** The ledger's mark when this session started (see QnLedger.mark). */
     readonly storedMarkAtSessionStart = 0,
@@ -19,6 +24,11 @@ export class QnSession {
      * current time when a record arrives before onConnected ran.
      */
     public sessionStartedScaleSeconds: number | null = null,
+    /**
+     * The scale's address, normalised, or null when the transport gave none.
+     * Keys what outlives the session per scale (the adapter's protoByUnit, #501).
+     */
+    readonly unit: string | null = null,
   ) {}
 
   /**

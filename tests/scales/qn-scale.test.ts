@@ -20,7 +20,10 @@ import { qnAdvertTraits } from '../../src/scales/qn-scale/matching.js';
 import { ext20 } from '../../src/scales/qn-scale/dialects/ext20.js';
 import { splitB1 } from '../fixtures/qn/frames.js';
 import { INFO_530, session as session530 } from '../fixtures/qn/cs10k-530.js';
-import { freshAdapter, replaySession } from '../helpers/replay/session.js';
+import { FAKE_ADDRESS, freshAdapter, replaySession } from '../helpers/replay/session.js';
+import type { Trace } from '../helpers/replay/trace.js';
+import { session as noInfoSession } from '../fixtures/qn/no-info.js';
+import { session as graceSession } from '../fixtures/qn/es26m-213-grace.js';
 import {
   COHERENT_501,
   FIRST_PARTS_501,
@@ -230,6 +233,9 @@ const INFO_1239 = Buffer.from([
   0x12, 0x0f, 0x15, 0x79, 0x58, 0xcc, 0x38, 0xc1, 0xa4, 0x38, 0x01, 0x38, 0x00, 0x04, 0xe5,
 ]);
 
+/** INFO_1239 with the protocol byte [2] 0x15 -> 0x30, checksum recomputed (#501). */
+const INFO_1239_PROTO_30 = derive(INFO_1239, { 2: 0x30 });
+
 /** #331, an Arboleaf's 19-byte 0x12 ([10] 0x0f), from the reporter's log. */
 const INFO_ARBOLEAF_331 = Buffer.from([
   0x12, 0x13, 0xff, 0x54, 0x0b, 0x04, 0x00, 0x07, 0xff, 0x15, 0x0f, 0x27, 0x00, 0x00, 0x05, 0x03,
@@ -402,6 +408,7 @@ const RECORD_463_SLOT2 = derive(RECORD_463, { 5: 0x02 });
 
 /** Every derived frame: [name, frame, source, the indices changed on purpose]. */
 const DERIVED: [string, Buffer, Buffer, number[]][] = [
+  ['INFO_1239_PROTO_30', INFO_1239_PROTO_30, INFO_1239, [2]],
   ['CLASSIC_8450', CLASSIC_8450, STABLE_CLASSIC, [3, 4]],
   ['CLASSIC_8448', CLASSIC_8448, STABLE_CLASSIC, [3, 4]],
   ['CLASSIC_8449', CLASSIC_8449, STABLE_CLASSIC, [3, 4]],
@@ -5347,6 +5354,9 @@ describe('QN per-session reset ordering (#406)', () => {
       'ledger',
       // Keyed by reading, like provisionalReadings.
       'scaleComposition',
+      // The protocol byte each scale's last 0x12 gave, by address: a session
+      // without a 0x12 opens on it (#501).
+      'protoByUnit',
     ]);
     vi.useFakeTimers();
     try {
@@ -8206,6 +8216,214 @@ describe('QN stored record and impedance (#461)', () => {
         expect(readings).toEqual([{ weight: 84.15, impedance: 510 }]);
         expect(lines).not.toContain(RACE);
       });
+    });
+  });
+});
+
+// #501: a classic unit sends its 0x12 on the first connection after it wakes
+// and only idle 0x14 frames on later ones. Such a session opens on the byte
+// the same classic scale's last 0x12 gave, not on 0x00 and 0xff.
+describe('QN protocol byte remembered per scale (#501)', () => {
+  const A1 = FAKE_ADDRESS;
+  const A2 = '02:00:00:00:00:02';
+  /** Address as the transports hand it over, so the key is the same for both spellings. */
+  const A1_PLAIN = '020000000001';
+
+  /** A trace of a session that opens with this 0x12 and nothing else. */
+  const infoTrace = (frame: Buffer, address: string): Trace => ({
+    provenance: 'characterization',
+    source: 'one 0x12 frame; pins which byte the next session of the same scale opens on',
+    advert: { localName: 'QN-Scale', address, serviceUuids: ['ffe0'] },
+    steps: [{ atMs: 0, dir: 'rx', uuid: 'fff1', hex: frame.toString('hex') }],
+  });
+  const at = (trace: Trace, address: string): Trace => ({
+    ...trace,
+    advert: { localName: 'QN-Scale', address, serviceUuids: ['ffe0'] },
+  });
+
+  // #336, the same ES-CS20M whose 0x12 is INFO_1239's byte [2] 0x15: the idle
+  // 0x14 of a session that never got a scale-info frame.
+  const silent = noInfoSession.traces['336-no-info-silent'];
+  const grace = graceSession.traces['213-weight-only-after-grace'];
+
+  /**
+   * The protocol byte of the time sync, the 0x13 config of the fallback and the
+   * 0x22 start, in write order. The two unlock frames at connect are left out:
+   * they carry the option or 0x00 whatever was remembered.
+   */
+  const protos = (writes: { atMs: number; uuid: string; hex: string }[]): [string, string][] =>
+    writes
+      .filter(
+        (w) =>
+          w.uuid === 'fff2' &&
+          (w.hex.startsWith('2008') ||
+            w.hex.startsWith('2206') ||
+            (w.hex.startsWith('1309') && w.atMs >= 2000)),
+      )
+      .map((w): [string, string] => [w.hex.slice(0, 4), w.hex.slice(4, 6)]);
+  const all = (byte: string): [string, string][] => [
+    ['2008', byte],
+    ['1309', byte],
+    ['2206', byte],
+  ];
+
+  async function run(adapter: ReturnType<typeof freshAdapter>, trace: Trace, o = noInfoSession) {
+    const lines: string[] = [];
+    const debug = vi.spyOn(bleLog, 'debug').mockImplementation((m) => void lines.push(m));
+    try {
+      const r = await replaySession(adapter, trace, o);
+      return { protos: protos(r.writes), lines };
+    } finally {
+      debug.mockRestore();
+    }
+  }
+  const FALLBACK = 'QN: fallback: no 0x12 received, running handshake with ';
+
+  it('carries a valid sum checksum on the 0x12 frames the tests use', () => {
+    expect(hasValidSumChecksum(INFO_1239)).toBe(true);
+    expect(hasValidSumChecksum(INFO_1239_PROTO_30)).toBe(true);
+    // The 19- and 20-byte frames of the no-memory test: a failed checksum would
+    // keep them out of the memory by itself and the test would prove nothing.
+    expect(hasValidSumChecksum(INFO_ARBOLEAF_331)).toBe(true);
+    expect(hasValidSumChecksum(INFO_530)).toBe(true);
+    const first18 = Buffer.from(grace.steps.find((st) => st.dir === 'rx')!.hex, 'hex');
+    expect(first18[0]).toBe(0x12);
+    expect(first18.length).toBe(18);
+    expect(hasValidSumChecksum(first18)).toBe(true);
+  });
+
+  it('opens a session without a 0x12 on the byte this scale last gave', async () => {
+    const a = freshAdapter(noInfoSession);
+    await run(a, infoTrace(INFO_1239, A1));
+    const r = await run(a, silent);
+    // Unfixed: the time sync goes out on 0x00 and the fallback on 0xff.
+    expect(r.protos).toEqual(all('15'));
+    expect(r.lines).toContain(`${FALLBACK}proto=0x15 (from this scale's last scale-info frame)`);
+  });
+
+  it('keeps the byte per scale: another address, another byte', async () => {
+    const a = freshAdapter(noInfoSession);
+    // Two classic scales with different bytes, then each one without a 0x12.
+    // A single last-wins byte gives both sessions 0x30.
+    await run(a, infoTrace(INFO_1239, A1));
+    await run(a, infoTrace(INFO_1239_PROTO_30, A2));
+    expect((await run(a, at(silent, A1))).protos).toEqual(all('15'));
+    expect((await run(a, at(silent, A2))).protos).toEqual(all('30'));
+  });
+
+  it('gives a scale that never sent a 0x12 the defaults, whatever another one sent', async () => {
+    const a = freshAdapter(noInfoSession);
+    await run(a, infoTrace(INFO_1239, A1));
+    const r = await run(a, at(silent, A2));
+    expect(r.protos).toEqual([
+      ['2008', '00'],
+      ['1309', 'ff'],
+      ['2206', 'ff'],
+    ]);
+  });
+
+  // Only the classic dialect has a log of the pattern; the other dialects keep
+  // their own defaults, so a 0x12 of theirs must leave nothing behind.
+  const FALLBACK_DEFAULTS: [string, string][] = [
+    ['2008', '00'],
+    ['1309', 'ff'],
+    ['2206', 'ff'],
+  ];
+  it.each([
+    ['an 18-byte', () => at(grace, A1), graceSession],
+    ['a 19-byte', () => infoTrace(INFO_ARBOLEAF_331, A1), noInfoSession],
+    ['a 20-byte', () => infoTrace(INFO_530, A1), noInfoSession],
+  ] as const)('remembers nothing from %s 0x12', async (_name, first, o) => {
+    const a = freshAdapter(noInfoSession);
+    await run(a, first(), o);
+    const r = await run(a, silent);
+    expect(r.protos).toEqual(FALLBACK_DEFAULTS);
+    expect(r.lines).toContain(`${FALLBACK}proto=0xff (no byte remembered for this scale)`);
+  });
+
+  it('does not remember a 0x12 whose checksum fails', async () => {
+    const a = freshAdapter(noInfoSession);
+    const bad = Buffer.from(INFO_1239);
+    bad[bad.length - 1] ^= 0xff;
+    await run(a, infoTrace(bad, A1));
+    const r = await run(a, silent);
+    expect(r.protos).toEqual([
+      ['2008', '00'],
+      ['1309', 'ff'],
+      ['2206', 'ff'],
+    ]);
+  });
+
+  it('is not moved by sessions that hear nothing', async () => {
+    const a = freshAdapter(noInfoSession);
+    await run(a, infoTrace(INFO_1239, A1));
+    expect((await run(a, silent)).protos).toEqual(all('15'));
+    expect((await run(a, silent)).protos).toEqual(all('15'));
+  });
+
+  it('replaces the byte when a later 0x12 gives another one', async () => {
+    const a = freshAdapter(noInfoSession);
+    await run(a, infoTrace(INFO_1239, A1));
+    await run(a, infoTrace(INFO_1239_PROTO_30, A1));
+    expect((await run(a, silent)).protos).toEqual(all('30'));
+  });
+
+  it('lets ble.qn_protocol_byte win, and stores what the scale gave, not the option', async () => {
+    const forced = { ...noInfoSession, config: { ...noInfoSession.config, qnProtocolByte: 0xff } };
+    const a = freshAdapter(forced);
+    await run(a, infoTrace(INFO_1239, A1), forced);
+    const r = await run(a, silent, forced);
+    expect(r.protos).toEqual(all('ff'));
+    expect(r.lines).toContain(`${FALLBACK}proto=0xff (ble.qn_protocol_byte)`);
+    // A reload without the option: the scale's own byte comes back.
+    a.configure?.(noInfoSession.config!);
+    expect((await run(a, silent)).protos).toEqual(all('15'));
+  });
+
+  describe('the key', () => {
+    const startByte = (adapter: QnScaleAdapter): number =>
+      (adapter as unknown as { s: { seenProtocolType: number } }).s.seenProtocolType;
+
+    it('reads colon and plain spellings of one address as the same scale', () => {
+      vi.useFakeTimers();
+      try {
+        const adapter = new QnScaleAdapter();
+        adapter.onSessionStart(A1);
+        adapter.parseNotification(INFO_1239);
+        adapter.onSessionEnd?.();
+        adapter.onSessionStart(A1_PLAIN);
+        expect(startByte(adapter)).toBe(0x15);
+        adapter.onSessionStart(A1_PLAIN.toLowerCase());
+        expect(startByte(adapter)).toBe(0x15);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('neither reads nor writes without an address', () => {
+      vi.useFakeTimers();
+      try {
+        const adapter = new QnScaleAdapter();
+        adapter.onSessionStart(A1_PLAIN);
+        adapter.parseNotification(INFO_1239);
+        for (const none of [undefined, '']) {
+          adapter.onSessionEnd?.();
+          adapter.onSessionStart(none);
+          // Not the remembered 0x15.
+          expect(startByte(adapter)).toBe(0x00);
+          // And a 0x12 here is not remembered for anyone.
+          adapter.parseNotification(INFO_1239_PROTO_30);
+          adapter.onSessionEnd?.();
+        }
+        adapter.onSessionStart(A1_PLAIN);
+        expect(startByte(adapter)).toBe(0x15);
+        // One scale remembered, none under a made-up key for the missing address.
+        expect((adapter as unknown as { protoByUnit: Map<string, number> }).protoByUnit.size).toBe(
+          1,
+        );
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 });

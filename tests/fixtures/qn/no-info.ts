@@ -10,6 +10,13 @@ import { qnSteps } from './frames.js';
  * the failing session in the issue body, which logged one 0x14 and nothing
  * else before the scale dropped the link; no timestamps, spacing set by hand.
  * The clock is arbitrary: nothing these traces read depends on it.
+ *
+ * X-11 (a used instance behaves like a fresh one) stays green for this file
+ * only because no fixture mixes a trace with a 0x12 and one without at one
+ * address: the adapter keeps the protocol byte of a classic scale's last 0x12
+ * for the run (#501), so such a pair would start the second session on another
+ * byte.
+ * The pairs that do that are in tests/scales/qn-scale.test.ts.
  */
 export const session: SessionFixture = {
   adapter: 'QN Scale',

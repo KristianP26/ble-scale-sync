@@ -17,6 +17,12 @@ export const QN_BLE_OPTIONS = {
    * anything longer); set this when a scale runs the full handshake and then
    * reports nothing, or when its scale-info frame is unreliable in transit
    * (proxy transports) and sessions without it open on the wrong byte.
+   *
+   * On the classic dialect, a session that gets no scale-info frame opens on
+   * the byte the same scale's last scale-info frame gave in this run. Without
+   * one, the time sync goes out on 0 and the fallback handshake on 255, so the
+   * option is needed for the first session after a start, or when the scale
+   * never sends the frame. Set, it wins over both.
    */
   qn_protocol_byte: z.number().int().min(0).max(255).optional().nullable(),
   /**

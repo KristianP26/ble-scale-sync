@@ -121,6 +121,13 @@ The scale accepted the connection, but no complete reading arrived before the se
 3. For a Renpho R-MSC04 or an ES-CS20M on service 0x1A10, see [Renpho scales](/guide/scales/renpho).
 4. If the reading is wrong rather than missing, make a [raw capture](#capturing-every-frame-for-a-scale-that-is-not-decoded-correctly).
 
+### A QN weigh-in without a scale-info frame times out {#qn-no-scale-info-frame}
+
+The log shows `QN: fallback: no 0x12 received` and the session ends without a weight. The scale sent no scale-info frame, so the handshake likely ran on a byte it does not accept. On the classic dialect, the app reuses the byte of that scale's last scale-info frame until it restarts, so the first weigh-in after a start is the one that needs the option.
+
+1. Set `ble.qn_protocol_byte` to the `proto` value of a `QN: scale info` line from an earlier weigh-in. If the log has none, try the values in [QN scales](/guide/scales/qn#options).
+2. Weigh in again. The fallback line ends with `(ble.qn_protocol_byte)` and the weight arrives.
+
 ## Pairing
 
 ### Beurer or Sanitas pairing problems
