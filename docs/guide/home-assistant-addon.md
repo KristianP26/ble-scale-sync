@@ -93,6 +93,7 @@ Calculations use kg and cm whatever the units are, and MQTT sends masses in kg. 
 | `garmin_enabled`                  | `false`                  | Adds the `garmin` exporter, [Garmin Connect](#garmin-connect)                    |
 | `garmin_email`, `garmin_password` | empty                    | `email`, `password`                                                              |
 | `garmin_weight_only`              | `false`                  | `weight_only`, [Garmin](/exporters#garmin)                                       |
+| `garmin_skip_metabolic_age`       | `false`                  | `skip_metabolic_age`, [Skip metabolic age](/exporters#skip-metabolic-age)        |
 | `garmin_upload_timeout_sec`       | `180`                    | `upload_timeout_sec`, [Garmin](/exporters#garmin)                                |
 
 With `mqtt_auto` on, the add-on reads the broker address and login from the Supervisor and logs `MQTT auto-detected: mqtt://core-mosquitto:1883`. If the Mosquitto add-on is missing or the Supervisor refuses, the log gives the HTTP status and the add-on falls back to the manual MQTT options.

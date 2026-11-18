@@ -261,6 +261,11 @@ configuration:
     description: >-
       Send only the weight to Garmin Connect. Other exporters still receive
       the full body composition.
+  garmin_skip_metabolic_age:
+    name: Skip metabolic age
+    description: >-
+      Upload every metric except metabolic age. Garmin's own Fitness Age is
+      not affected, and other exporters still receive the metabolic age.
   scan_cooldown:
     name: Scan cooldown (seconds)
     description: >-
