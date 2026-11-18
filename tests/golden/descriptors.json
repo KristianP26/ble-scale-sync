@@ -162,7 +162,8 @@
       "onConnected",
       "onSessionStart",
       "parseCharNotification",
-      "isFinal"
+      "isFinal",
+      "isCompositionPending"
     ]
   },
   {
@@ -423,6 +424,26 @@
     ]
   },
   {
+    "name": "Huawei CH100/AH100",
+    "match": {
+      "priority": 218,
+      "names": {
+        "exact": [
+          "ch100",
+          "ah100"
+        ]
+      }
+    },
+    "charNotifyUuid": "0000faa200001000800000805f9b34fb",
+    "charWriteUuid": "0000faa100001000800000805f9b34fb",
+    "hooks": [
+      "onConnected",
+      "onSessionStart",
+      "onSessionEnd",
+      "buildAck"
+    ]
+  },
+  {
     "name": "Xiaomi Mi Scale 2",
     "match": {
       "priority": 210,
@@ -622,9 +643,28 @@
     },
     "charNotifyUuid": "00008a2100001000800000805f9b34fb",
     "charWriteUuid": "00008a8100001000800000805f9b34fb",
+    "characteristics": [
+      {
+        "uuid": "00008a2200001000800000805f9b34fb",
+        "type": "notify"
+      },
+      {
+        "uuid": "00008a2100001000800000805f9b34fb",
+        "type": "notify"
+      },
+      {
+        "uuid": "00008a8100001000800000805f9b34fb",
+        "type": "write"
+      }
+    ],
+    "completionHoldMs": 5000,
     "hooks": [
       "onConnected",
-      "onSessionStart"
+      "onSessionStart",
+      "parseCharNotification",
+      "isFinal",
+      "dedupMark",
+      "restoreDedupMark"
     ]
   },
   {
@@ -880,7 +920,8 @@
     "completionHoldMs": 3000,
     "hooks": [
       "onConnected",
-      "isFinal"
+      "isFinal",
+      "isCompositionPending"
     ]
   },
   {
@@ -1017,7 +1058,9 @@
     "hooks": [
       "onConnected",
       "onSessionStart",
-      "parseCharNotification"
+      "parseCharNotification",
+      "dedupMark",
+      "restoreDedupMark"
     ]
   },
   {

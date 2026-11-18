@@ -17,6 +17,12 @@ export const QN_BLE_OPTIONS = {
    * anything longer); set this when a scale runs the full handshake and then
    * reports nothing, or when its scale-info frame is unreliable in transit
    * (proxy transports) and sessions without it open on the wrong byte.
+   *
+   * On the classic dialect, a session that gets no scale-info frame opens on
+   * the byte the same scale's last scale-info frame gave in this run. Without
+   * one, the time sync goes out on 0 and the fallback handshake on 255, so the
+   * option is needed for the first session after a start, or when the scale
+   * never sends the frame. Set, it wins over both.
    */
   qn_protocol_byte: z.number().int().min(0).max(255).optional().nullable(),
   /**
@@ -64,14 +70,53 @@ export const QN_BLE_OPTIONS = {
    * that refuses openScale's frame (`a1 06 02 01 00`) shows only the weight,
    * and no scale in the logs has streamed a live weight after a refusal.
    *
-   * Set, the 18- and 19-byte dialects send the vendor-app profile frame with
-   * this key, the first user's age, height and sex, and on the 18-byte one the
-   * athlete setting, and skip openScale's ready-time A2. On the 19-byte
-   * dialect that happens without `qn_weight_ack` too. A wrong key leaves the
-   * scale refusing the frame, as without the option. The 20-byte and classic
-   * dialects ignore it. Left unset it changes nothing.
+   * Set, the 18-, 19- and 20-byte dialects send the vendor-app profile frame
+   * with this key, the first user's age, height and sex, and on the 18-byte
+   * one the athlete setting, and skip openScale's ready-time A2. On the
+   * 19-byte dialect that happens without `qn_weight_ack` too. On the 20-byte
+   * one the START and the weight anchor wait for the scale's answer to the
+   * profile frame, as the CS10G app sends them (#501), and the ready-time
+   * anchor of `qn_weight_ack` is not sent. A wrong key leaves the scale
+   * refusing the frame, as without the option. The classic dialect ignores
+   * it. Left unset it changes nothing.
    */
   qn_user_key: z.number().int().min(1).max(9999).optional().nullable(),
+  /**
+   * User slot the QN profile frame, the weight anchor and the 0x22 stored-data
+   * query are for, 1 to 8 (#501). Only with `qn_user_key`; without it this is
+   * ignored with a warning.
+   *
+   * Per the vendor's published SDK the scale keeps up to 8 users, each in a
+   * slot with the key the vendor app registered it with. ble-scale-sync sends
+   * slot 1 unless this is set; the Arboleaf CS10G app of #501 registered its
+   * user in slot 2, and the scale accepts key 1000 only for that slot. The
+   * slot cannot be read from the scale: set the one the debug log names for
+   * the scale's own results (`user slot N`). On the 18-, 19- and 20-byte
+   * dialects; the first configured user's profile goes to that slot, nothing
+   * is written to slot 1 then, and nothing for a user slot goes out before the
+   * scale's 0x12 (#501). Left unset it changes nothing.
+   */
+  qn_user_slot: z.number().int().min(1).max(8).optional().nullable(),
+  /**
+   * Algorithm byte [10] of the QN profile frame, 0 to 255 (#331).
+   * Experimental.
+   *
+   * Per the vendor's published SDK the scale does not report this byte: the
+   * app picks a body-fat method from its own settings for the scale model,
+   * and an 8-electrode scale without such a setting gets 7. The scale then
+   * computes its own body composition with that method. ble-scale-sync sends
+   * 4 (14 for an athlete aged 18 or older on the 18-byte dialect), and nothing
+   * in the frames tells which value a unit expects.
+   *
+   * Set, it goes into the profile frame as given, without the athlete step,
+   * wherever the vendor-app profile frame is sent: with `qn_user_key` on the
+   * 18-, 19- and 20-byte dialects, and with `qn_weight_ack` on the 19-byte one.
+   * Elsewhere openScale's frame goes out and this is not sent. On the 20-byte
+   * dialect a profile frame sent with it is also what lets the scale's own body
+   * composition from a one-part 0xB1 be exported (#331, D096). Left unset it
+   * changes nothing.
+   */
+  qn_algorithm: z.number().int().min(0).max(255).optional().nullable(),
   /**
    * Send the two 0xA4 0x0F frames an Arboleaf vendor app sends between START
    * and the first live 0x10 weight frame (#331).
@@ -121,14 +166,15 @@ export const QN_BLE_OPTIONS = {
   qn_config_long: z.boolean().optional().nullable(),
   /**
    * Send the end-of-measurement frame `1f 05 <protocol type> 10 <sum>` after
-   * the 0x16 of a complete result block on the 19-byte QN dialect (#331).
+   * the 0x16 of a complete result block on the 19-byte QN dialect and on the
+   * 20-byte Arboleaf CS10K, whose 0x12 lacks the dynamic-package bit (#331, #530).
    *
    * The vendor's published SDK sends it there for every 8-electrode
    * weigh-in; this app has never sent it. Whether its absence is why the
    * scale stores a second copy of a weigh-in it already delivered, and keeps
    * advertising after the export, is not known, so this is opt-in and off by
    * default until reporters' logs with it show an effect and no harm. Other
-   * QN dialects ignore it.
+   * QN scales ignore it.
    */
   qn_result_ack: z.boolean().optional().nullable(),
 };

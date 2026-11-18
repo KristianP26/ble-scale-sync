@@ -176,7 +176,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
       const decision = evaluateAdvertisement(adapter, info);
 
       if (decision.kind === 'complete') {
-        bleLog.info(`Broadcast reading: ${decision.reading.weight} kg`);
+        bleLog.info(`Broadcast reading: ${decision.reading.weight.toFixed(2)} kg`);
         registerScaleMac(config, entry.address, adapter).catch(() => {});
         return { reading: decision.reading, adapter };
       }
@@ -270,7 +270,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
 
     if (weightOnlyFallback) {
       bleLog.info(
-        `Broadcast reading (weight only, impedance not yet available): ${weightOnlyFallback.reading.weight} kg`,
+        `Broadcast reading (weight only, impedance not yet available): ${weightOnlyFallback.reading.weight.toFixed(2)} kg`,
       );
       registerScaleMac(config, weightOnlyFallback.address, weightOnlyFallback.adapter).catch(
         () => {},

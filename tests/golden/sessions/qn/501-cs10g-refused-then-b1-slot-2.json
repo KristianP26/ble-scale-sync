@@ -1,0 +1,109 @@
+{
+  "settled": {
+    "by": "reading",
+    "atMs": 76397
+  },
+  "reading": {
+    "weight": 77.95,
+    "impedance": 0
+  },
+  "history": [],
+  "subscribes": [
+    {
+      "seq": 0,
+      "atMs": 0,
+      "uuid": "fff1"
+    },
+    {
+      "seq": 1,
+      "atMs": 0,
+      "uuid": "ae02"
+    }
+  ],
+  "writes": [
+    {
+      "seq": 2,
+      "atMs": 0,
+      "uuid": "ae01",
+      "hex": "fedcbac00600020101ef",
+      "withResponse": false
+    },
+    {
+      "seq": 3,
+      "atMs": 200,
+      "uuid": "fff2",
+      "hex": "1309ff01100000002c",
+      "withResponse": false
+    },
+    {
+      "seq": 4,
+      "atMs": 509,
+      "uuid": "fff2",
+      "hex": "2008ff304e713248",
+      "withResponse": false
+    },
+    {
+      "seq": 5,
+      "atMs": 509,
+      "uuid": "fff2",
+      "hex": "a20601322803",
+      "withResponse": false
+    },
+    {
+      "seq": 6,
+      "atMs": 509,
+      "uuid": "ae01",
+      "hex": "0270617373",
+      "withResponse": false
+    },
+    {
+      "seq": 7,
+      "atMs": 1018,
+      "uuid": "fff2",
+      "hex": "a00d02010008002106b804029d",
+      "withResponse": false
+    },
+    {
+      "seq": 8,
+      "atMs": 1029,
+      "uuid": "ae01",
+      "hex": "019c83fd211e4bb571a1568b47c935ee45",
+      "withResponse": false
+    },
+    {
+      "seq": 9,
+      "atMs": 1218,
+      "uuid": "fff2",
+      "hex": "2206ff00032a",
+      "withResponse": false
+    },
+    {
+      "seq": 10,
+      "atMs": 1218,
+      "uuid": "fff2",
+      "hex": "a206011e783f",
+      "withResponse": false
+    },
+    {
+      "seq": 11,
+      "atMs": 1368,
+      "uuid": "fff2",
+      "hex": "a206011e783f",
+      "withResponse": false
+    }
+  ],
+  "rxDropped": 0,
+  "payload": {
+    "weight": 77.95,
+    "impedance": 0,
+    "bmi": 24.06,
+    "bodyFatPercent": 21.87,
+    "waterPercent": 57.03,
+    "boneMass": 2.56,
+    "muscleMass": 58.34,
+    "visceralFat": 11,
+    "physiqueRating": 5,
+    "bmr": 1709,
+    "metabolicAge": 45
+  }
+}

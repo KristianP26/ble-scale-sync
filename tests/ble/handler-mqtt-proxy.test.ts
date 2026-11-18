@@ -9,10 +9,18 @@ import type {
 } from '../../src/interfaces/scale-adapter.js';
 import type { MqttProxyConfig } from '../../src/config/schema.js';
 import { adapters as realAdapters } from '../../src/scales/index.js';
+import { MiScale2Adapter } from '../../src/scales/mi-scale-2.js';
 import { applyForcedAdapter } from '../../src/scales/force.js';
 import { bleLog, POST_READING_RECONNECT_MS, SessionTimeoutError } from '../../src/ble/types.js';
 import { bleFailureKind } from '../../src/ble/failure-kind.js';
 import { M1690_PROTOCOL_VERSION_REPLY } from '../helpers/yunmai-m1690.js';
+import {
+  MI2_422_CHAR_UUIDS,
+  MI2_422_NOTIFY_CHAR,
+  MI2_LIGHT_STABLE,
+  MI2_WEIGH_IN,
+} from '../helpers/mi-scale-2-422.js';
+import { AR003_ADDRESS, AR003_MSD, ar003MqttChars } from '../helpers/renpho-a-r003.js';
 
 // Suppress log output during tests
 vi.spyOn(console, 'log').mockImplementation(() => {});
@@ -1588,6 +1596,53 @@ describe('handler-mqtt-proxy', () => {
     });
   });
 
+  describe('a stable Mi Scale 2 frame of 10 kg or less (#526)', () => {
+    const entry = (hex: string) => ({
+      address: 'AA:BB:CC:DD:EE:FF',
+      name: '',
+      rssi: -50,
+      services: [],
+      service_data: [{ uuid: '181b', data: hex }],
+    });
+
+    it('does not replace the weigh-in the watcher holds', async () => {
+      vi.useFakeTimers({
+        toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'],
+      });
+      try {
+        const watcher = new ReadingWatcher(MQTT_PROXY_CONFIG, [new MiScale2Adapter()]);
+        await watcher.start();
+
+        for (const hex of [MI2_WEIGH_IN, MI2_LIGHT_STABLE]) {
+          mockClient._simulateMessage(`${PREFIX}/scan/results`, JSON.stringify([entry(hex)]));
+        }
+        const { IMPEDANCE_GRACE_MS } = await import('../../src/ble/types.js');
+        await vi.advanceTimersByTimeAsync(IMPEDANCE_GRACE_MS + 100);
+
+        const raw = await watcher.nextReading();
+        expect(raw.reading).toEqual({ weight: 97.8, impedance: 0 });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('is not a reading for the single-shot scan, which connects to nothing', async () => {
+      wireBroadcastFlow([entry(MI2_LIGHT_STABLE)]);
+
+      await expect(
+        scanAndReadRaw({
+          adapters: [new MiScale2Adapter()],
+          profile: PROFILE,
+          mqttProxy: MQTT_PROXY_CONFIG,
+        }),
+      ).rejects.toThrow();
+      const connects = (mockClient.publishAsync as ReturnType<typeof vi.fn>).mock.calls.filter(
+        (c: unknown[]) => c[0] === `${PREFIX}/connect`,
+      );
+      expect(connects).toHaveLength(0);
+    });
+  });
+
   describe('GATT proxy', () => {
     /** Wire GATT flow: online → scan (GATT device) → connected → notification.
      *  Connected response is triggered by publishAsync(connect), not subscribeAsync,
@@ -2183,6 +2238,31 @@ describe('handler-mqtt-proxy', () => {
       await watcher.stop();
     });
 
+    // #507: the nameless Renpho A-R003 connected with no cached advertisement.
+    // Its 0xFFF2 without 0xFFF4 is Inlife's claim; the family characteristics
+    // keep it on the ES-WBE28 adapter, which reads it.
+    it('picks Renpho ES-WBE28 for the nameless A-R003 on an autonomous connect (#507)', async () => {
+      const infoSpy = vi.spyOn(bleLog, 'info').mockImplementation(() => {});
+      vi.spyOn(bleLog, 'warn').mockImplementation(() => {});
+      vi.spyOn(bleLog, 'error').mockImplementation(() => {});
+      const watcher = new ReadingWatcher(MQTT_PROXY_CONFIG, [...realAdapters], undefined, PROFILE);
+      await watcher.start();
+
+      mockClient._simulateMessage(
+        `${PREFIX}/connected`,
+        JSON.stringify({ autonomous: true, address: AR003_ADDRESS, chars: ar003MqttChars() }),
+      );
+      await new Promise((r) => setTimeout(r, 50));
+
+      const picked = infoSpy.mock.calls
+        .map((c) => String(c[0]))
+        .filter((l) => l.startsWith('Autonomous GATT connect from ESP32:'));
+      expect(picked).toEqual([
+        `Autonomous GATT connect from ESP32: Renpho ES-WBE28 (${AR003_ADDRESS})`,
+      ]);
+      await watcher.stop();
+    });
+
     it('autonomous session survives a weigh-in that starts near the old fixed deadline', async () => {
       vi.useFakeTimers();
       try {
@@ -2539,28 +2619,9 @@ describe('handler-mqtt-proxy', () => {
     // every other transport and must never be driven over GATT here either.
     describe('advertisement-read scales are never driven over GATT (#422)', () => {
       const MI_MAC = 'B4:56:5D:81:B8:BF';
-      const MI_CHAR = '00002a2f0000351221180009af100700';
+      const MI_CHAR = MI2_422_NOTIFY_CHAR;
       // The reporter's exact 18-entry characteristic list, duplicate 2a04 included.
-      const MI_CHARS = [
-        '00002a2500001000800000805f9b34fb',
-        '00002a2800001000800000805f9b34fb',
-        '00002a2700001000800000805f9b34fb',
-        '00002a2300001000800000805f9b34fb',
-        '00002a5000001000800000805f9b34fb',
-        '00002a0500001000800000805f9b34fb',
-        '00002a0000001000800000805f9b34fb',
-        '00002a0100001000800000805f9b34fb',
-        '00002a0400001000800000805f9b34fb',
-        '00002a2b00001000800000805f9b34fb',
-        '00002a9b00001000800000805f9b34fb',
-        '00002a9c00001000800000805f9b34fb',
-        MI_CHAR,
-        '000015310000351221180009af100700',
-        '000015320000351221180009af100700',
-        '00002a0400001000800000805f9b34fb',
-        '000015420000351221180009af100700',
-        '000015430000351221180009af100700',
-      ].map((uuid) => ({
+      const MI_CHARS = MI2_422_CHAR_UUIDS.map((uuid) => ({
         uuid,
         // The log carries UUIDs only. 2a2f is the char the session wrote to and
         // got notifications from, so it is modelled as notify+write.
@@ -3237,6 +3298,61 @@ describe('handler-mqtt-proxy', () => {
       expect(reresolved).toBeDefined();
       expect(reresolved).toContain('1byone (Eufy)');
       infoSpy.mockRestore();
+      mockClient.publishAsync = origPublish;
+      await watcher.stop();
+    });
+
+    // #507: the nameless Renpho A-R003 over a host-initiated connect. Its
+    // advertisement claims it before connecting, and the characteristics keep
+    // it there instead of Inlife.
+    it('host-initiated GATT drives the nameless A-R003 with Renpho ES-WBE28 (#507)', async () => {
+      const infoSpy = vi.spyOn(bleLog, 'info').mockImplementation(() => {});
+      const renpho = realAdapters.find((a) => a.name === 'Renpho ES-WBE28')!;
+      const onConnected = vi.fn(async () => {});
+      renpho.onConnected = onConnected;
+      const watcher = new ReadingWatcher(
+        { ...MQTT_PROXY_CONFIG, auto_connect: false },
+        [...realAdapters],
+        undefined,
+        PROFILE,
+      );
+      await watcher.start();
+
+      const origPublish = mockClient.publishAsync;
+      mockClient.publishAsync = vi.fn(async (topic: string, payload?: string | Buffer) => {
+        if (topic === `${PREFIX}/connect`) {
+          queueMicrotask(() =>
+            mockClient._simulateMessage(
+              `${PREFIX}/connected`,
+              JSON.stringify({ address: AR003_ADDRESS, chars: ar003MqttChars() }),
+            ),
+          );
+        }
+        return origPublish(topic, payload);
+      });
+
+      mockClient._simulateMessage(
+        `${PREFIX}/scan/results`,
+        JSON.stringify([
+          {
+            address: AR003_ADDRESS,
+            name: '',
+            rssi: -60,
+            services: ['181d'],
+            manufacturer_id: 0xffff,
+            manufacturer_data: AR003_MSD.toString('hex'),
+          },
+        ]),
+      );
+      await new Promise((r) => setTimeout(r, 80));
+
+      const info = infoSpy.mock.calls.map((c) => String(c[0]));
+      expect(info).toContain(`Connecting via GATT proxy to Renpho ES-WBE28 (${AR003_ADDRESS})...`);
+      expect(info.some((l) => l.includes('Re-resolved adapter after GATT discovery'))).toBe(false);
+      expect(onConnected).toHaveBeenCalledTimes(1);
+      infoSpy.mockRestore();
+      // An own property over the prototype method; deleting it restores the lookup.
+      delete renpho.onConnected;
       mockClient.publishAsync = origPublish;
       await watcher.stop();
     });

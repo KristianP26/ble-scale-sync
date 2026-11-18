@@ -1,7 +1,9 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { BleChar } from '../../../src/ble/session/ports.js';
 import { normalizeUuid, POST_READING_RECONNECT_MS } from '../../../src/ble/types.js';
 import { M1690_PROTOCOL_VERSION_REPLY } from '../../helpers/yunmai-m1690.js';
+import { MI2_422_CHAR_UUIDS, MI2_LIGHT_STABLE } from '../../helpers/mi-scale-2-422.js';
+import { MI2_537_REMOVED, MI2_537_WEIGH_IN } from '../../helpers/mi-scale-2-537.js';
 import type {
   ScaleAdapter,
   ScaleReading,
@@ -36,6 +38,13 @@ let answerWritesWith: Buffer | null = null;
 // through sendFrame, and whose fireDisconnect reports the disconnect.
 let scriptedSession = false;
 let sendFrame: ((d: Buffer) => void) | null = null;
+// When set, connectGatt hands back a session with exactly these characteristics
+// (any case, long or short form is the caller's business), all of them silent
+// and counted in sessionCalls; the test ends it through endSessionChars. What
+// discovery found on a device the advertisement could not identify (#537).
+let sessionChars: string[] | null = null;
+const sessionCalls = { writes: 0, subscribes: 0 };
+let endSessionChars: (() => void) | null = null;
 
 vi.mock('../../../src/ble/handler-esphome-proxy/pool.js', () => {
   class FakeEsphomeProxyPool {
@@ -55,6 +64,32 @@ vi.mock('../../../src/ble/handler-esphome-proxy/pool.js', () => {
     async connectGatt(mac: string) {
       connectGattSpy(mac);
       if (failConnectWith !== null) throw new Error(failConnectWith);
+      if (sessionChars !== null) {
+        const counted: BleChar = {
+          async read() {
+            return Buffer.alloc(0);
+          },
+          async write() {
+            sessionCalls.writes++;
+          },
+          async subscribe() {
+            sessionCalls.subscribes++;
+            return () => {};
+          },
+        };
+        const disconnectCbs: Array<() => void> = [];
+        endSessionChars = () => {
+          for (const cb of disconnectCbs.splice(0)) cb();
+        };
+        return {
+          charMap: new Map<string, BleChar>(sessionChars.map((u) => [u, counted])),
+          device: {
+            onDisconnect: (cb: () => void) => void disconnectCbs.push(cb),
+            fireDisconnect: () => {},
+          },
+          close: closeSpy,
+        };
+      }
       if (scriptedSession) {
         const disconnectCbs: Array<() => void> = [];
         const scripted: BleChar = {
@@ -220,6 +255,8 @@ vi.mock('../../../src/ble/handler-esphome-proxy/pool.js', () => {
 
 const { ReadingWatcher } = await import('../../../src/ble/handler-esphome-proxy/watcher.js');
 const { bleLog } = await import('../../../src/ble/types.js');
+const { adapters: registry } = await import('../../../src/scales/index.js');
+const { applyForcedAdapter } = await import('../../../src/scales/force.js');
 
 const config = { host: 'p1', port: 6053, client_info: 'x', additional_proxies: [] } as never;
 
@@ -1003,5 +1040,240 @@ describe('ReadingWatcher GATT session cap', () => {
     });
     expect(reading).toEqual({ weight: 82, impedance: 0 });
     expect(atMs).toBe(90_000);
+  });
+});
+
+/**
+ * #537: a Mi Scale 2 read over esphome-proxy was connected over GATT, where it
+ * answers the unlock write with a status echo forever and never a weight. The
+ * frames are verbatim from the issue's log, whose weight line does not match
+ * the decoded bytes, so what they prove is the routing, not a capture.
+ */
+describe('ReadingWatcher advertisement-read scales are never connected (#537)', () => {
+  type Pool = { emitAdvert: (info: BleDeviceInfo, mac: string) => void };
+  const BCS = normalizeUuid('181b');
+  const SKIP = 'read from its advertisements, not over GATT';
+  const MAC = 'AA:BB:CC:DD:EE:71';
+  // Stable-looking weight, bit 5 clear: a frame the scale sends while it settles.
+  const UNSTABLE = '0200ea0701010c00000000343a';
+
+  const svc = (hexFrame: string) => [{ uuid: BCS, data: Buffer.from(hexFrame, 'hex') }];
+  /** What the proxy hands over for a frame with the service data and no name. */
+  const nameless = (hexFrame: string): BleDeviceInfo => ({
+    localName: '',
+    serviceUuids: [BCS],
+    serviceData: svc(hexFrame),
+  });
+  /** The scan response: the name and the service list, no service data. */
+  const named: BleDeviceInfo = { localName: 'MIBFS', serviceUuids: [BCS] };
+  /** An advertisement that says nothing but the generic Body Composition service. */
+  const bare: BleDeviceInfo = { localName: '', serviceUuids: [BCS] };
+
+  let info: ReturnType<typeof vi.spyOn>;
+  let debug: ReturnType<typeof vi.spyOn>;
+  let warn: ReturnType<typeof vi.spyOn>;
+  const lines = (spy: ReturnType<typeof vi.spyOn>): string[] =>
+    spy.mock.calls.map((c: unknown[]) => String(c[0]));
+  const skipLines = (spy: ReturnType<typeof vi.spyOn>) =>
+    lines(spy).filter((l) => l.includes(SKIP));
+
+  async function start(adapters: ScaleAdapter[] = [...registry]) {
+    const watcher = new ReadingWatcher(config, adapters);
+    await watcher.start();
+    return { watcher, pool: (watcher as unknown as { pool: Pool }).pool };
+  }
+
+  beforeEach(() => {
+    closeSpy.mockClear();
+    connectGattSpy.mockClear();
+    sessionCalls.writes = 0;
+    sessionCalls.subscribes = 0;
+    info = vi.spyOn(bleLog, 'info').mockImplementation(() => {});
+    debug = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+    warn = vi.spyOn(bleLog, 'warn').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    sessionChars = null;
+    endSessionChars = null;
+    info.mockRestore();
+    debug.mockRestore();
+    warn.mockRestore();
+  });
+
+  it('the removed frame of the issue, then the weigh-in: no connect, 74.25 kg / 444 ohm', async () => {
+    const { watcher, pool } = await start();
+    try {
+      pool.emitAdvert(nameless(MI2_537_REMOVED), MAC);
+      pool.emitAdvert(nameless(MI2_537_WEIGH_IN), MAC);
+      const raw = await watcher.nextReading();
+      expect(raw.adapter.name).toBe('Xiaomi Mi Scale 2');
+      expect(raw.reading).toEqual({ weight: 74.25, impedance: 444 });
+      expect(connectGattSpy).not.toHaveBeenCalled();
+      expect(warn).not.toHaveBeenCalled();
+      expect(skipLines(info)).toEqual([`Xiaomi Mi Scale 2 (${MAC}): ${SKIP}`]);
+    } finally {
+      await watcher.stop();
+    }
+  });
+
+  it('the named scan response between the frames is not a reason to connect', async () => {
+    const { watcher, pool } = await start();
+    try {
+      pool.emitAdvert(nameless(MI2_537_REMOVED), MAC);
+      // Hypothesis: ESPHome delivers the scan response of this scale as its own
+      // event with the name and no service data (watcher.ts withCachedName,
+      // #322), as it does for QN (#331). Not seen in a log of this scale.
+      pool.emitAdvert(named, MAC);
+      pool.emitAdvert(nameless(MI2_537_REMOVED), MAC);
+      pool.emitAdvert(nameless(MI2_537_WEIGH_IN), MAC);
+      const raw = await watcher.nextReading();
+      expect(raw.reading).toEqual({ weight: 74.25, impedance: 444 });
+      expect(connectGattSpy).not.toHaveBeenCalled();
+      expect(warn).not.toHaveBeenCalled();
+      expect(skipLines(info)).toHaveLength(1);
+    } finally {
+      await watcher.stop();
+    }
+  });
+
+  it('tells it once at info however many advertisements follow, and the rest at debug', async () => {
+    const { watcher, pool } = await start();
+    try {
+      for (let i = 0; i < 5; i++) pool.emitAdvert(nameless(MI2_537_REMOVED), MAC);
+      expect(skipLines(info)).toHaveLength(1);
+      expect(skipLines(debug)).toHaveLength(4);
+      // The skip line must not be taken for a reading (emitDeduped's marker).
+      expect(lines(info).filter((l) => l.startsWith('Matched:'))).toEqual([]);
+      expect(connectGattSpy).not.toHaveBeenCalled();
+    } finally {
+      await watcher.stop();
+    }
+  });
+
+  it('does not connect for a nameless stable frame of 10 kg or less, or an unstable one', async () => {
+    const { watcher, pool } = await start();
+    try {
+      pool.emitAdvert(nameless(MI2_LIGHT_STABLE), MAC);
+      pool.emitAdvert(nameless(UNSTABLE), MAC);
+      pool.emitAdvert(nameless(MI2_LIGHT_STABLE), MAC);
+      expect(connectGattSpy).not.toHaveBeenCalled();
+      expect(warn).not.toHaveBeenCalled();
+      // Neither is a reading: the weigh-in after them still is.
+      pool.emitAdvert(nameless(MI2_537_WEIGH_IN), MAC);
+      expect((await watcher.nextReading()).reading.weight).toBe(74.25);
+    } finally {
+      await watcher.stop();
+    }
+  });
+
+  it('does not connect for a forced Mi adapter shown a bare advertisement', async () => {
+    const { watcher, pool } = await start(applyForcedAdapter(registry, 'Xiaomi Mi Scale 2'));
+    try {
+      pool.emitAdvert(bare, MAC);
+      pool.emitAdvert({ localName: '', serviceUuids: [] }, MAC);
+      expect(connectGattSpy).not.toHaveBeenCalled();
+      expect(skipLines(info)).toHaveLength(1);
+      pool.emitAdvert(nameless(MI2_537_WEIGH_IN), MAC);
+      expect((await watcher.nextReading()).reading).toEqual({ weight: 74.25, impedance: 444 });
+    } finally {
+      await watcher.stop();
+    }
+  });
+
+  it('a bare advertisement connects once, and a scale found to be Mi is dropped before any write', async () => {
+    sessionChars = MI2_422_CHAR_UUIDS;
+    const { watcher, pool } = await start();
+    try {
+      pool.emitAdvert(bare, MAC);
+      await vi.waitFor(() => expect(closeSpy).toHaveBeenCalledTimes(1));
+      expect(connectGattSpy).toHaveBeenCalledTimes(1);
+      expect(sessionCalls).toEqual({ writes: 0, subscribes: 0 });
+      expect(lines(info)).toContain(
+        `Connect to Xiaomi Mi Scale 2 (${MAC}) ignored: this scale is read from its ` +
+          'advertisements, not over GATT. Disconnecting.',
+      );
+
+      // Remembered: the next bare advertisement does not open another session.
+      pool.emitAdvert(bare, MAC);
+      pool.emitAdvert(bare, MAC);
+      await new Promise((r) => setImmediate(r));
+      expect(connectGattSpy).toHaveBeenCalledTimes(1);
+
+      pool.emitAdvert(nameless(MI2_537_WEIGH_IN), MAC);
+      expect((await watcher.nextReading()).reading).toEqual({ weight: 74.25, impedance: 444 });
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      await watcher.stop();
+    }
+  });
+
+  it('the refusal and the pre-connect skip share one info line per address', async () => {
+    sessionChars = MI2_422_CHAR_UUIDS;
+    const { watcher, pool } = await start();
+    try {
+      pool.emitAdvert(bare, MAC);
+      await vi.waitFor(() => expect(closeSpy).toHaveBeenCalledTimes(1));
+      pool.emitAdvert(nameless(MI2_537_REMOVED), MAC);
+      const told = lines(info).filter((l) => l.includes(SKIP));
+      expect(told).toHaveLength(1);
+      expect(lines(debug).filter((l) => l.includes(SKIP))).toHaveLength(1);
+    } finally {
+      await watcher.stop();
+    }
+  });
+
+  it('a reload forgets the refusal, so a scale that is not the Mi any more connects', async () => {
+    sessionChars = MI2_422_CHAR_UUIDS;
+    const { watcher, pool } = await start();
+    try {
+      pool.emitAdvert(bare, MAC);
+      await vi.waitFor(() => expect(closeSpy).toHaveBeenCalledTimes(1));
+      pool.emitAdvert(bare, MAC);
+      expect(connectGattSpy).toHaveBeenCalledTimes(1);
+
+      watcher.updateConfig({ adapters: [...registry] });
+      pool.emitAdvert(bare, MAC);
+      await vi.waitFor(() => expect(connectGattSpy).toHaveBeenCalledTimes(2));
+      await vi.waitFor(() => expect(closeSpy).toHaveBeenCalledTimes(2));
+    } finally {
+      await watcher.stop();
+    }
+  });
+
+  it('a standard BCS scale on the bare service still connects and is not refused', async () => {
+    sessionChars = [NOTIFY, WRITE, normalizeUuid('2a9f')];
+    const { watcher, pool } = await start();
+    try {
+      pool.emitAdvert(bare, MAC);
+      await vi.waitFor(() => expect(sessionCalls.subscribes).toBeGreaterThan(0));
+      expect(connectGattSpy).toHaveBeenCalledTimes(1);
+      expect(lines(info).filter((l) => l.includes('ignored'))).toEqual([]);
+      expect(
+        lines(info).some((l) =>
+          /Re-resolved adapter after GATT discovery: Xiaomi Mi Scale 2 -> /.test(l),
+        ),
+      ).toBe(true);
+      expect(skipLines(info)).toEqual([]);
+    } finally {
+      endSessionChars?.();
+      await vi.waitFor(() => expect(closeSpy).toHaveBeenCalledTimes(1));
+      await watcher.stop();
+    }
+  });
+
+  it('still connects a scale that is not read from advertisements', async () => {
+    const qn = registry.find((a) => a.name === 'QN Scale')!;
+    sessionChars = [normalizeUuid(qn.charNotifyUuid!), normalizeUuid(qn.charWriteUuid!)];
+    const { watcher, pool } = await start();
+    try {
+      pool.emitAdvert({ localName: 'QN-Scale', serviceUuids: [normalizeUuid('ffe0')] }, MAC);
+      await vi.waitFor(() => expect(connectGattSpy).toHaveBeenCalledTimes(1));
+      expect(skipLines(info)).toEqual([]);
+    } finally {
+      endSessionChars?.();
+      await vi.waitFor(() => expect(closeSpy).toHaveBeenCalledTimes(1));
+      await watcher.stop();
+    }
   });
 });

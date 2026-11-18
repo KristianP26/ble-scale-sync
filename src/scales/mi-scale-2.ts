@@ -8,7 +8,9 @@ import type {
   UserProfile,
   BodyComposition,
 } from '../interfaces/scale-adapter.js';
+import { bleLog } from '../ble/types.js';
 import { buildPayload, normalizeServiceUuid } from './body-comp-helpers.js';
+import { LogKey } from './device-state.js';
 import type { MatchDescriptor } from './match-descriptor.js';
 
 /** Mi vendor history/body-comp characteristic (custom base UUID). */
@@ -22,6 +24,14 @@ const KNOWN_PREFIXES = ['mibcs', 'mibfs', 'mi scale', 'mi_scale'];
  * so we strip dashes and expand short UUIDs before comparing.
  */
 const SVC_BODY_COMP = '0000181b00001000800000805f9b34fb';
+
+/**
+ * A stable frame at or below this is not a weigh-in: moving the scale can leave
+ * one of a few kg (#526). The parser refuses it rather than leaving it to
+ * isComplete(), since a passive reading isComplete() refuses is held and
+ * exported weight only if nothing completes it.
+ */
+const WEIGHT_MIN_KG = 10;
 
 /**
  * Adapter for the Xiaomi Mi Body Composition Scale 2.
@@ -54,6 +64,9 @@ export class MiScale2Adapter implements ScaleAdapterCore, GattWiring, Unlockable
    * only reliable path.
    */
   readonly preferPassive = true;
+
+  /** The last light frame logged, so a scale repeating it logs it once. */
+  private readonly lightLog = new LogKey();
 
   matches(device: BleDeviceInfo): boolean {
     const name = (device.localName || '').toUpperCase();
@@ -122,6 +135,17 @@ export class MiScale2Adapter implements ScaleAdapterCore, GattWiring, Unlockable
       weight = weightRaw / 200;
     }
 
+    if (weight <= WEIGHT_MIN_KG) {
+      const hex = data.toString('hex');
+      if (this.lightLog.first(hex, performance.now())) {
+        bleLog.debug(
+          `${this.name}: ignoring a stable ${weight.toFixed(2)} kg frame, ${WEIGHT_MIN_KG} kg ` +
+            `or less is not a weigh-in (frame=${hex})`,
+        );
+      }
+      return null;
+    }
+
     let impedance = 0;
     if (hasImp) {
       impedance = data.readUInt16LE(9);
@@ -140,7 +164,7 @@ export class MiScale2Adapter implements ScaleAdapterCore, GattWiring, Unlockable
   }
 
   isComplete(reading: ScaleReading): boolean {
-    return reading.weight > 10 && reading.impedance > 0;
+    return reading.weight > WEIGHT_MIN_KG && reading.impedance > 0;
   }
 
   computeMetrics(reading: ScaleReading, profile: UserProfile): BodyComposition {

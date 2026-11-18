@@ -33,7 +33,8 @@ import { uuid16 } from '../body-comp-helpers.js';
  *   0x12 (scale info) -> AE01 init (if AE00) -> 0x13 config
  *   0x14 (ready ACK)  -> 0x20 time sync + A2 user profile + "pass" auth
  *                        (no A2 on the 19-byte dialect with ble.qn_weight_ack,
- *                        nor on the 18- and 19-byte ones with ble.qn_user_key)
+ *                        nor on the 18-, 19- and 20-byte ones with
+ *                        ble.qn_user_key)
  *   0x21 (config req)  -> A00D profile frame + 0x22 start measurement
  *   0x10 (weight)      -> parse weight + 0x1F acknowledge stable reading
  *                        (19-byte dialect: nothing; with ble.qn_result_ack a
@@ -205,14 +206,16 @@ export const USER_DELETE_SUBCOMMAND = 0x04;
  *
  * Per the vendor's published SDK the key is a secret the app chooses when it
  * registers a user on the scale (1 to 9999), and the scale keeps it per user
- * slot. Three vendor apps send 1000 here: the GE app (#235), the Arboleaf app
- * (#331) and the Feelfit app on a Physiq (#463). openScale sends 8, which the
- * 18-byte Renpho in #213 and #253 accepts (`a1 06 02 01 01`) and which the
- * Physiq (#461), a never-paired Renpho Elis 1 (#75), two Arboleafs (#75, #331)
- * and the GE CS 10 G (#235) refuse (`a1 06 02 01 00`). Every refused unit that
- * was weighed during the connection then streamed no live weight, and every
- * accepting one streamed; that the refusal is the cause is a hypothesis, as
- * other frames always differed too.
+ * slot. Four vendor apps send 1000 here: the GE app (#235), the Arboleaf app
+ * (#331), the Feelfit app on a Physiq (#463) and the Arboleaf app on a 20-byte
+ * CS10G, which accepts it for the slot that app registered (#501). openScale
+ * sends 8, which the 18-byte Renpho in #213 and #253 accepts
+ * (`a1 06 02 01 01`) and which the Physiq (#461), a never-paired Renpho Elis 1
+ * (#75), two Arboleafs (#75, #331), the GE CS 10 G (#235) and the CS10G (#501)
+ * refuse (`a1 06 02 01 00`). Every refused unit that was weighed during the
+ * connection then streamed no live weight, and every accepting one streamed;
+ * that the refusal is the cause is a hypothesis, as other frames always
+ * differed too.
  *
  * Neither value can be the default for the whole family, and the scale's own
  * record of the key is only readable over a characteristic the Physiq lacks.
@@ -222,13 +225,17 @@ export const USER_DELETE_SUBCOMMAND = 0x04;
 export const VENDOR_APP_USER_KEY = 0x03e8;
 
 /**
- * Algorithm byte at [10] of the profile frame. Per the vendor's published SDK
- * the app derives it from the scale's algorithm type (type 5 maps to 4) and
- * adds VISIT_ATHLETE_STEP for an athlete, and only for a user older than 17
- * (VISIT_ATHLETE_MIN_AGE). The Feelfit capture on the 18-byte Physiq carries
- * 0x0e for an athlete (#463). The 19-byte dialect keeps 0x04 for everyone: that
- * is what the Arboleaf capture carries, and an athlete value there is untested
- * (D047).
+ * Algorithm byte at [10] of the profile frame, the default when
+ * `ble.qn_algorithm` is unset. Per the vendor's published SDK the scale never
+ * reports it: the app picks a body-fat method from its own settings for the
+ * scale model and maps it to this byte (method 5 maps to 4), adding
+ * VISIT_ATHLETE_STEP for an athlete older than 17 (VISIT_ATHLETE_MIN_AGE).
+ * For an 8-electrode scale whose settings name no method the SDK sends 7.
+ * The Feelfit capture on the 18-byte Physiq carries 0x0e for an athlete
+ * (#463); the GE and Arboleaf (19-byte) app frames in frames.ts carry 0x04. The
+ * 19-byte dialect keeps 0x04 for everyone: an athlete value there is untested
+ * (D047). Nothing in the frames tells which value a unit expects, so this
+ * stays the default and the option sets another one (#331, D095).
  */
 export const VISIT_ALGORITHM = 0x04;
 export const VISIT_ATHLETE_STEP = 10;
@@ -395,6 +402,19 @@ export const MAX_AE00_RESPONSES = 3;
 export const EXTENDED_INFO_FRAME_LEN = 20;
 
 /**
+ * The feature flags of a long 0x12 frame sit at [18], and only a frame longer
+ * than 19 bytes has them: on a 19-byte frame that byte is the checksum. Bit 5
+ * is what the vendor's published SDK calls the dynamic package. The SDK sends
+ * its 0xB7 only to a scale with the bit set, and the weigh-ins of the scales
+ * that have it (GE CS 10 G 0x2b, CS10G 0x3b, CS10E 0xeb) all come as 0xB1 or
+ * 0xB4 result frames. The Arboleaf CS10K sends 0x0b, no bit, and weighs in
+ * with the 19-byte dialect's 0x10 result block (#530). The bit is a
+ * correlation over five units, not a documented switch.
+ */
+export const INFO_FEATURES_OFFSET = 18;
+export const INFO_DYNAMIC_PACKAGE_BIT = 0x20;
+
+/**
  * Smallest long 0x12 frame whose byte[2] is echoed back on the first attempt.
  *
  * Separate from EXTENDED_INFO_FRAME_LEN on purpose: that constant decides which
@@ -464,6 +484,20 @@ export const TRIGGER_GAP_MS = 150;
 export const POST_START_ANCHOR_DELAY_MS = 75;
 
 /**
+ * How long the 20-byte extended dialect waits for the scale's answer to the
+ * profile frame before it sends the 0x22 START and the weight anchor anyway,
+ * with `ble.qn_user_key` (#501).
+ *
+ * The Arboleaf CS10G app sends both only once the scale has answered the
+ * profile frame (`a1 <len> 02 ..`), as the vendor's published SDK does, and the
+ * 18-byte dialect already sends its 0x22 on that answer (D065). Through the
+ * ESP32 proxy the CS10G's answer reached the host 0.26 to 0.40 s after the
+ * frame was written (#501), so 1 s leaves room for a slower link; an answer
+ * lost in transit costs that second and nothing else.
+ */
+export const VISIT_ANSWER_TIMEOUT_MS = 1000;
+
+/**
  * Completed-weigh-in result frames on the extended dialect (#235).
  *
  * The 20-byte GE CS 10 G / "Fit Plus" does NOT stream 0x10 live frames after a
@@ -472,8 +506,13 @@ export const POST_START_ANCHOR_DELAY_MS = 75;
  * the handshake succeeded end to end yet nothing ever reached the exporters:
  *
  *   0xB1 .. 03 01 : live sweep record, 44 bytes. THE weight source.
+ *       [2]     how many parts the record came in, [3] which part this is:
+ *               03 01 here, one 119-byte part 01 01 on a 20-byte CS10E over
+ *               an ESPHome proxy (#331). The fields below are the first part's.
+ *       [4]     user slot (#501)
  *       [5-6]   weight, LE uint16, /100 kg
- *       [7..]   impedance channels
+ *       [7..]   impedance channels and the scale's own results; the one-part
+ *               layout is at decodeExtendedResult (#331)
  *   0xB4 .. 04 01 : stored history record, 44 bytes. Weight only when fresh.
  *       [7-10]  record timestamp, LE uint32 (scale 2000-epoch)
  *       [11-12] recorded weight, LE uint16, /100 kg
@@ -495,19 +534,19 @@ export const POST_START_ANCHOR_DELAY_MS = 75;
  * opened), since a genuinely current record is the scale's own averaged figure.
  * That is deliberately stricter than the backward-looking window the 0x23
  * stored records use (MAX_STORED_RECORD_AGE_SEC): see the 0xB4 branch in
- * index.ts for why. Anything older is left to the stored-record path.
+ * dialects/ext20.ts for why. Anything older is left to the stored-record path.
  *
  * @hedoric hardware-verified the live values against the scale's own display:
  * 75.20 kg, BMI 20.2 in the 0xB1 03 03 tail, cross-checked as
  * 75.20 / 1.93^2 = 20.19. Every frame carries the standard QN trailing sum.
  *
- * Impedance is deliberately NOT forwarded to the BIA estimator yet. The channels
- * are a proprietary multi-frequency segmental sweep in raw units (~2,300-3,050),
- * not the single ~500 ohm whole-body value computeBiaFat expects (it divides
- * height^2 / impedance), and feeding one in raw yields a ~57% fat nonsense.
- * Until the channels are calibrated the reading is emitted weight-only, so body
- * composition falls back to the same profile-based estimate broadcast-only
- * scales already use. Weight and BMI are the parts this decode is sure of.
+ * Impedance is deliberately NOT forwarded to the BIA estimator. Per the
+ * vendor's published SDK the channels are the 8-electrode segment impedances
+ * in 0.1 ohm (EIGHT_CHANNEL_ORDER): a few hundred ohm on each limb and a few
+ * tens on the trunk, none of them the single whole-body value computeBiaFat
+ * expects (it divides height^2 / impedance). The reading carries impedance 0,
+ * so without the scale's own composition the body composition falls back to
+ * the same profile-based estimate broadcast-only scales use.
  */
 /**
  * How far before the session's start a 0xB4 record may be stamped and still
@@ -520,6 +559,22 @@ export const RESULT_OPCODE_B4 = 0xb4;
 export const RESULT_OPCODE_B1 = 0xb1;
 export const RESULT_MIN_WEIGHT_KG = 5;
 export const RESULT_MAX_WEIGHT_KG = 300;
+
+/**
+ * The extended dialect's 0xB1 record without the four header bytes and the
+ * checksum: what the parts of a split record add up to, and what the one-part
+ * frame (119 bytes) carries between them (#501, D103).
+ */
+export const EXTENDED_RESULT_RECORD_LEN = 114;
+
+/**
+ * How long a split 0xB1 whose first part carried the weight waits for its
+ * other parts when a configured user's profile frame went out (#501, D103).
+ * The parts of a burst came 0 to 97 ms apart in the one log that shows them
+ * and the first part 0.12 to 0.2 s after the last 0xB4, so 5 s is generous;
+ * the cost is only paid when parts are lost, as a weigh-in 5 s later.
+ */
+export const EXTENDED_RESULT_PARTS_HOLD_MS = 5_000;
 
 /**
  * The 19-byte dialect's weigh-in stream (Arboleaf, #331, D037).

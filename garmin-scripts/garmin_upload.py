@@ -56,7 +56,7 @@ class TokenSetupError(RuntimeError):
     """
 
 
-# garminconnect 0.3.19 puts the HTTP status into the message, as in
+# garminconnect 0.3.20 puts the HTTP status into the message, as in
 # "API Error 401 - ..." (_run_request in garminconnect/client/transport.py),
 # and parses it back out with this same pattern (_STATUS_CODE_RE in
 # garminconnect/api/_common.py).
@@ -83,7 +83,7 @@ def _http_status(exc):
 def is_rejected_token(exc):
     """True when Garmin answered 401 somewhere along the exception chain (F-13).
 
-    By the time a 401 reaches us, garminconnect 0.3.19 has already refreshed
+    By the time a 401 reaches us, garminconnect 0.3.20 has already refreshed
     the token and repeated the request (_run_request), so a new process
     seconds later loads the same token and gets the same answer. Only a new
     login fixes it.

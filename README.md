@@ -60,6 +60,7 @@ If your scale is not found or its values look wrong, follow [Troubleshooting](ht
 - OKOK and Chipsea broadcast: public captures, checked against openScale and [ble_monitor](https://github.com/custom-components/ble_monitor).
 - PICOOC Mini Lite: openScale (dnsfdv) and the advertisement log in oliexdev/openScale#1512.
 - A&D UC-352BLE: the capture in oliexdev/openScale#1505 (mrblowntobits) and the GATT dump in [HEADS-project/ThingML-BLE](https://github.com/HEADS-project/ThingML-BLE).
+- Huawei CH100 and AH100: openScale (danieldorigatti, martinriedel), the captures in oliexdev/openScale#547 (dmitriytim) and testing on a CH100 by Otautahi.
 - QN-Scale, FITINDEX and a few others: reverse-engineered in this project.
 - Garmin upload: [garminconnect](https://github.com/cyberjunky/python-garminconnect) by cyberjunky.
 - BLE: [node-ble](https://github.com/chrvadala/node-ble) (Linux), [@abandonware/noble](https://github.com/abandonware/noble) (Windows), [@stoprocent/noble](https://github.com/stoprocent/noble) (macOS).
@@ -69,7 +70,7 @@ If your scale is not found or its values look wrong, follow [Troubleshooting](ht
 
 <!-- contributors:start - generated from git history by src/tools/sync-contributors.ts, do not edit by hand -->
 <table><tr>
-<td align="center"><a href="https://github.com/KristianP26"><img src="https://avatars.githubusercontent.com/u/28766334?v=4" width="60" height="60" alt="KristianP26"><br><sub>KristianP26</sub></a><br><sub>1,282 commits</sub></td>
+<td align="center"><a href="https://github.com/KristianP26"><img src="https://avatars.githubusercontent.com/u/28766334?v=4" width="60" height="60" alt="KristianP26"><br><sub>KristianP26</sub></a><br><sub>1,382 commits</sub></td>
 <td align="center"><a href="https://github.com/APIUM"><img src="https://avatars.githubusercontent.com/u/9067013?v=4" width="60" height="60" alt="APIUM"><br><sub>APIUM</sub></a><br><sub>34 commits</sub></td>
 <td align="center"><a href="https://github.com/alasano"><img src="https://avatars.githubusercontent.com/u/14372930?v=4" width="60" height="60" alt="alasano"><br><sub>alasano</sub></a><br><sub>8 commits</sub></td>
 <td align="center"><a href="https://github.com/marcelorodrigo"><img src="https://avatars.githubusercontent.com/u/443962?v=4" width="60" height="60" alt="marcelorodrigo"><br><sub>marcelorodrigo</sub></a><br><sub>7 commits</sub></td>
@@ -97,6 +98,9 @@ If your scale is not found or its values look wrong, follow [Troubleshooting](ht
 <td align="center"><a href="https://github.com/rjekelmans"><img src="https://avatars.githubusercontent.com/u/13397247?v=4" width="60" height="60" alt="rjekelmans"><br><sub>rjekelmans</sub></a><br><sub>1 commit</sub></td>
 </tr><tr>
 <td align="center"><a href="https://github.com/intrak"><img src="https://avatars.githubusercontent.com/u/36244720?v=4" width="60" height="60" alt="intrak"><br><sub>intrak</sub></a><br><sub>1 commit</sub></td>
+<td align="center"><a href="https://github.com/codewirrwarr"><img src="https://avatars.githubusercontent.com/u/2251276?v=4" width="60" height="60" alt="codewirrwarr"><br><sub>codewirrwarr</sub></a><br><sub>1 commit</sub></td>
+<td align="center"><a href="https://github.com/Nitrogenbear"><img src="https://avatars.githubusercontent.com/u/318078922?v=4" width="60" height="60" alt="Nitrogenbear"><br><sub>Nitrogenbear</sub></a><br><sub>1 commit</sub></td>
+<td align="center"><a href="https://github.com/snajby"><img src="https://avatars.githubusercontent.com/u/4648720?v=4" width="60" height="60" alt="snajby"><br><sub>snajby</sub></a><br><sub>1 commit</sub></td>
 </tr></table>
 <!-- contributors:end -->
 

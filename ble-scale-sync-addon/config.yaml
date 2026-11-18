@@ -1,6 +1,6 @@
 name: BLE Scale Sync
 # x-release-please-start-version
-version: 1.37.0
+version: 1.41.0
 # x-release-please-end
 slug: ble-scale-sync
 description: >-
@@ -60,6 +60,8 @@ options:
   qn_report_byte: ''
   qn_weight_ack: ''
   qn_user_key: ''
+  qn_user_slot: ''
+  qn_algorithm: ''
   qn_a4_prelude: ''
   qn_time_sync_long: ''
   qn_config_long: ''
@@ -103,6 +105,7 @@ options:
   garmin_email: ''
   garmin_password: ''
   garmin_weight_only: false
+  garmin_skip_metabolic_age: false
   garmin_upload_timeout_sec: 180
   scan_cooldown: 30
   idle_rescan_delay: 5
@@ -121,6 +124,8 @@ schema:
   qn_report_byte: str?
   qn_weight_ack: str?
   qn_user_key: str?
+  qn_user_slot: str?
+  qn_algorithm: str?
   qn_a4_prelude: str?
   qn_time_sync_long: str?
   qn_config_long: str?
@@ -164,6 +169,7 @@ schema:
   garmin_email: str?
   garmin_password: password?
   garmin_weight_only: bool?
+  garmin_skip_metabolic_age: bool?
   garmin_upload_timeout_sec: int(10,900)?
   scan_cooldown: int(5,3600)
   idle_rescan_delay: int(0,3600)?

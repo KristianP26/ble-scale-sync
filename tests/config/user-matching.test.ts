@@ -3,6 +3,7 @@ import {
   matchUserByWeight,
   detectWeightDrift,
   isOutOfRange,
+  slotClaimants,
 } from '../../src/config/user-matching.js';
 import type { UserConfig } from '../../src/config/schema.js';
 
@@ -211,5 +212,36 @@ describe('isOutOfRange', () => {
   it('is true just outside either end', () => {
     expect(isOutOfRange(ALICE, 49.9)).toBe(true);
     expect(isOutOfRange(ALICE, 70.1)).toBe(true);
+  });
+});
+
+// --- slotClaimants ---
+
+describe('slotClaimants', () => {
+  const slot1 = makeUser({ name: 'Slot One', beurer_user_index: 1 });
+  const slot2 = makeUser({ name: 'Slot Two', beurer_user_index: 2 });
+  const unset = makeUser({ name: 'Unset' });
+
+  it('returns the one user who claims the slot', () => {
+    expect(slotClaimants([slot1, slot2], 2)).toEqual([slot2]);
+  });
+
+  it('returns nobody when the frame names no slot', () => {
+    expect(slotClaimants([slot1, slot2], undefined)).toEqual([]);
+  });
+
+  it('returns nobody when no user claims the slot', () => {
+    expect(slotClaimants([slot1, slot2], 7)).toEqual([]);
+  });
+
+  it('returns every claimant in config order when several claim one slot', () => {
+    const alsoSlot1 = makeUser({ name: 'Also One', beurer_user_index: 1 });
+    expect(slotClaimants([alsoSlot1, slot2, slot1], 1)).toEqual([alsoSlot1, slot1]);
+  });
+
+  // The consent code falls back to slot 1 when beurer_user_index is unset; that
+  // default must not make the user the owner of every slot-1 weigh-in.
+  it('never counts a user without beurer_user_index as a claimant of slot 1', () => {
+    expect(slotClaimants([unset, slot2], 1)).toEqual([]);
   });
 });

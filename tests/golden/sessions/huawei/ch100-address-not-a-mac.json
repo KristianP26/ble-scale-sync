@@ -1,0 +1,19 @@
+{
+  "settled": {
+    "by": "error",
+    "atMs": 0,
+    "error": "Huawei CH100/AH100: this transport gives no Bluetooth address for the scale (macOS gives a CoreBluetooth UUID instead), and the scale encrypts everything with it. Read it from Linux or Windows, an ESPHome proxy or the ESP32 MQTT proxy (#503)"
+  },
+  "reading": null,
+  "history": [],
+  "subscribes": [
+    {
+      "seq": 0,
+      "atMs": 0,
+      "uuid": "faa2"
+    }
+  ],
+  "writes": [],
+  "rxDropped": 0,
+  "payload": null
+}

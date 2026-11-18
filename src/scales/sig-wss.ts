@@ -50,6 +50,13 @@ const SIG_MEASUREMENT_UNSUCCESSFUL = 0xffff;
 /** Byte length of the SIG Date Time structure. */
 const DATE_TIME_LEN = 7;
 
+/**
+ * The clock a scale's SIG Date Time is read in. A scale has no time zone and
+ * keeps the wall clock its vendor app set: the host's local time when the
+ * phone and the host are in one zone, while the ES-WBE28 of #510 keeps UTC.
+ */
+export type SigClock = 'local' | 'utc';
+
 /** SIG Date Time field bounds. 0 means "unknown" for year, month and day. */
 const YEAR_MIN = 1582;
 const YEAR_MAX = 9999;
@@ -73,8 +80,18 @@ const YEAR_MAX = 9999;
  *
  * A field the spec cannot express is therefore no timestamp at all, which the
  * callers already handle: it is the same outcome as the flag being clear.
+ *
+ * The fields are the host's local time unless `clock` says the scale keeps
+ * UTC (#510). That reading goes through `Date.UTC` and the UTC getters rather
+ * than a local Date moved by the zone offset: a wall time in the host's
+ * spring-forward gap does not exist locally, and `Date` would move it an hour
+ * before the offset was applied.
  */
-export function parseSigDateTime(data: Buffer, offset: number): Date | undefined {
+export function parseSigDateTime(
+  data: Buffer,
+  offset: number,
+  clock: SigClock = 'local',
+): Date | undefined {
   if (offset + DATE_TIME_LEN > data.length) return undefined;
 
   const year = data.readUInt16LE(offset);
@@ -89,15 +106,19 @@ export function parseSigDateTime(data: Buffer, offset: number): Date | undefined
   if (year < YEAR_MIN || year > YEAR_MAX) return undefined;
   if (hours > 23 || minutes > 59 || seconds > 59) return undefined;
 
-  const d = new Date(year, month - 1, day, hours, minutes, seconds);
+  const utc = clock === 'utc';
+  const d = utc
+    ? new Date(Date.UTC(year, month - 1, day, hours, minutes, seconds))
+    : new Date(year, month - 1, day, hours, minutes, seconds);
   // This is what rejects the rolling values, and it is deliberately the only
   // check on month and day: an explicit `month < 1 || month > 12` cannot fail
   // here, because anything the spec forbids also fails the round trip. Month 0
   // comes back as December, day 0 as the previous month's last day, 31 April as
   // 1 May, and a two-digit year as 19xx - each one differs from what went in.
-  if (d.getFullYear() !== year || d.getMonth() !== month - 1 || d.getDate() !== day) {
-    return undefined;
-  }
+  const [y, m, dd] = utc
+    ? [d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()]
+    : [d.getFullYear(), d.getMonth(), d.getDate()];
+  if (y !== year || m !== month - 1 || dd !== day) return undefined;
   return Number.isNaN(d.getTime()) ? undefined : d;
 }
 
@@ -107,7 +128,7 @@ export function parseSigDateTime(data: Buffer, offset: number): Date | undefined
  *
  * Local time, deliberately. A scale has no time zone, so it shows and stamps
  * whatever wall clock it is given, and `parseSigDateTime` reads a stamp back
- * with the same local getters: written and read in one zone, the round trip is
+ * as local time by default: written and read in one zone, the round trip is
  * exact wherever the process runs. The A&D app writes the phone's local time
  * the same way (#408). In a container without `TZ` that zone is UTC.
  */

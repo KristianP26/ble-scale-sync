@@ -4,12 +4,14 @@ import type { Trace } from '../../helpers/replay/trace.js';
 /**
  * Renpho ES-WBE28 sessions: vendor handshake on 0xFFE2, UCP consent, profile
  * writes, then the 0x2A9D/0x2A9C subscribes, and the weigh-in held up to 8 s
- * for the impedance.
+ * for the body composition.
  *
  * The two real frames are the ones in tests/scales/renpho.test.ts, from the
  * #267 btsnoop of the physical scale: weight frame 1374 (94.9 kg, SIG Date
- * Time 2026-07-04 12:26:06) and body-composition packet 2, frame 1477
- * (332.8 ohm). Their spacing is not in the repo, so every trace that uses
+ * Time 2026-07-04 12:26:06) and body-composition packet 2, frame 1477, which
+ * is in Renpho's own layout, not SIG (#507). Read as SIG it gave 332.8 ohm
+ * from the wrong offset; now it ends the hold and the weigh-in gets no
+ * impedance. Their spacing is not in the repo, so every trace that uses
  * them is `derived`. The clock is the capture's local time, so the stamp
  * reads as live in any zone. The device exposes every characteristic the
  * #267 capture lists; nothing depends on the address.
@@ -29,8 +31,8 @@ const traces: Record<string, Trace> = {
       { atMs: 1500, dir: 'rx', uuid: '2a9c', hex: BCS_PACKET2 },
     ],
   },
-  // A stored record is buffered as history, the impedance after it joins it
-  // in place, and the disconnect hands it over (D027).
+  // A stored record is buffered as history, its second 0x2A9C packet adds
+  // nothing to it, and the disconnect hands it over (D027).
   'wbe28-stored-record': {
     provenance: 'derived',
     source: '#267 capture frames 1374 and 1477, the weight stamp day 04 -> 01 (three days old)',
@@ -52,12 +54,14 @@ const traces: Record<string, Trace> = {
       { atMs: 1000, dir: 'rx', uuid: '2a9d', hex: '01d007' },
     ],
   },
-  // A weight without a time is dated by the Time Stamp of the 0x2A9C packet.
+  // A weight without a time is dated by the Time Stamp of a single SIG 0x2A9C
+  // packet. Its impedance 0x0d00 is the value once misread from frame 1477, not
+  // one an ES-WBE28 sends (#507).
   'wbe28-bcs-time-stamp': {
     provenance: 'characterization',
     source:
-      'made up: 94.9 kg without time, then a 0x2A9C with Time Stamp 2026-07-04 12:26:08 ' +
-      'and impedance 0x0d00 (flags 0x0202)',
+      'made up: 94.9 kg without time, then a single SIG 0x2A9C with Time Stamp ' +
+      '2026-07-04 12:26:08 and impedance 0x0d00 (flags 0x0202)',
     steps: [
       { atMs: 1000, dir: 'rx', uuid: '2a9d', hex: WSS_NO_TIME },
       { atMs: 1500, dir: 'rx', uuid: '2a9c', hex: '0202f901ea0707040c1a08000d' },

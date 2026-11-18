@@ -6,6 +6,7 @@ import type {
 } from '../interfaces/scale-adapter.js';
 import type { RawReading } from './shared.js';
 import { isForced } from '../scales/force.js';
+import { resolveAdapter } from '../scales/resolve.js';
 import { bleLog, normalizeUuid, BT_BASE_UUID_SUFFIX } from './types.js';
 import { isDebugEnabled } from '../logger.js';
 
@@ -161,6 +162,37 @@ export function readsFromAdvertisement(adapter: ScaleAdapter): boolean {
     adapter.preferPassive === true &&
     (typeof adapter.parseServiceData === 'function' || typeof adapter.parseBroadcast === 'function')
   );
+}
+
+/**
+ * True when `adapter` reads its weigh-in from advertisements AND the
+ * advertisement itself identifies the device as that adapter, so a transport
+ * that connects on demand can skip the GATT connect before it is opened (#537).
+ *
+ * The bare `readsFromAdvertisement` test is not enough here. Mi Scale 2 claims
+ * any device advertising the generic 0x181B Body Composition service at
+ * priority 210, and a nameless standard BCS scale (Beurer BF950, Huawei CH100)
+ * reaches its real adapter only after it is connected and its characteristics
+ * are known (D021, D031). Refusing every such pick up front would never let
+ * those scales connect. So the pick is re-run with the advertised service list
+ * stripped: it stands only when it rests on something else, the local name, the
+ * adapter's own 0x181B service data, or a forced adapter.
+ *
+ * A proxy hands the advertisement and its scan response over as separate
+ * events: the scale's "load removed" frame has service data and no name (it
+ * parses to nothing, so it falls through to GATT), and the named event can
+ * arrive without service data (not yet seen in a log of this scale). Neither carries a parseable broadcast source on its own,
+ * which is why waiting for the broadcast is no substitute for this check.
+ *
+ * Hypothesis, not captured: that only Mi scales send 0x181B service data.
+ */
+export function identifiedAsAdvertisementRead(
+  adapter: ScaleAdapter,
+  info: BleDeviceInfo,
+  registry: readonly ScaleAdapter[],
+): boolean {
+  if (!readsFromAdvertisement(adapter)) return false;
+  return resolveAdapter({ ...info, serviceUuids: [] }, registry) === adapter;
 }
 
 // ─── Grace timers (per-address, weight-only fallback) ──────────────────────────
@@ -577,7 +609,7 @@ export function emitDeduped(
     return false;
   }
   bleLog.info(`Matched: ${raw.adapter.name} (${address})`);
-  bleLog.info(`Reading: ${weight} kg`);
+  bleLog.info(`Reading: ${weight.toFixed(2)} kg`);
   queue.push(raw);
   return true;
 }

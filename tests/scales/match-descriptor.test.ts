@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   matchesDescriptor,
+  normalizeLocalName,
   uuidClaimHits,
   descriptorNameTokens,
   ownAddressBytes,
@@ -9,6 +10,7 @@ import {
 import { uuid16 } from '../../src/scales/body-comp-helpers.js';
 import type { BleDeviceInfo } from '../../src/interfaces/scale-adapter.js';
 import { M1690_ADVERT, M1690_FE95, M1690_FE95_PID_018E } from '../helpers/yunmai-m1690.js';
+import { CH100_PADDED_NAME } from '../helpers/huawei-ch100.js';
 
 const dev = (p: Partial<BleDeviceInfo>): BleDeviceInfo => ({
   localName: '',
@@ -16,11 +18,70 @@ const dev = (p: Partial<BleDeviceInfo>): BleDeviceInfo => ({
   ...p,
 });
 
+// #503: a name field padded to a fixed width reaches matching as 'CH100' + 15 spaces.
+describe('normalizeLocalName', () => {
+  it('strips trailing spaces', () => {
+    expect(normalizeLocalName(CH100_PADDED_NAME)).toBe('CH100');
+  });
+
+  it('strips trailing NUL, and NUL mixed with whitespace', () => {
+    expect(normalizeLocalName('CH100\0\0\0\0')).toBe('CH100');
+    expect(normalizeLocalName('CH100 \0 \0')).toBe('CH100');
+  });
+
+  it('strips what trim() strips: tab, line breaks, no-break space', () => {
+    expect(normalizeLocalName('CH100\t\r\n\u00a0\u3000')).toBe('CH100');
+  });
+
+  it('keeps the start, the inside and the case', () => {
+    expect(normalizeLocalName(' CH100')).toBe(' CH100');
+    expect(normalizeLocalName(' CH100  ')).toBe(' CH100');
+    expect(normalizeLocalName('My  Scale')).toBe('My  Scale');
+    expect(normalizeLocalName('CH\x00100')).toBe('CH\x00100');
+    expect(normalizeLocalName('Ch100')).toBe('Ch100');
+  });
+
+  it('returns a name that is only padding as it came', () => {
+    expect(normalizeLocalName('    ')).toBe('    ');
+    expect(normalizeLocalName('\0\0')).toBe('\0\0');
+    expect(normalizeLocalName(' \0\t')).toBe(' \0\t');
+    expect(normalizeLocalName('')).toBe('');
+  });
+
+  it('leaves a clean name alone', () => {
+    expect(normalizeLocalName('CH100')).toBe('CH100');
+  });
+
+  it('is linear on a long run of spaces inside the name', () => {
+    const name = 'a' + ' '.repeat(200_000) + 'b';
+    const t0 = performance.now();
+    expect(normalizeLocalName(name)).toBe(name);
+    expect(normalizeLocalName(name + ' ')).toBe(name);
+    expect(performance.now() - t0).toBeLessThan(1000);
+  });
+});
+
 describe('matchesDescriptor', () => {
   it('matches exact name case-insensitively', () => {
     const d: MatchDescriptor = { priority: 100, names: { exact: ['senssun fat'] } };
     expect(matchesDescriptor(dev({ localName: 'Senssun Fat' }), d)).toBe(true);
     expect(matchesDescriptor(dev({ localName: 'senssun fat scale' }), d)).toBe(false);
+  });
+
+  it('matches a name that arrives padded, exact and prefix (#503)', () => {
+    const exact: MatchDescriptor = { priority: 100, names: { exact: ['ch100'] } };
+    expect(matchesDescriptor(dev({ localName: CH100_PADDED_NAME }), exact)).toBe(true);
+    expect(matchesDescriptor(dev({ localName: 'CH100\0\0' }), exact)).toBe(true);
+    expect(matchesDescriptor(dev({ localName: 'CH100S' + ' '.repeat(14) }), exact)).toBe(false);
+    const prefix: MatchDescriptor = { priority: 100, names: { startsWith: ['ch1'] } };
+    expect(matchesDescriptor(dev({ localName: CH100_PADDED_NAME }), prefix)).toBe(true);
+  });
+
+  it('does not match a name with leading padding or a name that is only padding', () => {
+    const exact: MatchDescriptor = { priority: 100, names: { exact: ['ch100'] } };
+    expect(matchesDescriptor(dev({ localName: ' CH100' }), exact)).toBe(false);
+    const includes: MatchDescriptor = { priority: 100, names: { includes: ['yunmai'] } };
+    expect(matchesDescriptor(dev({ localName: ' '.repeat(20) }), includes)).toBe(false);
   });
 
   it('matches name substring (includes) but never on empty name', () => {

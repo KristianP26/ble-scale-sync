@@ -44,7 +44,9 @@ export const QN_NAMES = {
 /**
  * Whether QN's handshake can run: it needs a notify char (fff1 or ffe1) AND a
  * write char (fff2 or ffe3), exactly the pair subscribeAndInit resolves.
- * `chars` lowercased; RenphoScaleAdapter declines a device on it too.
+ * `chars` lowercased; RenphoScaleAdapter declines a "renpho"-named device on
+ * it too. A nameless one it decides on its own characteristic set instead, as
+ * the Renpho A-R003 has this pair next to the SIG stack (#507).
  */
 export function qnCanRun(chars: readonly string[]): boolean {
   return (
@@ -159,7 +161,11 @@ export function qnMatches(device: BleDeviceInfo): boolean {
   // reporter saw it alternate between QN Scale and Standard GATT, reading
   // nothing either way. The SIG User Control Point is the discriminator: it
   // belongs to the User Data service, which a QN scale does not implement.
-  // Mirrors the looksLikeWbe28 mutual exclusion above.
+  // Mirrors the looksLikeWbe28 mutual exclusion above. It also keeps this
+  // fallback off the nameless Renpho A-R003 (#507), whose handles imply 0xFFE0
+  // and 0xFFF0 services next to the consent pair: QN outranks
+  // RenphoScaleAdapter (registry-check.ts), so wherever discovered services
+  // reach this matcher QN would take it without the guard.
   const hasSigConsent =
     chars.some((u) => u === '2a9f' || u === CHR_SIG_USER_CONTROL_POINT) &&
     chars.some((u) => u === '2a9d' || u === CHR_SIG_WEIGHT_MEASUREMENT);

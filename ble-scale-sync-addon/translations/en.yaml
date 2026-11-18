@@ -44,9 +44,22 @@ configuration:
   qn_user_key:
     name: QN user key
     description: >-
-      QN scales with an 18- or 19-byte scale-info frame only. Try 1000 after
-      the QN protocol byte when the debug log says the scale did not accept
-      the profile; this app's user must be the vendor app's first user.
+      QN scales with a scale-info frame of 18 bytes or longer only. Try 1000
+      after the QN protocol byte when the debug log says the scale did not
+      accept the profile; this app's user must be the vendor app's first user,
+      or set the QN user slot.
+  qn_user_slot:
+    name: QN user slot
+    description: >-
+      QN scales only, with the QN user key: the user slot (1 to 8) the vendor
+      app registered you in, when it is not 1. Experimental; the QN Scales
+      page says where the debug log names your slot.
+  qn_algorithm:
+    name: QN algorithm byte
+    description: >-
+      Experimental, QN scales only. The algorithm byte (0 to 255) of the
+      profile frame, sent only with the QN user key (on 19-byte scales also
+      with the QN weight acknowledgement); the QN Scales page says when to set it.
   qn_a4_prelude:
     name: QN A4 prelude
     description: >-
@@ -68,8 +81,9 @@ configuration:
   qn_result_ack:
     name: QN result acknowledgement
     description: >-
-      Experimental, QN scales with a 19-byte scale-info frame only. Sends the
-      end-of-measurement frame of the vendor's SDK after the last result frame.
+      Experimental, QN scales with a 19-byte scale-info frame and the Arboleaf
+      CS10K only. Sends the end-of-measurement frame of the vendor's SDK after
+      the last result frame.
   rmsc04_profile_byte:
     name: Renpho R-MSC04 profile byte
     description: >-
@@ -247,6 +261,11 @@ configuration:
     description: >-
       Send only the weight to Garmin Connect. Other exporters still receive
       the full body composition.
+  garmin_skip_metabolic_age:
+    name: Skip metabolic age
+    description: >-
+      Upload every metric except metabolic age. Garmin's own Fitness Age is
+      not affected, and other exporters still receive the metabolic age.
   scan_cooldown:
     name: Scan cooldown (seconds)
     description: >-

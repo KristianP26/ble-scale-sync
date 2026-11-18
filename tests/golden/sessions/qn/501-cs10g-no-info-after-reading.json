@@ -1,0 +1,81 @@
+{
+  "settled": {
+    "by": "error",
+    "atMs": 39558,
+    "error": "Scale disconnected before reading completed"
+  },
+  "reading": null,
+  "history": [],
+  "subscribes": [
+    {
+      "seq": 0,
+      "atMs": 0,
+      "uuid": "fff1"
+    },
+    {
+      "seq": 1,
+      "atMs": 0,
+      "uuid": "ae02"
+    }
+  ],
+  "writes": [
+    {
+      "seq": 2,
+      "atMs": 2000,
+      "uuid": "ae01",
+      "hex": "fedcbac00600020101ef",
+      "withResponse": false
+    },
+    {
+      "seq": 3,
+      "atMs": 2200,
+      "uuid": "fff2",
+      "hex": "1309ff01100000002c",
+      "withResponse": false
+    },
+    {
+      "seq": 4,
+      "atMs": 2700,
+      "uuid": "fff2",
+      "hex": "2008ffe24f7132fb",
+      "withResponse": false
+    },
+    {
+      "seq": 5,
+      "atMs": 2700,
+      "uuid": "fff2",
+      "hex": "a20601322803",
+      "withResponse": false
+    },
+    {
+      "seq": 6,
+      "atMs": 2700,
+      "uuid": "ae01",
+      "hex": "0270617373",
+      "withResponse": false
+    },
+    {
+      "seq": 7,
+      "atMs": 3209,
+      "uuid": "ae01",
+      "hex": "011ae0bfa7f4443ab3f5b8322396d69e35",
+      "withResponse": false
+    },
+    {
+      "seq": 8,
+      "atMs": 3400,
+      "uuid": "fff2",
+      "hex": "a00d02010008002106b804029d",
+      "withResponse": false
+    },
+    {
+      "seq": 9,
+      "atMs": 3600,
+      "uuid": "fff2",
+      "hex": "2206ff00032a",
+      "withResponse": false
+    }
+  ],
+  "rxDropped": 0,
+  "payload": null
+}
