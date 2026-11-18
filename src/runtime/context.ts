@@ -9,6 +9,9 @@ import type { BleHandlerName } from '../ble/types.js';
 import type { ConfigSource } from '../config/load.js';
 import { resolveExportQueuePath } from './export-queue.js';
 import { restoreReplayAnchors } from './replay-anchors.js';
+import { isPlausibleWeight } from '../interfaces/reading-weight.js';
+import { createLogger } from '../logger.js';
+import type { UserConfig } from '../config/schema.js';
 import type { ResolvedRuntimeConfig } from '../config/resolve.js';
 import type { EmbeddedBrokerHandle } from '../ble/embedded-broker.js';
 import type { Exporter } from '../interfaces/exporter.js';
@@ -97,7 +100,28 @@ export interface AppContextInit {
   abortApp: (reason?: unknown) => void;
 }
 
+const log = createLogger('Sync');
+
+/**
+ * Forget a `last_known_weight` that is not a plausible body weight (ADR D108).
+ * A value saved before readings were checked could still sit in config.yaml;
+ * it feeds the match tiebreak and the anchor of QN scales, so one absurd value
+ * would win every comparison. The next weigh-in sets it again.
+ */
+export function dropImplausibleSavedWeights(users: readonly UserConfig[]): void {
+  for (const user of users) {
+    const w = user.last_known_weight;
+    if (w === null || w === undefined || isPlausibleWeight(w)) continue;
+    log.warn(
+      `Ignoring last_known_weight ${String(w)} of ${user.name}: not a plausible body weight ` +
+        '(0.5-700 kg). The next weigh-in sets it again.',
+    );
+    user.last_known_weight = null;
+  }
+}
+
 export function createAppContext(init: AppContextInit): AppContext {
+  dropImplausibleSavedWeights(init.config.users);
   const lastExportedWeights = new Map<string, number>();
   const lastExportedAt = new Map<string, Date>();
   if (init.replayAnchorsPath) {
@@ -140,6 +164,7 @@ export function createAppContext(init: AppContextInit): AppContext {
     abortApp: init.abortApp,
 
     setConfig(next, resolved) {
+      dropImplausibleSavedWeights(next.users);
       this.config = next;
       this.scaleMac = resolved.scaleMac;
       this.weightUnit = resolved.weightUnit;
