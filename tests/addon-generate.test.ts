@@ -456,6 +456,7 @@ describe.skipIf(!HARNESS)(
             password: "garmin-password"
             token_dir: <tmp>/garmin-tokens
             weight_only: false
+            skip_metabolic_age: false
             upload_timeout_sec: 180
 
         runtime:
