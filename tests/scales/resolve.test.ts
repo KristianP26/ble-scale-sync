@@ -6,10 +6,13 @@ import { uuid16 } from '../../src/scales/body-comp-helpers.js';
 import type { BleDeviceInfo, ScaleAdapter } from '../../src/interfaces/scale-adapter.js';
 import { matchesDescriptor, uuidClaimHits } from '../../src/scales/match-descriptor.js';
 import { M1690_ADVERT } from '../helpers/yunmai-m1690.js';
+import { CH100_PADDED_NAME } from '../helpers/huawei-ch100.js';
 
 describe('resolveAdapter', () => {
   // A spread of fixtures from registry-collision.test.ts; resolveAdapter MUST
-  // agree with adapters.find((a) => a.matches(info)) for each.
+  // agree with adapters.find((a) => a.matches(info)) for each. They carry clean
+  // names: the resolver strips trailing padding before matches(), a direct
+  // matches() call on a padded name does not (see the padding tests below).
   const fixtures: BleDeviceInfo[] = [
     { localName: 'eufy T9149', serviceUuids: [] },
     { localName: 'QN-Scale', serviceUuids: ['fff0'] },
@@ -37,6 +40,26 @@ describe('resolveAdapter', () => {
       const viaResolve = resolveAdapter(info);
       expect(viaResolve?.name, `mismatch for ${info.localName}`).toBe(viaFind?.name);
     }
+  });
+
+  // #503: matches() sees the name without its trailing padding, and the very
+  // same object when there was none.
+  it('hands matches() the name without trailing padding, the same object when clean', () => {
+    const seen: BleDeviceInfo[] = [];
+    const spy = {
+      name: 'spy',
+      match: { priority: 1 },
+      matches: (d: BleDeviceInfo) => (seen.push(d), false),
+    } as unknown as ScaleAdapter;
+    const clean: BleDeviceInfo = { localName: 'CH100', serviceUuids: [] };
+    const padded: BleDeviceInfo = { localName: CH100_PADDED_NAME, serviceUuids: ['181b'] };
+
+    resolveAdapter(clean, [spy]);
+    resolveAdapter(padded, [spy]);
+
+    expect(seen[0]).toBe(clean);
+    expect(seen[1]).toEqual({ localName: 'CH100', serviceUuids: ['181b'] });
+    expect(padded.localName).toBe(CH100_PADDED_NAME);
   });
 
   it('returns undefined when nothing matches', () => {
@@ -98,6 +121,18 @@ describe('resolveAfterDiscovery', () => {
     const registry = [charClaimer(90, 'aaaa'), nameClaimer(10, 'mine')];
     const got = resolveAfterDiscovery(
       { localName: 'mine', serviceUuids: [] },
+      { characteristicUuids: ['aaaa'] },
+      registry,
+    );
+    expect(got?.name).toBe('name-mine');
+  });
+
+  // #503: nameClaimer compares the raw localName in its own matches(), as 19
+  // adapters do, so the picks and the re-checks must all see the stripped name.
+  it('keeps a name-identified pick when the advertised name is padded', () => {
+    const registry = [charClaimer(90, 'aaaa'), nameClaimer(10, 'mine')];
+    const got = resolveAfterDiscovery(
+      { localName: 'mine' + ' '.repeat(15), serviceUuids: [] },
       { characteristicUuids: ['aaaa'] },
       registry,
     );

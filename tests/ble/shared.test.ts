@@ -912,6 +912,39 @@ describe('waitForRawReading() — raw capture mode', () => {
     expect(result.history).toBeUndefined();
   });
 
+  // #511: a scale that replays its memory before the live weigh-in. Capture
+  // mode skips the hold, so the disconnect resolved with the newest stored
+  // record and the live reading was lost.
+  it('resolves with the live reading on disconnect, the stored records as history', async () => {
+    process.env.BLE_RAW_CAPTURE = '1';
+    const notifyChar = createMockChar();
+    const writeChar = createMockChar();
+    const device = createMockDevice();
+    const { charMap } = createCharMap([
+      [NOTIFY_UUID, notifyChar],
+      [WRITE_UUID, writeChar],
+    ]);
+    const stored = { weight: 74, impedance: 0, timestamp: new Date(Date.now() - 3600_000) };
+    const adapter = createLegacyAdapter({
+      parseNotification: vi
+        .fn()
+        .mockReturnValueOnce(stored)
+        .mockReturnValueOnce({ weight: 75, impedance: 0 }),
+      isComplete: vi.fn((reading: ScaleReading) => reading.weight > 0),
+    });
+
+    const promise = waitForRawReading(req(charMap, device, adapter, PROFILE, ''));
+    await vi.waitFor(() => expect(notifyChar.subscribeCalled).toBe(true));
+
+    notifyChar.triggerData(Buffer.from([0x01]));
+    notifyChar.triggerData(Buffer.from([0x02]));
+    device.triggerDisconnect();
+
+    const result = await promise;
+    expect(result.reading).toEqual({ weight: 75, impedance: 0 });
+    expect(result.history).toEqual([stored]);
+  });
+
   it('resolves with the last reading when the hold window elapses (no disconnect)', async () => {
     vi.useFakeTimers();
     try {

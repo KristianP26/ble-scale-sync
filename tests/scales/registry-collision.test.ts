@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { adapters } from '../../src/scales/index.js';
 import { resolveAdapter, resolveAfterDiscovery } from '../../src/scales/resolve.js';
 import type { GattDiscovery } from '../../src/scales/resolve.js';
-import { matchesDescriptor } from '../../src/scales/match-descriptor.js';
+import { descriptorNameTokens, matchesDescriptor } from '../../src/scales/match-descriptor.js';
 import { uuid16 } from '../../src/scales/body-comp-helpers.js';
 import type { BleDeviceInfo } from '../../src/interfaces/scale-adapter.js';
 import { M1690_ADVERT, M1690_FE95_PID_018E } from '../helpers/yunmai-m1690.js';
@@ -14,6 +14,7 @@ import {
   AR003_SERVICES,
   ar003CharsWithout,
 } from '../helpers/renpho-a-r003.js';
+import { CH100_PADDED_NAME } from '../helpers/huawei-ch100.js';
 import { ADVERT_501 } from '../fixtures/qn/cs10g-501.js';
 import { selectSessionAdapter } from '../../src/ble/session/runner.js';
 
@@ -241,6 +242,60 @@ describe('registry collision guard (#182)', () => {
       ).toBe(expected);
     },
   );
+
+  // #503: names are compared without trailing padding, lowercase, so a token
+  // with an edge space or an upper-case letter could never match.
+  it('every name token is lowercase, trimmed and free of NUL', () => {
+    for (const a of adapters) {
+      if (!a.match) continue;
+      for (const t of descriptorNameTokens(a.match)) {
+        expect(t === t.trim().toLowerCase() && !t.includes('\0'), `${a.name}: "${t}"`).toBe(true);
+      }
+    }
+  });
+
+  // #503: a name field padded to a fixed width must pick the adapter the clean
+  // name picks. Leading padding and a name that is only padding are NOT
+  // stripped: they resolve as the unchanged advertisement does.
+  describe('padded names', () => {
+    const named = Object.entries(FIXTURES).filter(([, info]) => info.localName.trim() !== '');
+    const byPriority = [...adapters].sort(
+      (a, b) => (b.match?.priority ?? 0) - (a.match?.priority ?? 0),
+    );
+    const viaMatches = (info: BleDeviceInfo): string | undefined =>
+      byPriority.find((a) => a.matches(info))?.name;
+
+    it('has named fixtures to pad', () => {
+      expect(named.length).toBeGreaterThan(30);
+    });
+
+    it.each([
+      ['15 spaces', (n: string) => n + ' '.repeat(15)],
+      ['NUL', (n: string) => n + '\0\0\0\0'],
+      ['mixed whitespace', (n: string) => n + ' \0\t\r\n'],
+    ])('a name padded with %s resolves as the clean name does', (_label, pad) => {
+      for (const [fixture, info] of named) {
+        const padded = { ...info, localName: pad(info.localName) };
+        expect(resolveAdapter(padded, adapters)?.name, `padded fixture "${fixture}"`).toBe(
+          resolveAdapter(info, adapters)?.name,
+        );
+      }
+    });
+
+    it('the padded CH100 of #503 resolves to Huawei CH100/AH100', () => {
+      const info = { localName: CH100_PADDED_NAME, serviceUuids: ['181b'] };
+      expect(resolveAdapter(info, adapters)?.name).toBe('Huawei CH100/AH100');
+    });
+
+    it('the resolver gives leading-padded and padding-only names the same pick as matches() on the raw name', () => {
+      for (const [fixture, info] of named) {
+        for (const localName of [' ' + info.localName, ' '.repeat(20)]) {
+          const raw = { ...info, localName };
+          expect(resolveAdapter(raw, adapters)?.name, `raw "${fixture}"`).toBe(viaMatches(raw));
+        }
+      }
+    });
+  });
 
   // #408: claimed by its exact name only, so it must not reach any other
   // adapter's fixture, including those of adapters that outrank it.

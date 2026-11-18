@@ -470,7 +470,8 @@ const AppConfigObjectSchema = z.object({
   }),
   unknown_user: z.enum(['nearest', 'log', 'ignore']).default('nearest'),
   /**
-   * What to do with a reading that no configured user's `weight_range` covers.
+   * What to do with a reading outside the `weight_range` of the user it goes
+   * to, whether the weight or the scale's user slot picked that user.
    *
    * `warn` (default) is the behaviour every install has had: log it and export
    * it anyway. `skip` stops before the exporters and before the

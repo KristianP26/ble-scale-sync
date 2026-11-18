@@ -35,6 +35,7 @@ import {
   ES30M_MIN_FRAME_LEN,
   IMPEDANCE_GRACE_MS,
   INFO_DIVISOR_BIT,
+  INFO_FEATURES_OFFSET,
   LAST_KNOWN_WEIGHT_TOLERANCE,
   LEGACY_PROTO_TYPE,
   LIVE_MATCH_WEIGHT_KG,
@@ -78,17 +79,20 @@ import { parseQnBroadcast } from './broadcast.js';
 import {
   classifyInfoFrame,
   hex,
+  infoDynamicPackage,
   storedSlotLabel,
   type QnDialectHandler,
   type QnDialectKind,
 } from './dialect.js';
 import { classic } from './dialects/classic.js';
-import { ext20 } from './dialects/ext20.js';
+import { ext20, logAssemblyAtSessionEnd } from './dialects/ext20.js';
 import { unknown } from './dialects/unknown.js';
 import * as va18 from './dialects/va18.js';
 import * as va19 from './dialects/va19.js';
+import { scaleCompositionPayload, type ScaleCompositionPin } from './own-composition.js';
 import { QnLedger } from './stored-ledger.js';
 import { QnSession } from './session.js';
+import { UnitMap } from '../device-state.js';
 
 const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
@@ -117,6 +121,7 @@ function qnOptions(o: QnRuntimeOptions) {
     weightAck: o.qnWeightAck ?? null,
     userKey: o.qnUserKey ?? null,
     userSlot: o.qnUserSlot ?? null,
+    algorithm: o.qnAlgorithm ?? null,
     a4Prelude: o.qnA4Prelude === true,
     configLong: o.qnConfigLong === true,
     timeSyncLong: o.qnTimeSyncLong === true,
@@ -146,6 +151,15 @@ export class QnScaleAdapter
 
   /** Stored connection context for notification-driven state machine writes. */
   private ctx: ConnectionContext | null = null;
+
+  /**
+   * The profile of the user this connection is for, null before a connection.
+   * The 20-byte dialect judges the scale's own composition with it in the log
+   * only (ext20.ts, D103).
+   */
+  get connectionProfile(): UserProfile | null {
+    return this.ctx?.profile ?? null;
+  }
 
   /**
    * Bumped on every session boundary (onSessionStart and onSessionEnd). The
@@ -253,26 +267,47 @@ export class QnScaleAdapter
   /** What a later session's stored records and result blocks are compared with. */
   readonly ledger = new QnLedger();
 
+  /**
+   * The protocol byte each classic scale's last valid 0x12 gave, by address (#501).
+   *
+   * Some classic units send the 0x12 on the first connection and answer later
+   * connections of the same run with idle 0x14 frames, so a session without
+   * one has to open on a byte it did not hear this time. The byte of the same
+   * scale's last 0x12 is the best one there is: the only input is a frame the
+   * scale sent, and a session that hears nothing never writes here, so silence
+   * cannot move it (unlike a guess flipped on a timeout). Only the classic
+   * dialect writes it: the other dialects have no such log, so they keep
+   * their own defaults. Kept for the process, not across restarts, and not per
+   * session: it has to outlive onSessionStart.
+   */
+  private readonly protoByUnit = new UnitMap<number>();
+
   /** This session's state; replaced whole in onSessionStart. The dialect handlers use it too. */
   s = new QnSession();
 
   /**
-   * The hold of the 19- or the 18-byte dialect while one is armed (see their
-   * hold()); undefined otherwise, so nothing else this adapter returns is held.
+   * The hold of the 19-byte, the 18-byte or the 20-byte dialect while one is
+   * armed (see their hold()); undefined otherwise, so nothing else this adapter
+   * returns is held.
    */
   get completionHoldMs(): number | undefined {
-    return (va19.dialect.hold(this.s) ?? va18.dialect.hold(this.s))?.ms;
+    return (va19.dialect.hold(this.s) ?? va18.dialect.hold(this.s) ?? ext20.hold(this.s))?.ms;
   }
 
   /**
-   * Only the 19-byte stable weight, fresh 19-byte stored weigh-ins and the
-   * 18-byte weigh-in held for the stored ones are provisional.
+   * Only the 19-byte stable weight, fresh 19-byte stored weigh-ins, the
+   * 18-byte weigh-in held for the stored ones and the weight of a split 20-byte
+   * 0xB1 waiting for its other parts are provisional.
    */
   isFinal(reading: ScaleReading): boolean {
     return !this.provisionalReadings.has(reading);
   }
 
-  /** Whether either of those holds still has frames of its weigh-in to come. */
+  /**
+   * Whether either of the 19- or 18-byte holds still has frames of its weigh-in
+   * to come. The 20-byte hold never does: its few parts arrive back to back, and
+   * extending a wait for lost ones would only delay the weight (D103).
+   */
   isCompositionPending(): boolean {
     return (
       va19.dialect.hold(this.s)?.pending === true || va18.dialect.hold(this.s)?.pending === true
@@ -314,6 +349,17 @@ export class QnScaleAdapter
             'user slot 1 (#501).',
         );
       }
+    }
+    if (
+      this.opts.algorithm !== null &&
+      this.opts.userKey === null &&
+      this.opts.weightAck !== true
+    ) {
+      bleLog.warn(
+        `QN: ble.qn_algorithm is set (${this.opts.algorithm}) but never sent: only the ` +
+          'vendor-app profile frame carries it, which needs ble.qn_user_key (on the 19-byte ' +
+          'dialect ble.qn_weight_ack: true also sends it) (#331).',
+      );
     }
     this.userWeights = opts.userWeights ?? [];
   }
@@ -394,14 +440,25 @@ export class QnScaleAdapter
    * `this.ctx` stays in onConnected: it is the one thing that does not exist
    * until then.
    */
-  onSessionStart(): void {
+  onSessionStart(deviceAddress?: string): void {
     this.sessionGeneration += 1;
     this.s.dispose();
+    // Transports already hand over an uppercase address without separators;
+    // the replay harness's fake one has colons, so the key is normalised here
+    // rather than trusted. No address (a caller that predates the argument)
+    // means no unit: nothing is read or remembered for it.
+    const unit = deviceAddress?.replace(/[:-]/g, '').toUpperCase() || null;
     this.s = new QnSession(
-      this.opts.protocolByte ?? 0x00,
+      this.opts.protocolByte ?? (unit !== null ? this.protoByUnit.get(unit) : undefined) ?? 0x00,
       this.ledger.mark,
       Math.floor(Date.now() / 1000) - SCALE_EPOCH_OFFSET,
+      unit,
     );
+  }
+
+  /** The byte this scale's last valid 0x12 gave in this run, if any. */
+  private rememberedProto(): number | undefined {
+    return this.s.unit !== null ? this.protoByUnit.get(this.s.unit) : undefined;
   }
 
   /**
@@ -452,6 +509,9 @@ export class QnScaleAdapter
       // override is unset: seenProtocolType can be seeded by a 0x12 that races
       // the AE02 subscribe on native BLE, and this fixed frame must not depend on
       // that timing. The override, when set, is applied before onConnected runs.
+      // It deliberately ignores the remembered byte too (protoByUnit): that
+      // is not hardware-checked on this path, and changing it needs a test on
+      // the reporter's scale.
       const config = buildConfig(this.opts.protocolByte ?? 0x00, this.unitFlag());
       const unlocks = [[0x13, 0x09, 0x00, 0x01, 0x01, 0x02], config];
       for (const cmd of unlocks) {
@@ -480,10 +540,17 @@ export class QnScaleAdapter
     const gen = this.sessionGeneration;
 
     if (!this.s.configSent) {
-      this.s.seenProtocolType = this.opts.protocolByte ?? 0xff;
+      const remembered = this.rememberedProto();
+      this.s.seenProtocolType = this.opts.protocolByte ?? remembered ?? 0xff;
+      const origin =
+        this.opts.protocolByte !== null
+          ? '(ble.qn_protocol_byte)'
+          : remembered !== undefined
+            ? "(from this scale's last scale-info frame)"
+            : '(no byte remembered for this scale)';
       bleLog.debug(
         `QN: fallback: no 0x12 received, running handshake with ` +
-          `proto=0x${this.s.seenProtocolType.toString(16).padStart(2, '0')}`,
+          `proto=0x${this.s.seenProtocolType.toString(16).padStart(2, '0')} ${origin}`,
       );
       // handleScaleInfo sends AE01 init + 0x13 config
       await this.handleScaleInfo();
@@ -732,8 +799,8 @@ export class QnScaleAdapter
     }
 
     // 0xA1, 0xA3: acknowledgment frames, nothing to answer. The answer to the
-    // profile frame, `a1 06 02 <slot> <1 accepted | 0>`, is kept: the scale's
-    // own composition is only for a profile it accepted (#331).
+    // profile frame, `a1 <len> 02 <slot> <1 accepted | 0> .. <cs>`, is kept:
+    // the scale's own composition is only for a profile it accepted (#331).
     if (opcode === 0xa1 || opcode === 0xa3) {
       this.onProfileAnswer(data);
       return null;
@@ -749,6 +816,7 @@ export class QnScaleAdapter
   /** A 0x12 scale-info frame: the dialect, protocol byte and divisor, then the 0x13 config. */
   private onScaleInfo(data: Buffer): void {
     this.s.kind = classifyInfoFrame(data);
+    this.s.dynamicPackage = infoDynamicPackage(data);
     if (this.s.kind !== 'classic') {
       // Only the 0x12 tells the dialect, so the line waits for it.
       va18.logNoAdvertisementOnce(this);
@@ -775,9 +843,18 @@ export class QnScaleAdapter
     //
     // The choice cannot be corrected at runtime: a scale on the wrong byte
     // acknowledges everything and stays silent, which is exactly what a
-    // scale nobody is standing on does.
+    // scale nobody is standing on does. A classic scale's own byte is kept per
+    // address, so a later session of the same run that gets no 0x12 opens on it
+    // instead of on a guess (protoByUnit, #501).
     const byLength = this.s.kind === 'va18' ? LEGACY_PROTO_TYPE : data[2];
     this.s.seenProtocolType = this.opts.protocolByte ?? byLength;
+    // Remember the byte this 0x12 carried, not what the option forced. Classic
+    // only, so that is data[2]; the other dialects keep their defaults. Only
+    // a frame that closes under the checksum counts: a corrupted [2] would
+    // otherwise open every later session on a wrong byte.
+    if (this.s.kind === 'classic' && this.s.unit !== null && hasValidSumChecksum(data)) {
+      this.protoByUnit.put(this.s.unit, data[2]);
+    }
     // Bit 0 on every dialect, as the vendor's published SDK reads it.
     // openScale's whole-byte `[10] === 1` read the 17-byte classic frames
     // ([10] 0x03) as /10, and the long frame was set to /10 whatever its
@@ -798,12 +875,27 @@ export class QnScaleAdapter
         `factor=${this.s.weightScaleFactor}, ` +
         `proto=0x${this.s.seenProtocolType.toString(16).padStart(2, '0')}${forcedNote}`,
     );
+    if (this.s.dynamicPackage === false) {
+      const features = data[INFO_FEATURES_OFFSET].toString(16).padStart(2, '0');
+      bleLog.debug(
+        `QN: ${data.length}-byte scale-info frame without the dynamic-package bit ` +
+          `([18] 0x${features}): reading the weigh-in as the 19-byte dialect sends it (#530)`,
+      );
+    }
     void this.handleScaleInfo();
   }
 
-  /** The scale's answer to the profile frame, `a1 06 02 <slot> <1 accepted | 0>`. */
+  /**
+   * The scale's answer to the profile frame, `a1 <len> 02 <slot> <1 accepted |
+   * 0> .. <cs>`, with its own length at [1]. Six bytes on most scales; the
+   * 20-byte CS10E sends seven (`a1 07 02 01 01 07 b3`, #331). The vendor's
+   * published SDK reads only [2..4] of it, so the bytes after [4] are logged
+   * and not read.
+   */
   private onProfileAnswer(data: Buffer): void {
-    if (data[0] !== 0xa1 || data.length !== 6 || data[1] !== 0x06 || data[2] !== 0x02) return;
+    if (data[0] !== 0xa1 || data.length < 6 || data[1] !== data.length || data[2] !== 0x02) {
+      return;
+    }
     if (!hasValidSumChecksum(data)) return;
     this.s.visitReply = { slot: data[3], ok: data[4] === 0x01 };
     this.s.answerVisit();
@@ -814,6 +906,13 @@ export class QnScaleAdapter
       `QN: the scale ${this.s.visitReply.ok ? 'accepted' : 'did not accept'} the profile ` +
         `for user slot ${data[3]} (#331)`,
     );
+    if (data.length > 6) {
+      const extra = data.subarray(5, -1);
+      bleLog.debug(
+        `QN: the answer to the profile frame has ${extra.length} more byte(s), ` +
+          `${hex(extra)}, not decoded (#331)`,
+      );
+    }
     // The vendor's published SDK asks for the stored weigh-ins as soon as
     // the scale accepts the profile, and the Feelfit capture shows it. The
     // handshake's own 0x22 comes about 125 ms later, and in two logs the
@@ -929,12 +1028,13 @@ export class QnScaleAdapter
 
     // The 20-byte live frame every capture of the long dialects shows has its
     // weight as a big-endian u16 /100 at [5..6] (PROTOCOLS.md, QN family). The
-    // 19-byte dialect decodes it in its handler. Elsewhere its [4] 0x11 puts it
-    // in the original layout, which reads 0x0011, and whether the GE frame
-    // shares the Arboleaf status and part bytes is not known, so it is logged
-    // once per session with the weight where the captures put it. On the
-    // extended dialect [2] is the user slot, as on the 19-byte one: the CS10G
-    // streams `10 14 02 ..` for the user its app registered in slot 2 (#501).
+    // 19-byte dialect and the CS10K (#530) decode it in their handler.
+    // Elsewhere its [4] 0x11 puts it in the original layout, which reads
+    // 0x0011, and whether the GE frame shares the Arboleaf status and part
+    // bytes is not known, so it is logged once per session with the weight
+    // where the captures put it. On the extended dialect [2] is the user slot,
+    // as on the 19-byte one: the CS10G streams `10 14 02 ..` for the user its
+    // app registered in slot 2 (#501).
     const twentyByteLive = data.length === 20 && data[1] === 0x14;
     if (twentyByteLive && !this.s.twentyByteFrameLogged) {
       this.s.twentyByteFrameLogged = true;
@@ -1077,7 +1177,8 @@ export class QnScaleAdapter
 
   /**
    * A 0x23 stored measurement record returned after the 0x22 history query,
-   * read in the VA layout on every dialect but the classic and the 19-byte one.
+   * read in the VA layout on every dialect but the classic, the 19-byte one and
+   * the CS10K (#530).
    * V10 Renpho / 18-byte ES-CS20M firmware delivers the weigh-in here, not
    * reliably via live 0x10 frames (#213 / #75). Layout in decodeStoredRecord:
    * R50 and R500 big-endian at [12..13] and [14..15], as the vendor SDK reads
@@ -1156,10 +1257,10 @@ export class QnScaleAdapter
   }
 
   /**
-   * Say why a 0x23 outside the 19-byte dialect is not read (#463). The record
-   * used to vanish without a line, and a frame that arrives after the session
-   * settled is not even in the DEBUG log, so nothing showed that a weigh-in the
-   * scale kept had been handed over at all.
+   * Say why a 0x23 outside the 19-byte dialect and the CS10K (#530) is not
+   * read (#463). The record used to vanish without a line, and a frame that
+   * arrives after the session settled is not even in the DEBUG log, so nothing
+   * showed that a weigh-in the scale kept had been handed over at all.
    *
    * Only the long-frame dialects get the record's values: the VA layout is
    * known there. A session without a 0x12 does not know its dialect, so its
@@ -1370,7 +1471,8 @@ export class QnScaleAdapter
     // them: the 19-byte dialect with `ble.qn_weight_ack` (#331, D033), and the
     // 18-, 19- and 20-byte ones with `ble.qn_user_key`, which also sets the user
     // key at [4..5] (#463, D055, #501). The athlete step in [10] is the Feelfit
-    // app's on the 18-byte dialect only; see VISIT_ALGORITHM.
+    // app's on the 18-byte dialect only; see VISIT_ALGORITHM. `ble.qn_algorithm`
+    // replaces [10] whole, athlete step included (#331).
     let msg2 = withChecksum([
       0xa0, 0x0d, 0x02, 0x01, 0x00, 0x08, 0x00, 0x21, 0x06, 0xb8, 0x04, 0x02,
     ]);
@@ -1380,23 +1482,34 @@ export class QnScaleAdapter
       const athlete =
         this.s.kind === 'va18' && profile.isAthlete && profile.age >= VISIT_ATHLETE_MIN_AGE;
       const slot = this.configuredSlot() ?? 1;
+      const algorithm = this.opts.algorithm;
       msg2 = buildUserProfileFrame(profile.age, profile.height, profile.gender, {
         slot,
         key,
         athlete,
+        ...(algorithm !== null ? { algorithm } : {}),
       });
-      this.s.visitSent = { slot: msg2[3], frame: msg2 };
+      // The flag only when set, so a session without the option pins what it
+      // always has (#331).
+      this.s.visitSent = {
+        slot: msg2[3],
+        frame: msg2,
+        ...(algorithm !== null ? { algorithmFromOption: true as const } : {}),
+      };
       const sent =
         `age ${msg2[7]}, height ${(msg2[8] << 8) | msg2[9]} mm, ` +
         `sex ${msg2[6] === 0x01 ? 'female' : 'male'}`;
+      const algorithmPart = algorithm === null ? '' : `, algorithm ${msg2[10]}`;
       // The slot is named only with ble.qn_user_slot, so a slot-1 line reads
       // as it always has.
       const slotPart = this.configuredSlot() === null ? '' : `user slot ${slot}, `;
       bleLog.debug(
         this.opts.userKey === null
-          ? `QN: A00D profile frame with ${sent} (ble.qn_weight_ack, 19-byte dialect, #331)`
+          ? `QN: A00D profile frame with ${sent}${algorithmPart} (ble.qn_weight_ack, 19-byte ` +
+              'dialect, #331)'
           : `QN: A00D profile frame with key ${key}, ${slotPart}${sent}, athlete ` +
-              `${athlete ? 'yes' : 'no'} (ble.qn_user_key, ${this.dialectBytes()}-byte dialect, #463)`,
+              `${athlete ? 'yes' : 'no'}${algorithmPart} (ble.qn_user_key, ` +
+              `${this.dialectBytes()}-byte dialect, #463)`,
       );
     } else if (!appProfile && this.opts.userKey !== null && !this.wantsAppProfileSequence()) {
       // A 0x12 of 18 bytes or longer that came after the decision has its own
@@ -1404,6 +1517,12 @@ export class QnScaleAdapter
       bleLog.debug(
         "QN: ble.qn_user_key is not used on this dialect, sending openScale's profile frame " +
           '(18-, 19- and 20-byte scale-info frames only, #463)',
+      );
+    }
+    if (!appProfile && this.opts.algorithm !== null) {
+      bleLog.debug(
+        `QN: ble.qn_algorithm ${this.opts.algorithm} is not sent: this session sends ` +
+          "openScale's profile frame, which keeps its own algorithm byte (#331)",
       );
     }
     await this.writeCmd(msg2);
@@ -1522,6 +1641,7 @@ export class QnScaleAdapter
     this.sessionGeneration += 1;
     this.s.dispose();
     va18.logHeldAtSessionEnd(this);
+    logAssemblyAtSessionEnd(this.s);
     this.s.sessionStartedScaleSeconds = null;
     this.ctx = null;
   }
@@ -1606,10 +1726,10 @@ export class QnScaleAdapter
   }
 
   computeMetrics(reading: ScaleReading, profile: UserProfile): BodyComposition {
-    // The 19-byte dialect's own results, when they belong to this user (#331).
-    const pin = reading.scaleComposition as va19.ScaleCompositionPin | undefined;
+    // The 19- and 20-byte dialects' own results, when they belong to this user (#331).
+    const pin = reading.scaleComposition as ScaleCompositionPin | undefined;
     if (pin) {
-      const payload = va19.scaleCompositionPayload(pin, reading, profile);
+      const payload = scaleCompositionPayload(pin, reading, profile);
       if (payload) return payload;
     }
 

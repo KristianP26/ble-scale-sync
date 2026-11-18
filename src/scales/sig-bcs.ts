@@ -195,8 +195,8 @@ export interface SigMeasuredComp {
  *
  * The rules, per frame:
  *
- * - 0x2A9D opens a weigh-in. Its reading carries the weight, the frame's time
- *   and its user slot, and no composition. The session holds it
+ * - 0x2A9D opens a weigh-in. Its reading carries the weight and the frame's
+ *   time, and no composition. The session holds it
  *   (`completionHoldMs`) rather than ending on it, because a 0x2A9C may follow.
  * - 0x2A9C closes the weigh-in the last 0x2A9D opened, unless it is stamped
  *   with a different time. Its reading takes the weight from its own field when
@@ -205,6 +205,13 @@ export interface SigMeasuredComp {
  *   history buffer by the time its 0x2A9C arrives, so a second reading would
  *   export the record twice. Its composition is attached to the buffered
  *   reading instead and the 0x2A9C produces no reading of its own.
+ *
+ * Neither reading carries the frame's User ID as `userIndex`. Both callers
+ * sign in with the fixed consent `02 01 00 00` (user slot 1) whoever is on the
+ * scale, so the slot the frames name is the one this app consented as, not
+ * the person's: forwarding it gave every weigh-in to the user with
+ * `beurer_user_index: 1` (#529). The weigh-ins are matched by weight instead,
+ * the same reason `renpho.ts` drops its fixed index 170.
  */
 export class SigMeasurementPairing {
   /** The reading of the 0x2A9D that no 0x2A9C has closed yet. */
@@ -230,7 +237,6 @@ export class SigMeasurementPairing {
     const reading: ScaleReading = { weight: kg, impedance: 0, scaleComposition: null };
     const ts = trustedScaleTime(m.timestamp);
     if (ts) reading.timestamp = ts;
-    if (m.userIndex !== undefined) reading.userIndex = m.userIndex;
     this.open = reading;
     return reading;
   }
@@ -266,8 +272,6 @@ export class SigMeasurementPairing {
     };
     const time = ts ?? base?.timestamp;
     if (time) reading.timestamp = time;
-    const user = d.userIndex ?? base?.userIndex;
-    if (user !== undefined) reading.userIndex = user;
     return reading;
   }
 

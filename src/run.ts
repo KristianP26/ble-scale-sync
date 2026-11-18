@@ -223,7 +223,9 @@ export async function run(argv: readonly string[]): Promise<void> {
 
   if (process.platform !== 'win32') {
     process.on('SIGHUP', () => {
-      log.info('Received SIGHUP, will reload config before next scan cycle');
+      log.info(
+        'Received SIGHUP, will reload config before the next scan, or after the next weigh-in on a proxy transport',
+      );
       needsReload = true;
     });
   }
@@ -416,7 +418,9 @@ export async function run(argv: readonly string[]): Promise<void> {
     // before any reload could matter). Opt out via runtime.watch_config: false.
     if (ctx.configSource === 'yaml' && ctx.configPath && initialResolved.watchConfig) {
       configWatcher = startConfigWatcher(ctx.configPath, () => {
-        log.info('config.yaml change detected, will reload before next scan cycle');
+        log.info(
+          'config.yaml change detected, will reload before the next scan, or after the next weigh-in on a proxy transport',
+        );
         needsReload = true;
       });
     }

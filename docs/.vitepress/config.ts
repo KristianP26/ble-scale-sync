@@ -56,27 +56,27 @@ export default defineConfig({
 
     sidebar: [
       {
-        text: 'Get Started',
+        text: 'Get started',
         items: [
-          { text: 'Getting Started', link: '/guide/getting-started' },
-          { text: 'Home Assistant Add-on', link: '/guide/home-assistant-addon' },
+          { text: 'Getting started', link: '/guide/getting-started' },
+          { text: 'Home Assistant add-on', link: '/guide/home-assistant-addon' },
         ],
       },
       {
         text: 'Scales',
         items: [
-          { text: 'Supported Scales', link: '/guide/supported-scales' },
-          { text: 'QN Scales', link: '/guide/scales/qn' },
-          { text: 'Renpho Scales', link: '/guide/scales/renpho' },
+          { text: 'Supported scales', link: '/guide/supported-scales' },
+          { text: 'QN scales', link: '/guide/scales/qn' },
+          { text: 'Renpho scales', link: '/guide/scales/renpho' },
           { text: 'Beurer and Sanitas', link: '/guide/scales/beurer' },
         ],
       },
       {
         text: 'Bluetooth',
         items: [
-          { text: 'Bluetooth Transports', link: '/guide/transports' },
-          { text: 'ESP32 BLE Proxy', link: '/guide/esp32-proxy' },
-          { text: 'ESPHome Bluetooth Proxy', link: '/guide/esphome-proxy' },
+          { text: 'Bluetooth transports', link: '/guide/transports' },
+          { text: 'ESP32 BLE proxy', link: '/guide/esp32-proxy' },
+          { text: 'ESPHome Bluetooth proxy', link: '/guide/esphome-proxy' },
           { text: 'Home Assistant Bluetooth', link: '/guide/ha-bluetooth' },
         ],
       },
@@ -85,9 +85,9 @@ export default defineConfig({
         items: [
           { text: 'Configuration', link: '/guide/configuration' },
           { text: 'Exporters', link: '/exporters' },
-          { text: 'Multi-User', link: '/multi-user' },
-          { text: 'Body Composition', link: '/body-composition' },
-          { text: 'Auto Updates', link: '/guide/auto-update' },
+          { text: 'Multi-user', link: '/multi-user' },
+          { text: 'Body composition', link: '/body-composition' },
+          { text: 'Auto updates', link: '/guide/auto-update' },
         ],
       },
       {
@@ -112,7 +112,8 @@ export default defineConfig({
     },
 
     footer: {
-      message: 'Released under the GPL-3.0 License.',
+      message:
+        'Released under the GPL-3.0 License.<br /><span class="made-in-eu"><img src="/img/eu-flag.svg" width="21" height="14" alt="" />Software made in Europe</span>',
       copyright: 'Copyright &copy; 2026 <a href="https://partl.dev">Kristi\u00e1n Partl</a>',
     },
   },

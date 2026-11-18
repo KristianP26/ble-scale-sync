@@ -30,6 +30,7 @@ import {
   AR003_MSD,
   AR003_SERVICES,
 } from '../../helpers/renpho-a-r003.js';
+import { CH100_CHARS, CH100_PADDED_NAME, CH100_SERVICES } from '../../helpers/huawei-ch100.js';
 import type { ScaleAdapter } from '../../../src/interfaces/scale-adapter.js';
 
 /**
@@ -247,6 +248,38 @@ describe('resolveAfterConnect: nameless Renpho A-R003 (#507)', () => {
 
     expect(adapter.name).toBe('Renpho ES-WBE28');
     expect(gatt.init).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * #503: BlueZ handed a CH100 its name padded with spaces. The session
+ * resolver ran on the raw name, no exact claim hit, and the device went to
+ * Standard GATT by its 0x181B service.
+ */
+describe('resolveAfterConnect: CH100 with a padded name (#503)', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  const gattWithCh100Services = () => ({
+    init: vi.fn().mockResolvedValue(undefined),
+    services: vi.fn().mockResolvedValue(CH100_SERVICES),
+    getPrimaryService: vi.fn(),
+  });
+
+  it.each([
+    ['padded with spaces', CH100_PADDED_NAME],
+    ['clean', 'CH100'],
+  ])('resolves a name %s to Huawei CH100/AH100', async (_label, name) => {
+    h.buildCharMap.mockResolvedValue(new Map(CH100_CHARS.map((u) => [u, {} as never])));
+
+    const adapter = await resolveAfterConnect(
+      gattWithCh100Services() as never,
+      registry,
+      name,
+      '',
+      {},
+    );
+
+    expect(adapter.name).toBe('Huawei CH100/AH100');
   });
 });
 

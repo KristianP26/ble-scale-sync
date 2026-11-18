@@ -1,12 +1,17 @@
 {
   "settled": {
     "by": "error",
-    "atMs": 5000,
+    "atMs": 2000,
     "error": "Scale disconnected before reading completed"
   },
   "reading": null,
   "history": [],
   "subscribes": [
+    {
+      "seq": 0,
+      "atMs": 0,
+      "uuid": "8a22"
+    },
     {
       "seq": 1,
       "atMs": 0,
@@ -15,10 +20,10 @@
   ],
   "writes": [
     {
-      "seq": 0,
+      "seq": 2,
       "atMs": 0,
       "uuid": "8a81",
-      "hex": "0200b95569",
+      "hex": "02007e181e",
       "withResponse": true
     }
   ],

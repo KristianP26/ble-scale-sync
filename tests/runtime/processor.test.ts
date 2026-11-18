@@ -1408,3 +1408,128 @@ describe('failed exports are queued for a later cycle (#412)', () => {
     expect(context?.historical).toBeUndefined();
   });
 });
+
+// ─── Live attribution by the frame's scale user slot ────────────────────────
+
+describe('processReading: live attribution by scale user slot', () => {
+  // Bob's range covers 60 kg. Alice's does not. A weight-only matcher therefore
+  // hands a 60 kg frame to Bob, whichever slot it names.
+  const alice: UserConfig = {
+    ...dad,
+    name: 'Alice',
+    slug: 'alice',
+    beurer_user_index: 1,
+    weight_range: { min: 75, max: 95 },
+    last_known_weight: null,
+  };
+  const bob: UserConfig = {
+    ...mom,
+    name: 'Bob',
+    slug: 'bob',
+    beurer_user_index: 2,
+    weight_range: { min: 50, max: 70 },
+    last_known_weight: null,
+  };
+
+  const warned = (): string[] => warnSpy.mock.calls.map((c) => String(c[0]));
+  const logged = (): string[] => logSpy.mock.calls.map((c) => String(c[0]));
+
+  it('attributes a live frame to the user whose slot it names, even if weight says otherwise', async () => {
+    const ctx = makeCtx([alice, bob]);
+    const getter = vi.fn(() => [fakeExporter()]);
+    await processReading(ctx, rawReading({ weight: 60, impedance: 500, userIndex: 1 }), {
+      getExportersForUser: getter,
+    });
+    expect(getter).toHaveBeenCalledWith('alice');
+    expect(getter).not.toHaveBeenCalledWith('bob');
+    expect(logged().some((l) => l.includes('[Alice] Matched (tier: slot)'))).toBe(true);
+    // The slot owner's range still applies: the default out_of_range: warn
+    // exports the reading, but says it is outside Alice's range.
+    expect(
+      warned().some((l) =>
+        l.includes("[Alice] 60.00 kg is outside Alice's range [75-95] kg. Exporting it anyway"),
+      ),
+    ).toBe(true);
+  });
+
+  it('drops a weigh-in its slot assigns to a user whose range rejects it (out_of_range: skip)', async () => {
+    // Bob's range covers 60 kg, so a skip that only looked for SOME user in
+    // range would let the reading through to him.
+    const display = fakeDisplay();
+    const ctx = makeCtx([alice, bob], {
+      outOfRange: 'skip',
+      configSource: 'yaml',
+      configPath: '/tmp/config.yaml',
+      display,
+    });
+    const getter = vi.fn(() => [fakeExporter()]);
+    const ok = await processReading(ctx, rawReading({ weight: 60, impedance: 500, userIndex: 1 }), {
+      getExportersForUser: getter,
+    });
+
+    expect(ok).toBe(true);
+    expect(getter).not.toHaveBeenCalled();
+    expect(dispatchExports).not.toHaveBeenCalled();
+    expect(updateLastKnownWeight).not.toHaveBeenCalled();
+    expect(display.beep).toHaveBeenCalledWith(600, 150, 3);
+    expect(
+      warned().some((l) =>
+        l.includes(
+          "[Alice] Skipping 60.00 kg: outside Alice's range [75-95] kg (out_of_range: skip)",
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  // unknown_user only applies to the weight matcher: 120 kg fits nobody's range
+  // and nobody has a last_known_weight, so weight alone would skip it.
+  it('gives the slot owner a weigh-in outside every range (unknown_user: ignore)', async () => {
+    const ctx = makeCtx([alice, bob]);
+    ctx.config.unknown_user = 'ignore';
+    const getter = vi.fn(() => [fakeExporter()]);
+    await processReading(ctx, rawReading({ weight: 120, impedance: 500, userIndex: 2 }), {
+      getExportersForUser: getter,
+    });
+    expect(getter).toHaveBeenCalledWith('bob');
+    expect(getter).not.toHaveBeenCalledWith('alice');
+    expect(logged().some((l) => l.includes('[Bob] Matched (tier: slot)'))).toBe(true);
+  });
+
+  it('falls back to weight when the frame names no slot', async () => {
+    const ctx = makeCtx([alice, bob]);
+    const getter = vi.fn(() => [fakeExporter()]);
+    await processReading(ctx, rawReading({ weight: 60, impedance: 500 }), {
+      getExportersForUser: getter,
+    });
+    expect(getter).toHaveBeenCalledWith('bob');
+  });
+
+  // Two users with one beurer_user_index is a config error. A stored record of
+  // that slot is dropped; a live weigh-in still goes by weight, with a warning.
+  it('falls back to weight, with a warning, when two users claim the named slot', async () => {
+    const ctx = makeCtx([alice, { ...bob, beurer_user_index: 1 }]);
+    const getter = vi.fn(() => [fakeExporter()]);
+    await processReading(ctx, rawReading({ weight: 60, impedance: 500, userIndex: 1 }), {
+      getExportersForUser: getter,
+    });
+    expect(getter).toHaveBeenCalledWith('bob');
+    expect(getter).not.toHaveBeenCalledWith('alice');
+    expect(
+      warned().some((l) =>
+        l.includes(
+          'Matching the weigh-in of scale user 1 by its weight: Alice and Bob all claim ' +
+            'that slot (beurer_user_index).',
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  it('falls back to weight when no user claims the named slot', async () => {
+    const ctx = makeCtx([alice, bob]);
+    const getter = vi.fn(() => [fakeExporter()]);
+    await processReading(ctx, rawReading({ weight: 60, impedance: 500, userIndex: 9 }), {
+      getExportersForUser: getter,
+    });
+    expect(getter).toHaveBeenCalledWith('bob');
+  });
+});

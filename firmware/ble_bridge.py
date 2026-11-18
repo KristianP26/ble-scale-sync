@@ -9,6 +9,7 @@ import asyncio
 import bluetooth
 import board
 import time
+from collections import deque
 
 _ble = bluetooth.BLE()
 
@@ -30,6 +31,15 @@ CRASH_FLOOR_FREE = 2048
 # CONNECT_MIN_ATTEMPT_MS left is not started at all.
 CONNECT_DISCOVERY_RESERVE_MS = 2000
 CONNECT_MIN_ATTEMPT_MS = 1000
+
+# Notification FIFO per characteristic (#501). A scale may send a result as
+# several notifications in one burst (Arboleaf CS10G: three), 16 is five times
+# that. An entry costs about 64 B for a 45 B part (about 144 B for a 119 B
+# result), so a full queue holds 1 to 2.3 KB. A full queue drops its oldest
+# entry, the newest ones (the result at the end of a weigh-in) matter more.
+NOTIFY_QUEUE_LEN = 16
+# Idle window of the notify loop before it re-arms its wait (#248).
+NOTIFY_IDLE_MS = 10000
 
 
 # ESP-IDF MALLOC_CAP_INTERNAL (components/heap/include/esp_heap_caps.h). The
@@ -293,11 +303,39 @@ def _addr_type_probe_order(addr_type):
     return (primary, primary ^ 1)
 
 
+def _install_notify_queue(char, prefer_indicate, maxlen=NOTIFY_QUEUE_LEN):
+    """Route the stream start_notify() reads into a FIFO of maxlen entries (#501).
+
+    aioble 0.6.2 keeps one unread notification per characteristic
+    (ClientCharacteristic: deque((), 1)), so one that arrives before the loop
+    took the previous one replaces it. This hook replaces aioble's
+    _on_notify_indicate on this instance. It runs inside the BLE event
+    handler, where an uncaught exception disables the whole BLE IRQ handler,
+    so it only appends and sets the flag. A full queue drops its oldest
+    entry; the loop reports the count.
+    """
+    event = char._indicate_event if prefer_indicate else char._notify_event
+    queue = deque((), maxlen)
+    dropped = [0]
+
+    def _on_notify_indicate(_aioble_queue, irq_event, data):
+        if irq_event is not event:
+            return  # the stream of a notify+indicate char that is never read (#248)
+        if len(queue) >= maxlen:
+            dropped[0] += 1  # this append pushes out the oldest entry
+        queue.append(data)
+        event.set()
+
+    char._on_notify_indicate = _on_notify_indicate
+    return queue, event, dropped
+
+
 class BleBridge:
     def __init__(self):
         self._conn = None
         self._chars = {}  # uuid_str -> characteristic
         self._notify_tasks = []
+        self._forwarding = {}  # uuid_str -> characteristic with a running reader
         self._on_disconnect = None
         self._disconnect_fired = False
         # Streaming scan state
@@ -723,8 +761,8 @@ class BleBridge:
 
         This also writes the CCCD (Client Characteristic Configuration
         Descriptor) so the peripheral actually sends notifications. Without this
-        step aioble's char.notified() just waits forever on an empty queue and
-        times out with no data (#231)."""
+        step the queue just stays empty and the read times out with no data
+        (#231). Every notification of a burst is forwarded, in order (#501)."""
         char = self._chars.get(uuid_str)
         if not char:
             return
@@ -732,13 +770,33 @@ class BleBridge:
         can_notify = bool(char.properties & bluetooth.FLAG_NOTIFY)
         can_indicate = bool(char.properties & bluetooth.FLAG_INDICATE)
         if not can_notify and not can_indicate:
-            # Nothing to consume: no CCCD to write and notified()/indicated()
-            # would both raise ValueError("Unsupported"). Skip cleanly.
+            # Nothing to consume: no CCCD to write and no notify or indicate
+            # stream to hook (the event attributes do not exist). Skip cleanly.
             print(f"Subscribe: {uuid_str} supports neither notify nor indicate, skipping")
             return
 
-        # Enable notify/indicate on the peripheral. aioble's notified() only
-        # consumes events; it does not turn on the CCCD bit itself.
+        # A second subscribe for the same characteristic (the host may send it
+        # again) rewrites the CCCD but must not start a second reader: a
+        # ThreadSafeFlag takes one waiter, and a second hook would replace the first.
+        # Identity, so a characteristic of an earlier connection does not match.
+        if self._forwarding.get(uuid_str) is char:
+            print(f"Subscribe: re-enabling CCCD for {uuid_str}, reader already running")
+            await char.subscribe(notify=can_notify, indicate=can_indicate)
+            return
+
+        # An indicate-only char (Robi S9 FFB3 result) has no notify stream, and
+        # reading it as one killed the read task and left the final A3 frame
+        # undelivered (#248). A char exposing BOTH flags is read from its notify
+        # stream by convention; this assumes such a device streams via notify
+        # rather than indicate, which holds for every registry scale.
+        prefer_indicate = can_indicate and not can_notify
+
+        # The hook goes in before the CCCD write: a scale may send its first
+        # frame right after it (QN kickoff), and it must land in the FIFO.
+        queue, event, dropped = _install_notify_queue(char, prefer_indicate)
+
+        # Enable notify/indicate on the peripheral. The hook only consumes
+        # events; it does not turn on the CCCD bit itself.
         print(f"Subscribe: enabling CCCD for {uuid_str}")
         try:
             await char.subscribe(notify=can_notify, indicate=can_indicate)
@@ -747,39 +805,52 @@ class BleBridge:
             raise
         print(f"Subscribe: CCCD enabled for {uuid_str}")
 
-        # Read from the queue the characteristic actually feeds. aioble's
-        # notified() raises ValueError("Unsupported") on an indicate-only char
-        # (Robi S9 FFB3 result), which killed the read task and left the final
-        # A3 frame undelivered (#248). A char exposing BOTH flags is drained via
-        # notified() by convention; this assumes such a device streams via
-        # notify rather than indicate, which holds for every registry scale.
-        prefer_indicate = can_indicate and not can_notify
+        conn = self._conn
+
+        async def _drain():
+            while queue:
+                data = queue.popleft()
+                if data:
+                    await publish_fn(uuid_str, data)
+                n = dropped[0]
+                if n:
+                    dropped[0] -= n
+                    print(f"Notify {uuid_str}: queue full, dropped the {n} oldest notification(s)")
 
         async def _notify_loop():
             try:
-                while self._conn and self._conn.is_connected():
+                while True:
+                    await _drain()
+                    # No await between this check and the wait below: a link that
+                    # went down during the drain is seen here, not after 10 s.
+                    if not (conn and conn.is_connected()):
+                        break
                     try:
-                        if prefer_indicate:
-                            data = await char.indicated(timeout_ms=10000)
-                        else:
-                            data = await char.notified(timeout_ms=10000)
+                        with conn.timeout(NOTIFY_IDLE_MS):
+                            await event.wait()
                     except asyncio.TimeoutError:
-                        # No data in the 10s window but the link is still up
+                        # No data in the idle window but the link is still up
                         # (the final result frame can lag the live stream).
                         # Re-arm instead of killing the reader for good (#248).
                         continue
-                    if data:
-                        await publish_fn(uuid_str, bytes(data))
+                    except Exception:
+                        if conn.is_connected():
+                            raise
+                        break  # aioble DeviceDisconnectedError
+                await _drain()  # what the scale sent before the link went down
             except asyncio.CancelledError:
                 pass
             except Exception as e:
                 print(f"Notify loop error ({uuid_str}): {e}")
+            if self._forwarding.get(uuid_str) is char:
+                del self._forwarding[uuid_str]  # a dead reader must not block a restart
             # Fire disconnect callback once if connection was lost (not cancelled)
             if self._conn and not self._conn.is_connected():
                 self.notify_disconnected()
 
         task = asyncio.create_task(_notify_loop())
         self._notify_tasks.append(task)
+        self._forwarding[uuid_str] = char
 
     async def write(self, uuid_str, data):
         """Write data to a characteristic (auto-detects response mode)."""
@@ -801,6 +872,7 @@ class BleBridge:
         for task in self._notify_tasks:
             task.cancel()
         self._notify_tasks.clear()
+        self._forwarding.clear()
 
         if self._conn:
             try:

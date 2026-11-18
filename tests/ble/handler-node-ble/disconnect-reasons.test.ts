@@ -2,8 +2,13 @@ import { describe, it, expect, vi, beforeEach, afterEach, type MockInstance } fr
 import { EventEmitter } from 'node:events';
 import { createRequire } from 'node:module';
 
-const { noteConnected, noteConnecting, watchDisconnectReasons, _resetDisconnectReasonsForTests } =
-  await import('../../../src/ble/handler-node-ble/disconnect-reasons.js');
+const {
+  noteConnected,
+  noteConnecting,
+  noteDisconnecting,
+  watchDisconnectReasons,
+  _resetDisconnectReasonsForTests,
+} = await import('../../../src/ble/handler-node-ble/disconnect-reasons.js');
 const { bleLog } = await import('../../../src/ble/types.js');
 const { setLogLevel, LogLevel } = await import('../../../src/logger.js');
 
@@ -33,6 +38,27 @@ function signal(fields: Record<string, unknown> = {}) {
   };
 }
 
+/** The device's PropertiesChanged as dbus-next hands it over: variants carry `.value`. */
+function propsChanged(
+  changed: Record<string, unknown> = { Connected: { signature: 'b', value: false } },
+  fields: Record<string, unknown> = {},
+) {
+  return {
+    type: 4,
+    sender: ':1.0',
+    path: PATH,
+    interface: 'org.freedesktop.DBus.Properties',
+    member: 'PropertiesChanged',
+    signature: 'sa{sv}as',
+    body: ['org.bluez.Device1', changed, []],
+    ...fields,
+  };
+}
+
+const NO_REASON =
+  ' s after connect without a Disconnect from this app; this BlueZ does not say why ' +
+  '(Device1.Disconnected needs BlueZ 5.83), btmon shows the reason';
+
 let now = 0;
 let debug: MockInstance<(msg: string) => void>;
 
@@ -51,6 +77,121 @@ afterEach(() => {
   _resetDisconnectReasonsForTests();
   setLogLevel(LogLevel.INFO);
   vi.restoreAllMocks();
+});
+
+describe('a connection BlueZ before 5.83 ends without a reason (#497)', () => {
+  it('B-R1: Connected=false without a signal and without our Disconnect: one line with the time', () => {
+    const bus = fakeBus();
+    watchDisconnectReasons(bus);
+    noteConnected(MAC);
+    now += 5_437;
+    bus.emit('message', propsChanged());
+    expect(reasonLines()).toEqual([`BlueZ: ${MAC} disconnected 5.44${NO_REASON}`]);
+    // One line per connection.
+    bus.emit('message', propsChanged());
+    expect(reasonLines()).toHaveLength(1);
+  });
+
+  it('B-G1: the reason signal comes first (BlueZ 5.83): only the line with the reason', () => {
+    const bus = fakeBus();
+    watchDisconnectReasons(bus);
+    noteConnected(MAC);
+    now += 5_437;
+    bus.emit('message', signal());
+    bus.emit('message', propsChanged());
+    expect(reasonLines()).toEqual([
+      `BlueZ: ${MAC} disconnected 5.44 s after connect: org.bluez.Reason.Remote ` +
+        '(Connection terminated by remote user) - the scale ended it',
+    ]);
+  });
+
+  it('B-G2: after our own Disconnect Connected=false is silent, Disconnected(Local) still reports', () => {
+    const bus = fakeBus();
+    watchDisconnectReasons(bus);
+    noteConnected(MAC);
+    noteDisconnecting(MAC);
+    now += 600;
+    bus.emit('message', propsChanged());
+    expect(reasonLines()).toEqual([]);
+
+    noteConnected(MAC);
+    noteDisconnecting(MAC);
+    bus.emit('message', signal({ body: ['org.bluez.Reason.Local', 'x'] }));
+    bus.emit('message', propsChanged());
+    expect(reasonLines()).toEqual([
+      `BlueZ: ${MAC} disconnected 0.00 s after connect: org.bluez.Reason.Local (x) - ` +
+        'this host ended it (this app, BlueZ or the kernel)',
+    ]);
+  });
+
+  it('noteDisconnecting for an address without a connection does nothing, and a later connect is not ours', () => {
+    const bus = fakeBus();
+    watchDisconnectReasons(bus);
+    noteDisconnecting(MAC);
+    noteConnected(MAC);
+    bus.emit('message', propsChanged());
+    expect(reasonLines()).toHaveLength(1);
+  });
+
+  it('a reconnect clears the ours flag of the connection before', () => {
+    const bus = fakeBus();
+    watchDisconnectReasons(bus);
+    noteConnected(MAC);
+    noteDisconnecting(MAC);
+    noteConnecting(MAC);
+    noteConnected(MAC);
+    now += 1_000;
+    bus.emit('message', propsChanged());
+    expect(reasonLines()).toEqual([`BlueZ: ${MAC} disconnected 1.00${NO_REASON}`]);
+  });
+
+  it.each([
+    ['Connected=true', propsChanged({ Connected: { signature: 'b', value: true } })],
+    [
+      'ServicesResolved alone',
+      propsChanged({ ServicesResolved: { signature: 'b', value: false } }),
+    ],
+    [
+      'another interface',
+      propsChanged(undefined, {
+        body: ['org.bluez.Battery1', { Connected: { value: false } }, []],
+      }),
+    ],
+    ['a characteristic path', propsChanged(undefined, { path: `${PATH}/service0010/char0011` })],
+    ['an adapter path', propsChanged(undefined, { path: '/org/bluez/hci0' })],
+    [
+      'an unknown address',
+      propsChanged(undefined, { path: '/org/bluez/hci0/dev_11_22_33_44_55_66' }),
+    ],
+    ['another member', propsChanged(undefined, { member: 'InterfacesAdded' })],
+    ['another D-Bus interface', propsChanged(undefined, { interface: 'org.bluez.Device1' })],
+    ['a method call', propsChanged(undefined, { type: 1 })],
+    ['no body', propsChanged(undefined, { body: undefined })],
+    ['a body that is not an array', propsChanged(undefined, { body: 'x' })],
+    [
+      'changed properties that are null',
+      propsChanged(undefined, { body: ['org.bluez.Device1', null, []] }),
+    ],
+    ['a Connected that is not a variant', propsChanged({ Connected: false })],
+    ['a Connected variant holding a string', propsChanged({ Connected: { value: 'false' } })],
+  ])('B-G3: ignores %s', (_n, msg) => {
+    const bus = fakeBus();
+    watchDisconnectReasons(bus);
+    noteConnected(MAC);
+    bus.emit('message', msg);
+    expect(reasonLines()).toEqual([]);
+    expect(() => bus.emit('message', msg)).not.toThrow();
+  });
+
+  it('B-G3: a Connected=true does not use up the connection: the later false still reports', () => {
+    const bus = fakeBus();
+    watchDisconnectReasons(bus);
+    noteConnected(MAC);
+    bus.emit('message', propsChanged({ Connected: { signature: 'b', value: true } }));
+    now += 2_000;
+    bus.emit('message', propsChanged());
+    expect(reasonLines()).toEqual([`BlueZ: ${MAC} disconnected 2.00${NO_REASON}`]);
+  });
 });
 
 describe('watchDisconnectReasons (#434)', () => {

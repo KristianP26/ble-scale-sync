@@ -1,9 +1,13 @@
 import type { BleDeviceInfo } from '../interfaces/scale-adapter.js';
 import { SVC_FE95, miBeaconProductId, normUuid } from './mibeacon.js';
 
-/** Name predicates an adapter claims. All tokens MUST be lowercase. */
+/**
+ * Name predicates an adapter claims. All tokens MUST be lowercase with no
+ * leading or trailing whitespace: the device name is compared without its
+ * trailing padding, so a token that ends in whitespace never matches.
+ */
 export interface NameClaim {
-  /** Full-name equality (device name === token). */
+  /** Full-name equality (device name without trailing padding === token). */
   exact?: string[];
   /** Substring (device name includes token). */
   includes?: string[];
@@ -85,9 +89,38 @@ export function uuidClaimHits(claims: string[], deviceUuids: string[] | undefine
   });
 }
 
+/**
+ * The advertised name without trailing padding, for matching only.
+ *
+ * A CH100 was logged as `CH100` plus 15 spaces (20 characters, #503) and fell
+ * through to Standard GATT, because every exact name claim compares the whole
+ * string. BlueZ keeps the spaces of a UTF-8 name (src/eir.c, profiles/gap/gas.c
+ * in 5.82), so the padding of a fixed-width name field can reach us verbatim;
+ * that is how the CH100 name arrived. NUL is cut by BlueZ itself, other stacks
+ * may pass it on.
+ *
+ * Strips trailing NUL and whatever `String.prototype.trim()` strips. The start
+ * and the inside stay: nothing shows a scale padded on the left, and Medisana
+ * reads the raw name for its clock epoch. A name that is padding only comes
+ * back unchanged, so adapters see what they saw before this fix. Index loop,
+ * not `/\s+$/`: that backtracks quadratically on a long run of spaces in the
+ * middle and the name is attacker-controlled input. Returns the same string
+ * when nothing was stripped.
+ */
+export function normalizeLocalName(localName: string): string {
+  let end = localName.length;
+  while (end > 0) {
+    const c = localName[end - 1];
+    if (c !== '\0' && c.trim() !== '') break;
+    end--;
+  }
+  return end === 0 || end === localName.length ? localName : localName.slice(0, end);
+}
+
 /** True if the device's advertised name hits one of the descriptor's name claims. */
 export function nameClaimHits(d: MatchDescriptor, localName: string | undefined): boolean {
-  const name = (localName || '').toLowerCase();
+  // Resolvers hand over a normalized name already; direct callers may not.
+  const name = normalizeLocalName(localName || '').toLowerCase();
   if (!name || !d.names) return false;
   if (d.names.exact?.includes(name)) return true;
   if (d.names.includes?.some((n) => name.includes(n))) return true;

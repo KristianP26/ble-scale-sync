@@ -9,7 +9,12 @@ import type { QnDialectKind } from './dialect.js';
  */
 export class QnSession {
   constructor(
-    /** Protocol type byte captured from the scale's 0x12 frame, echoed in config commands. */
+    /**
+     * Protocol type byte echoed in config commands: from this session's 0x12,
+     * else, on the classic dialect, the one the same scale's last 0x12 gave
+     * (#501), else 0x00 at the start and 0xff once the fallback runs;
+     * ble.qn_protocol_byte wins over all.
+     */
     public seenProtocolType = 0x00,
     /** The ledger's mark when this session started (see QnLedger.mark). */
     readonly storedMarkAtSessionStart = 0,
@@ -19,6 +24,11 @@ export class QnSession {
      * current time when a record arrives before onConnected ran.
      */
     public sessionStartedScaleSeconds: number | null = null,
+    /**
+     * The scale's address, normalised, or null when the transport gave none.
+     * Keys what outlives the session per scale (the adapter's protoByUnit, #501).
+     */
+    readonly unit: string | null = null,
   ) {}
 
   /**
@@ -32,6 +42,17 @@ export class QnSession {
    * `weightScaleFactor` is then the default, a guess (C-06).
    */
   kind: QnDialectKind = 'unknown';
+
+  /**
+   * Whether the 0x12 sets the dynamic-package bit; null while there is no
+   * 0x12 of 20 bytes or more, the only one that has the byte. `false` is a
+   * scale that weighs in with 19-byte-dialect frames under the extended
+   * handshake (Arboleaf CS10K, #530).
+   */
+  dynamicPackage: boolean | null = null;
+
+  /** One debug line per session for a 3-part result block behind a set bit (#530). */
+  resultBlockOnDynamicPackageLogged = false;
 
   /** One "divisor in doubt, reading dropped" warning per session (C-06). */
   divisorDoubtWarned = false;
@@ -78,7 +99,7 @@ export class QnSession {
   appProfileSequence: boolean | null = null;
 
   /**
-   * Settled by the scale's answer to the profile frame, `a1 06 02 ..`, whatever
+   * Settled by the scale's answer to the profile frame, `a1 <len> 02 ..`, whatever
    * it says (`answerVisit`, from onProfileAnswer). The extended dialect's
    * vendor sequence waits for it before its 0x22 START (#501).
    */
@@ -100,9 +121,9 @@ export class QnSession {
   twentyByteFrameLogged = false;
 
   /**
-   * The 19-byte dialect's streamed weigh-in (#331, D037). `live20Seen`: a
-   * well-formed 20-byte 0x10 arrived this session, which is what makes later
-   * 0x15/0x16 frames part of the same weigh-in.
+   * The streamed weigh-in of the 19-byte dialect and of the CS10K (#331, D037,
+   * #530). `live20Seen`: a well-formed 20-byte 0x10 arrived this session,
+   * which is what makes later 0x15/0x16 frames part of the same weigh-in.
    * `live20Weight`: the stable weight, held until 0x16 (`live20ResultSeen`)
    * closes the weigh-in.
    */
@@ -119,7 +140,12 @@ export class QnSession {
    */
   live20Block: Buffer[] = [];
   live20C15: Buffer | null = null;
-  visitSent: { slot: number; frame: readonly number[] } | null = null;
+  /**
+   * `algorithmFromOption`: [10] came from `ble.qn_algorithm`, snapshot at send
+   * time so a reload during the weigh-in does not change what the frame
+   * carried. Present only then (#331).
+   */
+  visitSent: { slot: number; frame: readonly number[]; algorithmFromOption?: true } | null = null;
   visitReply: { slot: number; ok: boolean } | null = null;
 
   /** The user slot of the profile frame this session sent, 1 if none (`ble.qn_user_slot`, #501). */
@@ -137,6 +163,11 @@ export class QnSession {
   }
   readyValueType: number | null = null;
   measuredAfterVisit = false;
+  /**
+   * The 20-byte dialect's last live weight for the profile's slot after the
+   * scale accepted the profile (ext20.ts noteLiveFrame, #331); null before one.
+   */
+  liveWeightAfterVisit: number | null = null;
   a4PreludeSent = false;
 
   /**
@@ -210,9 +241,33 @@ export class QnSession {
    * Whether a completed-weigh-in result frame (0xB4/0xB1) has already produced a
    * reading this session. The scale repeats the 0xB4 frame ~3x and then sends
    * the 0xB1 records, all describing the one weigh-in, so the reading is emitted
-   * exactly once and the repeats are suppressed (#235).
+   * exactly once and the repeats are suppressed (#235). It is set by the first
+   * part of a split 0xB1 too, so the parts that follow are not read as weights;
+   * while `resultAssembly` is open they are the record's parts instead (D103).
    */
   extendedResultEmitted = false;
+
+  /**
+   * Whether a 0xB1 first part ([3] 01, the only part with the weight) arrived
+   * this session, and whether the line that says a later part came without
+   * it was logged (once per session). A host that sees part 2 or 3 first lost
+   * part 1 on the way, which an ESP32 proxy on old firmware does (#501).
+   */
+  resultFirstPartSeen = false;
+  resultPartHintLogged = false;
+
+  /**
+   * A split 0xB1 whose first part carried the weight, while the session waits
+   * for the other parts (#501, D103): `reading` is the weight of the first
+   * part, `parts` the frames held in order and `atMs` when each came. Open
+   * only with a configured user's profile frame sent (`visitSent`); null
+   * before, and again once the record is joined or the wait is given up.
+   */
+  resultAssembly: {
+    reading: ScaleReading;
+    parts: Buffer[];
+    atMs: number[];
+  } | null = null;
 
   /**
    * Timestamp (Date.now()) of the first stable R1=R2=0 frame seen on a

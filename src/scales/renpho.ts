@@ -19,7 +19,7 @@ import {
 import { bleLog, normalizeUuid } from '../ble/types.js';
 import { qnCanRun } from './qn-scale/matching.js';
 import { ownAddressBytes, uuidClaimHits, type MatchDescriptor } from './match-descriptor.js';
-import { parseSigDateTime, trustedScaleTime } from './sig-wss.js';
+import { parseSigDateTime, trustedScaleTime, type SigClock } from './sig-wss.js';
 import { isHistoricalReading } from '../interfaces/reading-time.js';
 
 /**
@@ -172,6 +172,17 @@ const SIG_FIELDS: ReadonlyArray<[number, number, 'impedance' | 'weight' | null]>
 // (0x2E); 0x0E frames come while the weight still moves.
 const FLAG_MEASURING = 0x40;
 const FLAG_FINAL = 0x20;
+// 0x2A9D flags bit 1: a SIG Date Time follows the weight.
+const FLAG_TIMESTAMP = 0x02;
+
+/**
+ * How far from its receipt a live frame's stamp may lie and still place the
+ * scale clock (#510). Wider than HISTORY_WINDOW_MS, because the ES-WBE28
+ * stamps its 0x4E frames minutes ahead of the final one. The two readings of
+ * one stamp are the host's zone offset apart, at least an hour anywhere off
+ * UTC, so with less than half of that they never both fit.
+ */
+const CLOCK_ZONE_TOLERANCE_MS = 15 * 60 * 1000;
 
 // Body Composition Measurement flag bit 12: the measurement is split across
 // two packets, and the spec sets it in both (BCS 1.0, 3.2.1).
@@ -205,6 +216,12 @@ class RenphoSession {
   compositionDone = false;
   /** The last 0x2A9D said the scale is measuring (bit 6) or final (bit 5); see isCompositionPending. */
   measuring = false;
+  /** The last 0x2A9D was a 0x4E with a weight, the only frame a final 0x2E may place the clock after. */
+  weighing = false;
+  /** How the scale clock reads, once a live frame has placed it (placeScaleClock). */
+  clock: SigClock | undefined;
+  /** A live frame left the clock unplaced and said so in the debug log. */
+  clockUnplacedLogged = false;
 }
 
 export class RenphoScaleAdapter
@@ -402,6 +419,10 @@ export class RenphoScaleAdapter
     const raw = data.readUInt16LE(1);
     let weight = raw * (imperial ? LB_PER_UNIT : KG_PER_UNIT);
     if (imperial) weight *= LB_TO_KG;
+    // Before `weighing` changes, which the final frame is judged by, and
+    // before the return below, so a 0 kg frame can place the clock too.
+    this.placeScaleClock(data, flags, raw);
+    this.s.weighing = raw > 0 && (flags & FLAG_MEASURING) !== 0;
     // Before the return below: a 0 kg frame is the user stepping off, and the
     // hold must not wait for a composition that will not come.
     this.s.measuring = weight > 0 && (flags & (FLAG_MEASURING | FLAG_FINAL)) !== 0;
@@ -410,7 +431,59 @@ export class RenphoScaleAdapter
     this.s.cachedImpedance = 0;
     this.s.compositionDone = false;
     this.s.storedRecord = null;
-    this.s.cachedTimestamp = flags & 0x02 ? trustedScaleTime(parseSigDateTime(data, 3)) : undefined;
+    this.s.cachedTimestamp =
+      flags & FLAG_TIMESTAMP
+        ? trustedScaleTime(parseSigDateTime(data, 3, this.clock()))
+        : undefined;
+  }
+
+  /** The scale clock as placed this session; local time until a live frame says otherwise. */
+  private clock(): SigClock {
+    return this.s.clock ?? 'local';
+  }
+
+  /**
+   * Decide from the frames of a live weigh-in whether the scale clock keeps
+   * the host's local time or UTC (#510). Read as local time, a clock on UTC
+   * made every live weigh-in on a host east of UTC a stored record.
+   *
+   * Only a frame that is live by its flags counts: a 0x4E with a weight (the
+   * scale is measuring), a 0 kg frame (nobody on it yet, A-R003), and a final
+   * 0x2E right after a 0x4E with a weight (`weighing`). A 0x0E with a weight
+   * or a 0x2E after anything else may be a stored record, and 0x2A9C does not
+   * count either. The stamp is read both ways and the clock placed when
+   * exactly one reading lies within CLOCK_ZONE_TOLERANCE_MS of now. On a host
+   * in UTC the two are the same instant, so nothing is placed and nothing
+   * changes. The first frame that decides holds for the session; records
+   * before it keep the time they were read with, as the runtime has already
+   * routed them (D027).
+   */
+  private placeScaleClock(data: Buffer, flags: number, raw: number): void {
+    if (this.s.clock || !(flags & FLAG_TIMESTAMP)) return;
+    const weighing = raw > 0 && (flags & FLAG_MEASURING) !== 0;
+    const finalAfterWeighing = (flags & FLAG_FINAL) !== 0 && this.s.weighing;
+    if (raw > 0 && !weighing && !finalAfterWeighing) return;
+
+    const now = Date.now();
+    const offsetMs = (clock: SigClock): number | undefined => {
+      const ts = trustedScaleTime(parseSigDateTime(data, 3, clock));
+      return ts && ts.getTime() - now;
+    };
+    const local = offsetMs('local');
+    const utc = offsetMs('utc');
+    if (local === undefined || utc === undefined) return;
+    const fits = (ms: number): boolean => Math.abs(ms) <= CLOCK_ZONE_TOLERANCE_MS;
+    if (fits(local) !== fits(utc)) this.s.clock = fits(utc) ? 'utc' : 'local';
+
+    const secs = (ms: number): string => `${ms >= 0 ? '+' : ''}${Math.round(ms / 1000)} s`;
+    const offsets = `${secs(utc)} from now read as UTC, ${secs(local)} as local time`;
+    if (this.s.clock) {
+      const kept = this.s.clock === 'utc' ? 'UTC' : 'local time';
+      bleLog.debug(`Renpho ES-WBE28: the scale clock keeps ${kept} (stamp ${offsets})`);
+    } else if (!this.s.clockUnplacedLogged) {
+      this.s.clockUnplacedLogged = true;
+      bleLog.debug(`Renpho ES-WBE28: scale clock not placed by this frame (stamp ${offsets})`);
+    }
   }
 
   /**
@@ -443,7 +516,7 @@ export class RenphoScaleAdapter
       if (off + size > n) break; // belongs to a later packet
       if (flag === 0x0002 && !this.s.cachedTimestamp) {
         // A weigh-in whose 0x2A9D carried no time can still be dated by this.
-        this.s.cachedTimestamp = trustedScaleTime(parseSigDateTime(data, off));
+        this.s.cachedTimestamp = trustedScaleTime(parseSigDateTime(data, off, this.clock()));
       }
       if (field === 'impedance' && this.s.cachedImpedance <= 0) {
         this.s.cachedImpedance = data.readUInt16LE(off) * 0.1;

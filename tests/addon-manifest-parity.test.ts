@@ -53,6 +53,7 @@ const EXPORTER_FIELDS: Record<string, [exporter: string, field: string]> = {
   mqtt_ha_discovery: ['mqtt', 'ha_discovery'],
   mqtt_ha_device_name: ['mqtt', 'ha_device_name'],
   garmin_weight_only: ['garmin', 'weight_only'],
+  garmin_skip_metabolic_age: ['garmin', 'skip_metabolic_age'],
   garmin_upload_timeout_sec: ['garmin', 'upload_timeout_sec'],
 };
 

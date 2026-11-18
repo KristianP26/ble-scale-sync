@@ -6,6 +6,12 @@ export type Gender = 'male' | 'female';
 
 /** Minimal BLE advertisement info needed for adapter matching. */
 export interface BleDeviceInfo {
+  /**
+   * The advertised name as the transport reported it, trailing padding
+   * included (a CH100 arrives as `CH100` plus 15 spaces, #503). The resolver
+   * hands `matches()` the name without that padding, so only a direct
+   * `matches()` call sees the raw one.
+   */
   localName: string;
   /**
    * The device's own BLE address, uppercase colon-separated, when the transport
@@ -102,10 +108,11 @@ export interface ScaleReading<C = unknown> {
   /**
    * The scale's own user slot for this reading, when the frame says which
    * profile on the scale it was taken for (a SIG User Index, a vendor user
-   * byte). Used to attribute a stored record in multi-user mode before falling
-   * back to weight matching (D027): it is matched against
+   * byte). In multi-user mode it attributes the reading, live or stored, before
+   * weight matching is tried (D027, D094): it is matched against
    * `users[].beurer_user_index`. Leave undefined when the frame does not carry
-   * one; never default it.
+   * one, or when it is the fixed slot the adapter signs in as for everyone;
+   * never default it, or every weigh-in lands on the user of that slot.
    */
   userIndex?: number;
   /**
@@ -537,6 +544,12 @@ export interface ScaleAdapterCore {
    */
   restoreDedupMark?(mark: number): void;
 
+  /**
+   * Whether this adapter claims the device. When called through resolveAdapter
+   * or resolveAfterDiscovery, device.localName arrives without its trailing
+   * padding (NUL, whitespace); compare it as a clean name. A name that is only
+   * padding stays as it came.
+   */
   matches(device: BleDeviceInfo): boolean;
   parseNotification(data: Buffer): ScaleReading | null;
   isComplete(reading: ScaleReading): boolean;
@@ -611,6 +624,11 @@ export interface BroadcastSource {
    * True if this adapter prefers passive advertisement scanning over a GATT
    * connection. When set, broadcastScan is used even for connectable devices.
    * Adapters that set this must implement parseServiceData or parseBroadcast.
+   *
+   * Their parser must return null for a frame that is not a weigh-in (a light
+   * stable frame, say). A reading isComplete() refuses is held as partial: it
+   * can replace the reading already held, and it is exported weight only if
+   * nothing completes it (#526).
    */
   readonly preferPassive?: boolean;
 

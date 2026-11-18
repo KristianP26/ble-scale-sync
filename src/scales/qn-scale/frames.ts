@@ -8,8 +8,10 @@
 
 import type { Gender } from '../../interfaces/scale-adapter.js';
 import {
+  EXTENDED_RESULT_RECORD_LEN,
   RESULT_ACK_MEASURED,
   RESULT_ACK_OPCODE,
+  RESULT_OPCODE_B1,
   USER_DELETE_SUBCOMMAND,
   VENDOR_APP_USER_KEY,
   VISIT_ALGORITHM,
@@ -442,6 +444,151 @@ export function decodeEightStoredRecord(
   };
 }
 
+/** One extended-dialect 0xB1 result in one part, as decodeExtendedResult reads it. */
+export interface ExtendedResult {
+  /** Slot, weight, the ten channels measured and corrected, body fat and heart rate. */
+  result: EightResult;
+  /** The scale's own results, in the 19-byte dialect's shape. */
+  composition: VaComposition;
+  /** [50], the handle or hall byte; not read further. */
+  handle: number;
+  /** [115..116] /100, read as this weigh-in's BMI at 0.01 (hypothesis). */
+  bmiFine: number;
+  /** [117], the type of BIA measurement; not read further. */
+  biaType: number;
+}
+
+/** LE u16 at `at`, divided by 10. */
+const tenthLE = (frame: Buffer, at: number): number => frame.readUInt16LE(at) / 10;
+
+/**
+ * The extended dialect's 0xB1 result when it comes in one part (#331): 119
+ * bytes, `b1 77 01 01 ..`, [1] its length, [2] one part, [3] the first. The
+ * layout is the one the vendor's published SDK reads from the record it puts
+ * together from the parts ([4 .. len-2] of each, so one part's frame offset is
+ * the payload offset + 4); every value is a LE u16 unless noted:
+ *
+ *   [4]       user slot (u8)          [5..6]    weight /100 kg
+ *   [7..26]   the ten channels as measured, /10 ohm, EIGHT_CHANNEL_ORDER
+ *   [27..46]  the same ten as the scale corrected them
+ *   [47..48]  body fat /10 %          [49] heart rate (u8), [50] handle (u8)
+ *   [51..52]  BMI /10                 [53..54] water /10 %
+ *   [55..56]  muscle /10              [57] visceral fat (u8), [58] body age (u8)
+ *   [59..60]  BMR kcal                [61..62] protein /10 %
+ *   [63]      heart index /10 (u8)    [64..65] bone /10
+ *   [66..67]  lean body mass /10 %    [68..69] subcutaneous fat /10 %
+ *   [70..71]  skeletal muscle /10 %   [72..73] score /10, [74] body shape (u8)
+ *   [75..114] filter states, not read [115..116] BMI /100 (hypothesis)
+ *   [117]     BIA measurement type    [118] sum checksum
+ *
+ * Muscle and bone are % of the body weight when the ready frame says so, as
+ * on the 19-byte dialect. The SDK reads the channels as sent, without the
+ * unscrambling of SCRAMBLE_FLAG_BIT. Null for anything else, a frame of
+ * several parts included: joinExtendedResultParts puts those together first.
+ */
+export function decodeExtendedResult(frame: Buffer): ExtendedResult | null {
+  if (frame.length !== 119 || frame[0] !== RESULT_OPCODE_B1 || frame[1] !== frame.length) {
+    return null;
+  }
+  if (frame[2] !== 0x01 || frame[3] !== 0x01 || !hasValidSumChecksum(frame)) return null;
+  const channels = (from: number): number[] =>
+    Array.from({ length: 10 }, (_, i) => tenthLE(frame, from + 2 * i));
+  return {
+    result: {
+      slot: frame[4],
+      weight: frame.readUInt16LE(5) / 100,
+      original: channels(7),
+      adjusted: channels(27),
+      fatPercent: tenthLE(frame, 47),
+      heartRate: frame[49],
+    },
+    composition: {
+      bmi: tenthLE(frame, 51),
+      water: tenthLE(frame, 53),
+      muscle: tenthLE(frame, 55),
+      visceral: frame[57],
+      bodyAge: frame[58],
+      bmr: frame.readUInt16LE(59),
+      protein: tenthLE(frame, 61),
+      heartIndex: frame[63] / 10,
+      bone: tenthLE(frame, 64),
+      lbm: tenthLE(frame, 66),
+      subcutaneousFat: tenthLE(frame, 68),
+      skeletalMuscle: tenthLE(frame, 70),
+      score: tenthLE(frame, 72),
+      bodyShape: frame[74],
+    },
+    handle: frame[50],
+    bmiFine: frame.readUInt16LE(115) / 100,
+    biaType: frame[117],
+  };
+}
+
+/**
+ * Put the parts of a split extended-dialect 0xB1 back into the one-part frame
+ * decodeExtendedResult reads (#501, D103). Each part is `b1 <len> <count>
+ * <index> <payload> <cs>` with its own length at [1], the same part count at
+ * [2], its index 1..count at [3] in order and the sum checksum; the payloads
+ * ([4 .. len-2]) add up to EXTENDED_RESULT_RECORD_LEN bytes, which the vendor's
+ * SDK reads as the record. The frame is rebuilt as `b1 77 01 01 <record> <cs>`,
+ * the one the same scale sends to its vendor app (#331, #501); its checksum
+ * is new and proves nothing, the per-part checks are the integrity.
+ *
+ * Null for anything else, never a throw: the caller sits in parseNotification.
+ */
+export function joinExtendedResultParts(parts: readonly Buffer[]): Buffer | null {
+  if (parts.length === 0) return null;
+  const count = parts[0].length > 2 ? parts[0][2] : 0;
+  if (count !== parts.length) return null;
+  const record: number[] = [];
+  for (const [i, part] of parts.entries()) {
+    if (part.length < 6 || part[0] !== RESULT_OPCODE_B1 || part[1] !== part.length) return null;
+    if (part[2] !== count || part[3] !== i + 1 || !hasValidSumChecksum(part)) return null;
+    for (let at = 4; at < part.length - 1; at++) record.push(part[at]);
+    if (record.length > EXTENDED_RESULT_RECORD_LEN) return null;
+  }
+  if (record.length !== EXTENDED_RESULT_RECORD_LEN) return null;
+  return Buffer.from(
+    withChecksum([RESULT_OPCODE_B1, EXTENDED_RESULT_RECORD_LEN + 5, 0x01, 0x01, ...record]),
+  );
+}
+
+/**
+ * Relations the scale's own results satisfy in every extended 0xB1 looked at
+ * (hypothesis): the checks that tell a record put together from
+ * the parts of one weigh-in from a mix of two. All differences, 0 when it
+ * holds; read as a log line, not as a gate (#501).
+ */
+export interface ExtendedResultChecks {
+  /** lean body mass % + body fat %, 100 when it holds. */
+  leanPlusFat: number;
+  /** muscle % - (lean body mass % - bone %), 0 when it holds. */
+  muscleVsLeanLessBone: number;
+  /** BMI (/10) - bmiFine (/100). */
+  bmiVsBmiFine: number;
+  /** BMR - (370 + 21.6 x lean body mass in kg), the Katch-McArdle formula. */
+  bmrVsKatchMcArdle: number;
+  /** The height in cm bmiFine and the weight imply; null without a BMI. */
+  impliedHeightCm: number | null;
+}
+
+const to2 = (v: number): number => Math.round(v * 100) / 100;
+
+export function extendedResultChecks(decoded: ExtendedResult): ExtendedResultChecks {
+  const { result, composition } = decoded;
+  const leanKg = (result.weight * composition.lbm) / 100;
+  return {
+    leanPlusFat: to2(composition.lbm + result.fatPercent),
+    muscleVsLeanLessBone: to2(composition.muscle - (composition.lbm - composition.bone)),
+    bmiVsBmiFine: to2(composition.bmi - decoded.bmiFine),
+    bmrVsKatchMcArdle: to2(composition.bmr - (370 + 21.6 * leanKg)),
+    impliedHeightCm:
+      decoded.bmiFine > 0 && result.weight > 0
+        ? to2(Math.sqrt(result.weight / decoded.bmiFine) * 100)
+        : null,
+  };
+}
+
 /** Exchange bits `i` and `j` of a byte. */
 function swapBits(b: number, i: number, j: number): number {
   return ((b >> i) & 1) === ((b >> j) & 1) ? b : b ^ ((1 << i) | (1 << j));
@@ -477,6 +624,11 @@ export interface UserProfileFrameOptions {
   key?: number;
   /** Add VISIT_ATHLETE_STEP to the algorithm byte at [10]. */
   athlete?: boolean;
+  /**
+   * The algorithm byte at [10] as given (`ble.qn_algorithm`, #331), in place
+   * of VISIT_ALGORITHM and the athlete step.
+   */
+  algorithm?: number;
 }
 
 /**
@@ -508,7 +660,8 @@ export function buildUserProfileFrame(
   opts: UserProfileFrameOptions = {},
 ): number[] {
   const key = opts.key ?? VENDOR_APP_USER_KEY;
-  const algorithm = opts.athlete ? VISIT_ALGORITHM + VISIT_ATHLETE_STEP : VISIT_ALGORITHM;
+  const algorithm =
+    opts.algorithm ?? (opts.athlete ? VISIT_ALGORITHM + VISIT_ATHLETE_STEP : VISIT_ALGORITHM);
   const a = Number.isFinite(age)
     ? Math.min(0xff, Math.max(1, Math.round(age)))
     : OPENSCALE_PROFILE_AGE;
@@ -526,7 +679,7 @@ export function buildUserProfileFrame(
     a,
     (mm >> 8) & 0xff,
     mm & 0xff,
-    algorithm,
+    algorithm & 0xff,
     0x02,
   ];
   return [...cmd, cmd.reduce((s, b) => s + b, 0) & 0xff];
