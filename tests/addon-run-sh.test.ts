@@ -940,7 +940,7 @@ describe.skipIf(!SHELL)('run.sh restarts the app after it exits', () => {
     expect(r.status).toBe(0);
   }, 30_000);
 
-  it('still restarts after a non-zero exit following no clean exit', () => {
+  it('restarts after exit 1 and stops at the first exit 0', () => {
     const block = supervisorBlock().replace(/^RESTART_DELAY_MIN=\d+$/m, 'RESTART_DELAY_MIN=1');
     // Exit 1 twice (an empty single run), then 0: stops there, no third restart.
     const r = run([COUNT, '[ "$n" -ge 3 ] || exit 1', 'exit 0'].join('\n'), block);

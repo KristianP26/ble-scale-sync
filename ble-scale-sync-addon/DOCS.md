@@ -54,7 +54,7 @@ For several users, other exporters or transport settings the tab does not have, 
 
 When BLE Scale Sync cannot recover inside the running process, for example after repeated Bluetooth failures or when a Bluetooth proxy stays silent, it exits and the app starts it again, without the Supervisor's Watchdog switch. The log shows `BLE Scale Sync exited with code N after Ns; restart #M in Ns.` The wait starts at 5 seconds and doubles while BLE Scale Sync keeps exiting shortly after starting, up to 5 minutes; a run of 10 minutes resets it. The reason is in the lines above each restart.
 
-A run that ends with exit code 0 is not restarted. This only happens with `runtime.continuous_mode: false` in a [custom config](https://blescalesync.dev/guide/home-assistant-addon#custom-config-mode): the app does one run and the add-on stops with `BLE Scale Sync finished (exit code 0); not restarting.` Earlier versions started the next run after 5 seconds. A single run that finds nothing exits with code 1 and is retried as above. The default add-on options always run in continuous mode, which is unaffected.
+A single run (`runtime.continuous_mode: false` in a custom config) that ends with exit code 0 stops the add-on with `BLE Scale Sync finished (exit code 0); not restarting.` See [Restarts and stored data](https://blescalesync.dev/guide/home-assistant-addon#persistence).
 
 ## Errors at startup
 
