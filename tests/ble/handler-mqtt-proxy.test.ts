@@ -14,7 +14,12 @@ import { applyForcedAdapter } from '../../src/scales/force.js';
 import { bleLog, POST_READING_RECONNECT_MS, SessionTimeoutError } from '../../src/ble/types.js';
 import { bleFailureKind } from '../../src/ble/failure-kind.js';
 import { M1690_PROTOCOL_VERSION_REPLY } from '../helpers/yunmai-m1690.js';
-import { MI2_LIGHT_STABLE, MI2_WEIGH_IN } from '../helpers/mi-scale-2-422.js';
+import {
+  MI2_422_CHAR_UUIDS,
+  MI2_422_NOTIFY_CHAR,
+  MI2_LIGHT_STABLE,
+  MI2_WEIGH_IN,
+} from '../helpers/mi-scale-2-422.js';
 import { AR003_ADDRESS, AR003_MSD, ar003MqttChars } from '../helpers/renpho-a-r003.js';
 
 // Suppress log output during tests
@@ -2614,28 +2619,9 @@ describe('handler-mqtt-proxy', () => {
     // every other transport and must never be driven over GATT here either.
     describe('advertisement-read scales are never driven over GATT (#422)', () => {
       const MI_MAC = 'B4:56:5D:81:B8:BF';
-      const MI_CHAR = '00002a2f0000351221180009af100700';
+      const MI_CHAR = MI2_422_NOTIFY_CHAR;
       // The reporter's exact 18-entry characteristic list, duplicate 2a04 included.
-      const MI_CHARS = [
-        '00002a2500001000800000805f9b34fb',
-        '00002a2800001000800000805f9b34fb',
-        '00002a2700001000800000805f9b34fb',
-        '00002a2300001000800000805f9b34fb',
-        '00002a5000001000800000805f9b34fb',
-        '00002a0500001000800000805f9b34fb',
-        '00002a0000001000800000805f9b34fb',
-        '00002a0100001000800000805f9b34fb',
-        '00002a0400001000800000805f9b34fb',
-        '00002a2b00001000800000805f9b34fb',
-        '00002a9b00001000800000805f9b34fb',
-        '00002a9c00001000800000805f9b34fb',
-        MI_CHAR,
-        '000015310000351221180009af100700',
-        '000015320000351221180009af100700',
-        '00002a0400001000800000805f9b34fb',
-        '000015420000351221180009af100700',
-        '000015430000351221180009af100700',
-      ].map((uuid) => ({
+      const MI_CHARS = MI2_422_CHAR_UUIDS.map((uuid) => ({
         uuid,
         // The log carries UUIDs only. 2a2f is the char the session wrote to and
         // got notifications from, so it is modelled as notify+write.
