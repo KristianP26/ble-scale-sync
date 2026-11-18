@@ -12,6 +12,7 @@ import type {
 import { uuid16, buildPayload, type ScaleBodyComp } from './body-comp-helpers.js';
 import { matchesDescriptor, type MatchDescriptor } from './match-descriptor.js';
 import { bleLog, errMsg } from '../ble/types.js';
+import { isPlausibleWeight } from '../interfaces/reading-weight.js';
 
 // Original Trisa firmware exposes 0x8A21 (notify) for measurement.
 const CHR_MEASUREMENT_TRISA = uuid16(0x8a21);
@@ -66,6 +67,41 @@ const TIMESTAMP_LEN = 4;
  */
 const CHALLENGE_WRITE_RETRIES = 2;
 const CHALLENGE_RETRY_MS = 250;
+
+/**
+ * Exponent bounds of the base-10 floats the scale sends (24-bit mantissa, int8
+ * exponent). An exponent is possible only if a mantissa of 1..16 777 215 can
+ * reach the band the field is judged against, which keeps a corrupt exponent
+ * (127, -128) from producing 1e134 or 0 out of a valid-looking mantissa.
+ *
+ * Weight: the band is 0.5-700 kg, so 16 777 215 * 10^-7 = 1.68 reaches it and
+ * 10^2 stays within it. Captures use -2 (#138); the observed range is far
+ * inside these bounds.
+ * Resistance r2 = 400 + impedance / 0.3: the 150-1200 ohm impedance band is
+ * 900-4400, so the exponent is at most 3 (10^4 > 4400). The lower bound is a
+ * margin, it keeps the "r2 < 410" sentinel reachable.
+ */
+const WEIGHT_EXPONENT_MIN = -7;
+const WEIGHT_EXPONENT_MAX = 2;
+const R2_EXPONENT_MIN = -5;
+const R2_EXPONENT_MAX = 3;
+
+/**
+ * Read a base-10 float at `offset`: u24 LE mantissa and an int8 exponent. Null
+ * when the exponent lies outside [minExp, maxExp] or the result is not finite.
+ */
+function readBase10Float(
+  data: Buffer,
+  offset: number,
+  minExp: number,
+  maxExp: number,
+): number | null {
+  const mantissa = data[offset] | (data[offset + 1] << 8) | (data[offset + 2] << 16);
+  const exponent = data.readInt8(offset + 3);
+  if (exponent < minExp || exponent > maxExp) return null;
+  const value = mantissa * Math.pow(10, exponent);
+  return Number.isFinite(value) ? value : null;
+}
 
 type Variant = 'trisa' | 'ade';
 
@@ -397,12 +433,11 @@ export class TrisaAdapter implements ScaleAdapterCore, GattWiring, MultiCharNoti
     const hasResistance1 = (flags & 0x02) !== 0;
     const hasResistance2 = (flags & 0x04) !== 0;
 
-    // Weight: 24-bit unsigned LE mantissa + signed exponent
-    const mantissa = data[1] | (data[2] << 8) | (data[3] << 16);
-    const exponent = data.readInt8(4);
-    const weight = mantissa * Math.pow(10, exponent);
-
-    if (weight <= 0 || !Number.isFinite(weight)) return null;
+    const weight = readBase10Float(data, 1, WEIGHT_EXPONENT_MIN, WEIGHT_EXPONENT_MAX);
+    if (weight === null || !isPlausibleWeight(weight)) {
+      bleLog.debug('Trisa: ignoring a measurement whose weight is not a plausible body weight');
+      return null;
+    }
 
     const timestamp = hasTimestamp ? this.readTimestamp(data) : undefined;
     const reading: ScaleReading = { weight, impedance: 0 };
@@ -419,11 +454,13 @@ export class TrisaAdapter implements ScaleAdapterCore, GattWiring, MultiCharNoti
     if (hasResistance1) offset += 4;
 
     if (hasResistance2 && offset + 4 <= data.length) {
-      const r2Mantissa = data[offset] | (data[offset + 1] << 8) | (data[offset + 2] << 16);
-      const r2Exponent = data.readInt8(offset + 3);
-      const r2 = r2Mantissa * Math.pow(10, r2Exponent);
+      const r2 = readBase10Float(data, offset, R2_EXPONENT_MIN, R2_EXPONENT_MAX);
 
-      if (r2 < 410) {
+      // A value no real scale sends leaves the impedance at 0 (no impedance);
+      // the processor would zero a nonsense value anyway (D028).
+      if (r2 === null) {
+        bleLog.debug('Trisa: ignoring a resistance with an impossible exponent');
+      } else if (r2 < 410) {
         reading.impedance = 3.0;
       } else {
         reading.impedance = 0.3 * (r2 - 400);
