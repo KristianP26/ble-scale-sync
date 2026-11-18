@@ -825,3 +825,77 @@ describe('HaBluetoothClient', () => {
     expect(sockets).toHaveLength(2);
   });
 });
+
+describe('HaBluetoothClient token source', () => {
+  const SV = { url: 'ws://supervisor/core/websocket' };
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.useRealTimers();
+  });
+
+  function make(config: { url: string; token?: string }) {
+    const sockets: FakeWs[] = [];
+    const client = new HaBluetoothClient(config, {
+      wsFactory: () => {
+        const ws = new FakeWs();
+        sockets.push(ws);
+        return ws;
+      },
+    });
+    return { client, sockets };
+  }
+
+  it('logs in to the Supervisor proxy with SUPERVISOR_TOKEN when the config has none', async () => {
+    vi.useFakeTimers();
+    vi.stubEnv('SUPERVISOR_TOKEN', 'sv-token');
+    const { client, sockets } = make(SV);
+    const started = client.start();
+    sockets[0].open();
+    sockets[0].serverSays({ type: 'auth_required' });
+    expect(sockets[0].lastSent()).toEqual({ type: 'auth', access_token: 'sv-token' });
+    sockets[0].serverSays({ type: 'auth_ok' });
+    sockets[0].serverSays({
+      id: sockets[0].lastSent().id,
+      type: 'result',
+      success: true,
+      result: null,
+    });
+    await expect(started).resolves.toBeUndefined();
+    await client.stop();
+  });
+
+  it('never takes SUPERVISOR_TOKEN to any other URL: no socket, permanent error', async () => {
+    vi.stubEnv('SUPERVISOR_TOKEN', 'sv-token');
+    const { client, sockets } = make({ url: 'ws://ha.example:8123/api/websocket' });
+    await expect(client.start()).rejects.toBeInstanceOf(HaBluetoothPermanentError);
+    await expect(client.start()).rejects.toThrow(/ble\.ha_bluetooth\.token is not set/);
+    expect(sockets).toEqual([]);
+  });
+
+  it('keeps using the configured token for the Supervisor URL', async () => {
+    vi.useFakeTimers();
+    vi.stubEnv('SUPERVISOR_TOKEN', 'sv-token');
+    const { client, sockets } = make({ ...SV, token: 'own' });
+    const started = client.start();
+    sockets[0].open();
+    sockets[0].serverSays({ type: 'auth_required' });
+    expect(sockets[0].lastSent()).toEqual({ type: 'auth', access_token: 'own' });
+    sockets[0].serverSays({ type: 'auth_invalid', message: 'x' });
+    await expect(started).rejects.toBeInstanceOf(HaBluetoothPermanentError);
+    await client.stop();
+  });
+
+  it('keeps using the configured token for another URL, whatever the environment holds', async () => {
+    vi.useFakeTimers();
+    vi.stubEnv('SUPERVISOR_TOKEN', 'sv-token');
+    const { client, sockets } = make({ url: 'ws://ha.example:8123/api/websocket', token: 'own' });
+    const started = client.start();
+    sockets[0].open();
+    sockets[0].serverSays({ type: 'auth_required' });
+    expect(sockets[0].lastSent()).toEqual({ type: 'auth', access_token: 'own' });
+    sockets[0].serverSays({ type: 'auth_invalid', message: 'x' });
+    await expect(started).rejects.toBeInstanceOf(HaBluetoothPermanentError);
+    await client.stop();
+  });
+});

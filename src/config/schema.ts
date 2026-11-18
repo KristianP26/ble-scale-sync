@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { isLoopback } from '../ble/loopback.js';
+import { isSupervisorUrl } from '../ble/handler-ha-bluetooth/supervisor.js';
 import { isValidScaleId, SCALE_ID_HINT } from '../ble/scale-id.js';
 import { cliCommand } from '../cli-invocation.js';
 import { findTokenDirCollisions } from './token-dirs.js';
@@ -61,20 +62,34 @@ export type EsphomeEndpointConfig = z.infer<typeof EsphomeEndpointSchema>;
  * SMLIGHT SLZB, Shelly). Passive only; scales that need a GATT connection are
  * not reachable this way.
  */
-export const HaBluetoothSchema = z.object({
-  url: z
-    .string()
-    .min(1, 'Home Assistant URL is required')
-    .refine((v) => /^(https?|wss?):\/\//.test(v), {
-      message: 'Must start with http://, https://, ws:// or wss://',
-    }),
-  // Long-lived access token of an administrator user; the subscription is
-  // admin-only. Keep it in .env and reference it as ${HA_TOKEN}.
-  token: z.string().min(1, 'Home Assistant long-lived access token is required'),
-  // Optional: only accept advertisements heard by this HA scanner (its `source`
-  // id as shown in HA's Bluetooth advertisement monitor, e.g. the proxy's MAC).
-  source: z.string().optional().nullable(),
-});
+export const HaBluetoothSchema = z
+  .object({
+    url: z
+      .string()
+      .min(1, 'Home Assistant URL is required')
+      .refine((v) => /^(https?|wss?):\/\//.test(v), {
+        message: 'Must start with http://, https://, ws:// or wss://',
+      }),
+    // Long-lived access token of an administrator user; the subscription is
+    // admin-only. Keep it in .env and reference it as ${HA_TOKEN}. The add-on's
+    // Supervisor URL needs none: the app reads the add-on's own token itself.
+    token: z
+      .string()
+      .min(1, 'Home Assistant long-lived access token is required')
+      .optional()
+      .nullable(),
+    // Optional: only accept advertisements heard by this HA scanner (its `source`
+    // id as shown in HA's Bluetooth advertisement monitor, e.g. the proxy's MAC).
+    source: z.string().optional().nullable(),
+  })
+  .superRefine((c, ctx) => {
+    if (c.token || isSupervisorUrl(c.url)) return;
+    ctx.addIssue({
+      code: 'custom',
+      message: 'Home Assistant long-lived access token is required',
+      path: ['token'],
+    });
+  });
 
 export const MqttProxySchema = z
   .object({

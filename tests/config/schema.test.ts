@@ -756,6 +756,22 @@ describe('BleSchema', () => {
     ).toBe(false);
   });
 
+  it('lets ha_bluetooth leave out the token for the Supervisor URL only', () => {
+    const ha = (ha_bluetooth: Record<string, unknown>) =>
+      BleSchema.safeParse({ handler: 'ha-bluetooth', ha_bluetooth });
+    expect(ha({ url: 'ws://supervisor/core/websocket' }).success).toBe(true);
+    expect(ha({ url: 'ws://supervisor/core/websocket', token: null }).success).toBe(true);
+    const other = ha({ url: 'ws://ha.example:8123/api/websocket' });
+    expect(other.success).toBe(false);
+    if (!other.success) {
+      expect(other.error.issues[0].message).toBe(
+        'Home Assistant long-lived access token is required',
+      );
+      expect(other.error.issues[0].path).toEqual(['ha_bluetooth', 'token']);
+    }
+    expect(ha({ url: 'ws://supervisor/core/websocket', token: '' }).success).toBe(false);
+  });
+
   it('accepts handler auto without mqtt_proxy', () => {
     const result = BleSchema.safeParse({ handler: 'auto' });
     expect(result.success).toBe(true);

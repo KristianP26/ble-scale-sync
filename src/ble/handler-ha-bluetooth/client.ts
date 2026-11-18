@@ -3,6 +3,7 @@ import type { HaBluetoothConfig } from '../../config/schema.js';
 import { bleLog, errMsg } from '../types.js';
 import { toBleDeviceInfo, type HaAdvertisement } from './advert.js';
 import { BoundedSet } from '../advertisement.js';
+import { haAccessToken } from './supervisor.js';
 import {
   HA_MAX_FRAME_BYTES,
   guardedListener,
@@ -173,6 +174,8 @@ export class HaBluetoothClient {
   private subscribedOnce = false;
   /** Addresses already reported by noteUndatable. */
   private readonly undatableLogged = new BoundedSet<string>(UNDATABLE_LOG_MAX);
+  /** Resolved at each connect; never logged. */
+  private token = '';
 
   constructor(
     private readonly config: HaBluetoothConfig,
@@ -220,6 +223,16 @@ export class HaBluetoothClient {
 
   private connectOnce(): Promise<void> {
     const wsUrl = toWebSocketUrl(this.config.url);
+    const token = haAccessToken(this.config);
+    if (!token) {
+      return Promise.reject(
+        new HaBluetoothPermanentError(
+          'ble.ha_bluetooth.token is not set. Only the add-on URL ws://supervisor/core/websocket ' +
+            'works without it, and then SUPERVISOR_TOKEN must be in the environment.',
+        ),
+      );
+    }
+    this.token = token;
     return new Promise<void>((resolve, reject) => {
       let settled = false;
       const settle = (err?: Error): void => {
@@ -307,7 +320,7 @@ export class HaBluetoothClient {
     switch (msg.type) {
       case 'auth_required':
         this.noteVersion(msg);
-        this.send({ type: 'auth', access_token: this.config.token });
+        this.send({ type: 'auth', access_token: this.token });
         return;
       case 'auth_ok': {
         this.noteVersion(msg);

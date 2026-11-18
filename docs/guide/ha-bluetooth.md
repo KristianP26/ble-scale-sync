@@ -55,7 +55,7 @@ Put the token in `.env` next to `config.yaml` (`HA_TOKEN=...`); it grants full a
 | Field | Required | Description |
 | --- | --- | --- |
 | `url` | Yes | Home Assistant base URL. `http://` and `https://` are turned into the websocket endpoint; a full `ws(s)://host/api/websocket` is used as is. |
-| `token` | Yes | Long-lived access token of an admin user. Use `${ENV_VAR}`. |
+| `token` | Yes, except with the add-on's `ws://supervisor/core/websocket` | Long-lived access token of an admin user. Use `${ENV_VAR}`. |
 | `source` | No | Accept only advertisements from one Home Assistant scanner, by its `source` id (shown in the advertisement monitor and in the debug log). Default: every scanner. |
 
 Changing `url`, `token` or `source` needs a restart.
@@ -66,7 +66,7 @@ In the [add-on](/guide/home-assistant-addon), set **Bluetooth transport** (`ble_
 
 - Leave **Scale MAC address** empty for the first weigh-in, then copy the address from the log (or the advertisement monitor) into it.
 - At boot the add-on starts before Home Assistant, so the log shows a few reconnect attempts first.
-- In [custom config mode](/guide/home-assistant-addon#custom-config-mode) the Supervisor access replaces the token.
+- In [custom config mode](/guide/home-assistant-addon#custom-config-mode), use `url: ws://supervisor/core/websocket` and leave out `token`.
 
 ## Docker {#docker-deployment}
 

@@ -136,14 +136,13 @@ The options cover one user, MQTT and Garmin Connect. For several users, another 
 - The add-on does not sign in to Garmin. Import a token as in [Sign in to Garmin with MFA](#mfa-workaround); it lands in `/data/garmin-tokens`, where every `garmin` exporter without its own `token_dir` looks. Only that default directory is imported, so give further Garmin accounts a `token_dir` you can write to, such as `/share/ble-scale-sync/garmin-tokens/<name>`.
 - A `strava` exporter without its own `token_dir` keeps its tokens in `/data/strava-tokens`, which survives restarts and updates.
 - In this mode the adapter reset at startup runs only when `ble_adapter` is set. Turn off `reset_bluetooth` if your file uses a proxy.
-- For Home Assistant Bluetooth, the add-on's own Supervisor access works without a long-lived token. Write the URL in full, because `http://supervisor/core` alone does not reach the websocket:
+- For Home Assistant Bluetooth, the add-on's own Supervisor access works without a long-lived token. Write the URL in full, because `http://supervisor/core` alone does not reach the websocket, and leave out `token`:
 
 ```yaml
 ble:
   handler: ha-bluetooth
   ha_bluetooth:
     url: ws://supervisor/core/websocket
-    token: '${SUPERVISOR_TOKEN}'
 ```
 
 ::: warning Files in /share are readable by other add-ons
