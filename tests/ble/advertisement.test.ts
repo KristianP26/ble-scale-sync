@@ -61,6 +61,16 @@ const parseMfg = (data: Buffer): ScaleReading => ({
 });
 
 describe('evaluateAdvertisement', () => {
+  it('treats an advertisement the parser throws on as unparseable', () => {
+    const adapter = baseAdapter({
+      parseBroadcast: () => {
+        throw new RangeError('out of range');
+      },
+    });
+    expect(() => evaluateAdvertisement(adapter, MFG(75, 0))).not.toThrow();
+    expect(evaluateAdvertisement(adapter, MFG(75, 0)).kind).not.toBe('complete');
+  });
+
   it('returns complete for a non-passive adapter on any non-null reading', () => {
     const adapter = baseAdapter({ parseBroadcast: parseMfg });
     const d = evaluateAdvertisement(adapter, MFG(75, 0));

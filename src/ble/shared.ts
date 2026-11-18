@@ -476,7 +476,7 @@ export function waitForRawReading(req: SessionRequest): Promise<RawReading> {
       }
     };
 
-    const handleNotification = (sourceUuid: string, data: Buffer): void => {
+    const processNotification = (sourceUuid: string, data: Buffer): void => {
       if (capture.enabled) {
         bleLog.info(`[RAW] ${sourceUuid} (${data.length}B): ${toHex(data)}`);
       }
@@ -590,6 +590,22 @@ export function waitForRawReading(req: SessionRequest): Promise<RawReading> {
           return;
         }
         finishWith(reading);
+      }
+    };
+
+    // The frame comes from a device or a proxy, and this runs inside a callback
+    // of the transport (an mqtt.js listener, a BlueZ or noble event) where an
+    // exception ends the process. A frame an adapter cannot parse costs that
+    // frame, not the session (ADR D108). The first one per session is a warning.
+    let faultWarned = false;
+    const handleNotification = (sourceUuid: string, data: Buffer): void => {
+      try {
+        processNotification(sourceUuid, data);
+      } catch (err) {
+        const text = `${adapter.name} could not handle a frame from ${sourceUuid}: ${errMsg(err)}`;
+        if (faultWarned) bleLog.debug(text);
+        else bleLog.warn(text);
+        faultWarned = true;
       }
     };
 

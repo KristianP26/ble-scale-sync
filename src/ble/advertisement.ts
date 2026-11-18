@@ -7,7 +7,7 @@ import type {
 import type { RawReading } from './shared.js';
 import { isForced } from '../scales/force.js';
 import { resolveAdapter } from '../scales/resolve.js';
-import { bleLog, normalizeUuid, BT_BASE_UUID_SUFFIX } from './types.js';
+import { bleLog, errMsg, normalizeUuid, BT_BASE_UUID_SUFFIX } from './types.js';
 import { isDebugEnabled } from '../logger.js';
 import { escapeForLog } from '../utils/escape.js';
 
@@ -92,20 +92,28 @@ export interface EvaluateOptions {
 
 /** Try the adapter's broadcast parsers against an advertisement's data. */
 function parseAdvertisement(adapter: ScaleAdapter, info: BleDeviceInfo): ScaleReading | null {
-  let reading: ScaleReading | null = null;
+  // The data is whatever a device in range advertised. A parser that throws on
+  // it must cost that advertisement, not the listener that called us, where an
+  // exception ends the process (ADR D108).
+  try {
+    let reading: ScaleReading | null = null;
 
-  if (adapter.parseBroadcast && info.manufacturerData) {
-    reading = adapter.parseBroadcast(info.manufacturerData.data);
-  }
-
-  if (!reading && adapter.parseServiceData && info.serviceData) {
-    for (const sd of info.serviceData) {
-      reading = adapter.parseServiceData(sd.uuid, sd.data);
-      if (reading) break;
+    if (adapter.parseBroadcast && info.manufacturerData) {
+      reading = adapter.parseBroadcast(info.manufacturerData.data);
     }
-  }
 
-  return reading;
+    if (!reading && adapter.parseServiceData && info.serviceData) {
+      for (const sd of info.serviceData) {
+        reading = adapter.parseServiceData(sd.uuid, sd.data);
+        if (reading) break;
+      }
+    }
+
+    return reading;
+  } catch (err) {
+    bleLog.debug(`${adapter.name}: could not parse an advertisement: ${errMsg(err)}`);
+    return null;
+  }
 }
 
 /**
