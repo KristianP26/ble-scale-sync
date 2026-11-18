@@ -8,6 +8,7 @@ import {
 } from '../../../src/ble/handler-ha-bluetooth/index.js';
 import type { HaAdvertisement } from '../../../src/ble/handler-ha-bluetooth/index.js';
 import { bleLog } from '../../../src/ble/types.js';
+import { _resetPeerInput } from '../../../src/ble/peer-input.js';
 
 /**
  * Scripted stand-in for the global WebSocket: records what the client sends and
@@ -599,6 +600,89 @@ describe('HaBluetoothClient', () => {
     sockets[0].serverSays({ id, type: 'event', event: { add: [advert()] } });
     expect(bad).toHaveBeenCalledTimes(1);
     expect(good).toHaveBeenCalledTimes(1);
+  });
+
+  describe('a frame that is not the expected shape', () => {
+    beforeEach(() => {
+      _resetPeerInput();
+      vi.spyOn(bleLog, 'warn').mockImplementation(() => {});
+      vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+    });
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    async function subscribed(): Promise<{ id: number; cb: ReturnType<typeof vi.fn> }> {
+      const started = client.start();
+      const id = handshake(sockets[0]);
+      await started;
+      const cb = vi.fn();
+      client.onAdvertisement(cb);
+      return { id, cb };
+    }
+
+    it.each([
+      ['null', null],
+      ['an array', []],
+      ['a number', 5],
+      ['a string', 'x'],
+    ])('ignores a frame that is %s', async (_label, frame) => {
+      const { id, cb } = await subscribed();
+      expect(() => sockets[0].serverSays(frame)).not.toThrow();
+      sockets[0].serverSays({ id, type: 'event', event: { add: [advert()] } });
+      expect(cb).toHaveBeenCalledTimes(1);
+    });
+
+    it.each([
+      ['a number', 5],
+      ['an empty object', {}],
+      ['a string', 'abc'],
+      ['null', null],
+    ])('survives event.add that is %s, snapshot and live alike', async (_label, add) => {
+      const { id, cb } = await subscribed();
+      expect(() => sockets[0].serverSays({ id, type: 'event', event: { add } })).not.toThrow();
+      expect(() => sockets[0].serverSays({ id, type: 'event', event: { add } })).not.toThrow();
+      sockets[0].serverSays({ id, type: 'event', event: { add: [advert()] } });
+      expect(cb).toHaveBeenCalledTimes(1);
+    });
+
+    it('skips an entry of add that is not an object', async () => {
+      const { id, cb } = await subscribed();
+      sockets[0].serverSays({ id, type: 'event', event: { add: [null, 5, 'x', advert()] } });
+      expect(cb).toHaveBeenCalledTimes(1);
+    });
+
+    it('survives a source that is not a string when a source filter is set', async () => {
+      const filtered = new HaBluetoothClient(
+        { ...CONFIG, source: '9C:13:9E:34:82:08' },
+        { wsFactory: () => sockets[sockets.push(new FakeWs()) - 1] },
+      );
+      const started = filtered.start();
+      const id = handshake(sockets[0]);
+      await started;
+      const cb = vi.fn();
+      filtered.onAdvertisement(cb);
+      expect(() =>
+        sockets[0].serverSays({
+          id,
+          type: 'event',
+          event: { add: [advert({ source: 5 as unknown as string })] },
+        }),
+      ).not.toThrow();
+      expect(cb).not.toHaveBeenCalled();
+      await filtered.stop();
+    });
+
+    it('logs a bad frame as a warning once a minute', async () => {
+      await subscribed();
+      sockets[0].serverSays('x');
+      sockets[0].serverSays(null);
+      const warn = vi.mocked(bleLog.warn);
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(String(warn.mock.calls[0][0])).toMatch(
+        /^Ignored a malformed frame from Home Assistant/,
+      );
+    });
   });
 
   it('keeps reconnecting when HA restarts before its Bluetooth integration is loaded (B-05)', async () => {
