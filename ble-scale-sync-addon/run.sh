@@ -215,13 +215,13 @@ emit_ble_transport() {
       ;;
     ha-bluetooth)
       # Home Assistant through the Supervisor's websocket proxy, which this
-      # add-on may use because the manifest sets homeassistant_api. The token
-      # is a reference, never the value: the Supervisor issues a new one on
-      # every add-on start, and the app resolves ${...} from its environment
-      # on load. The path must be written out in full: a bare
-      # http://supervisor/core would become ws://supervisor/core.
+      # add-on may use because the manifest sets homeassistant_api. No token is
+      # written: the app reads SUPERVISOR_TOKEN from its environment for exactly
+      # this URL (the Supervisor issues a new one on every add-on start), and
+      # config.yaml never carries or references it. The path must be written out
+      # in full: a bare http://supervisor/core would become ws://supervisor/core.
       printf '%s\n' '  handler: ha-bluetooth' '  ha_bluetooth:' \
-        '    url: "ws://supervisor/core/websocket"' '    token: "${SUPERVISOR_TOKEN}"'
+        '    url: "ws://supervisor/core/websocket"'
       ;;
   esac
   return 0

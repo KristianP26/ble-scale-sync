@@ -985,23 +985,20 @@ describe.skipIf(!HARNESS)(
       const TOKEN = 'ab'.repeat(56);
       const HA = { ...DEFAULTS, ble_transport: 'ha-bluetooth', scale_mac: 'A0:85:61:91:E9:4F' };
 
-      it('reads Home Assistant through the Supervisor with a token reference, not the token', () => {
+      it('reads Home Assistant through the Supervisor and writes no token at all', () => {
         const r = generate({ options: HA, supervisorToken: TOKEN });
         expect(r.text).toContain('    url: "ws://supervisor/core/websocket"\n');
-        expect(r.text).toContain('    token: "${SUPERVISOR_TOKEN}"\n');
+        expect(r.text).not.toContain('SUPERVISOR_TOKEN');
         expect(r.text).not.toContain(TOKEN);
         expect(r.stdout).not.toContain(TOKEN);
         expect(r.stdout).toContain('Bluetooth transport: ha-bluetooth');
 
-        // The app resolves the reference from the environment the Supervisor
-        // gives the add-on, which the restart loop passes on to it.
-        process.env.SUPERVISOR_TOKEN = TOKEN;
+        // The app reads SUPERVISOR_TOKEN itself for this URL, so the file loads
+        // without it in the environment and carries no token.
         const config = expectLoads(r);
         expect(config.ble?.handler).toBe('ha-bluetooth');
-        expect(config.ble?.ha_bluetooth).toMatchObject({
-          url: 'ws://supervisor/core/websocket',
-          token: TOKEN,
-        });
+        expect(config.ble?.ha_bluetooth).toMatchObject({ url: 'ws://supervisor/core/websocket' });
+        expect(config.ble?.ha_bluetooth?.token).toBeUndefined();
         expect(config.ble?.scale_mac).toBe('A0:85:61:91:E9:4F');
       });
 
@@ -1031,7 +1028,8 @@ describe.skipIf(!HARNESS)(
           expect(res.status, res.stdout + res.stderr).toBe(0);
           writeLastKnownWeight(config, 'default', 72.5);
           const saved = readFileSync(config, 'utf8');
-          expect(saved).toContain('token: "${SUPERVISOR_TOKEN}"');
+          expect(saved).toContain('url: "ws://supervisor/core/websocket"');
+          expect(saved).not.toContain('SUPERVISOR_TOKEN');
           expect(saved).toMatch(/last_known_weight: 72.5/);
           expect(saved).not.toContain(TOKEN);
         } finally {
