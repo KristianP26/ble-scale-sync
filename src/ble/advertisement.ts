@@ -9,6 +9,7 @@ import { isForced } from '../scales/force.js';
 import { resolveAdapter } from '../scales/resolve.js';
 import { bleLog, normalizeUuid, BT_BASE_UUID_SUFFIX } from './types.js';
 import { isDebugEnabled } from '../logger.js';
+import { escapeForLog } from '../utils/escape.js';
 
 /**
  * True when the matched device still carries broadcast/service data this
@@ -570,12 +571,7 @@ function blob(data: Buffer): string {
  */
 export function safeName(name: string | undefined): string {
   if (!name) return '';
-  return name.replace(/[\\\x00-\x1f\x7f-\x9f\u2028\u2029]/g, (c) => {
-    const code = c.charCodeAt(0);
-    return code > 0xff
-      ? `\\u${code.toString(16).padStart(4, '0')}`
-      : `\\x${code.toString(16).padStart(2, '0')}`;
-  });
+  return escapeForLog(name);
 }
 
 /**
