@@ -1,0 +1,53 @@
+{
+  "returned": true,
+  "exports": [
+    {
+      "to": "dad/garmin@global:0",
+      "weight": 84,
+      "impedance": 0,
+      "user": "dad",
+      "timestamp": "2026-10-21T04:40:00.000Z",
+      "historical": true
+    }
+  ],
+  "computeMetrics": [
+    {
+      "weight": 84,
+      "impedance": 0,
+      "profile": {
+        "height": 183,
+        "age": 36,
+        "gender": "male",
+        "isAthlete": false,
+        "birthDate": "1990-06-15",
+        "lastKnownWeight": 82
+      }
+    }
+  ],
+  "queued": [],
+  "lastKnownWeightWrites": [],
+  "replayAnchorWrites": [],
+  "updateChecks": 1,
+  "display": [
+    [
+      "beep",
+      600,
+      150,
+      3
+    ]
+  ],
+  "after": {
+    "lastExportedWeights": {},
+    "lastExportedAt": {},
+    "lastKnownWeight": {
+      "dad": 82
+    }
+  },
+  "log": [
+    "[Sync] Dropping a reading of 1.6777215e+134 kg from GoldenScale: not a plausible body weight (0.5-700 kg). It is not exported or remembered.",
+    "[Sync] Dropping 1 stored record(s) from GoldenScale: not a plausible body weight (0.5-700 kg). First: 1e+134 kg.",
+    "[Sync] [historic 2026-10-21T04:40:00.000Z] Measurement: 84.00 kg / 0 Ohm",
+    "[Sync] Exporting to: garmin...",
+    "[Sync] Done."
+  ]
+}

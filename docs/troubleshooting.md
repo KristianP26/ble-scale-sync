@@ -128,6 +128,13 @@ The log shows `QN: fallback: no 0x12 received` and the session ends without a we
 1. Set `ble.qn_protocol_byte` to the `proto` value of a `QN: scale info` line from an earlier weigh-in. If the log has none, try the values in [QN scales](/guide/scales/qn#options).
 2. Weigh in again. The fallback line ends with `(ble.qn_protocol_byte)` and the weight arrives.
 
+### `not a plausible body weight`
+
+The log shows `Dropping a reading of ... kg from ...: not a plausible body weight (0.5-700 kg)` or `Dropping N stored record(s) from ...: not a plausible body weight (0.5-700 kg)`. The frame decoded to a value that is not a body weight, so it is not exported and does not change `last_known_weight`. The scale likely did not send that weight, or the scale model is decoded wrongly.
+
+1. Weigh in again. A single dropped frame is not a problem, and the next good weigh-in exports as usual.
+2. If it repeats, make a [raw capture](#capturing-every-frame-for-a-scale-that-is-not-decoded-correctly) and [report an issue](#report-an-issue) with the scale model.
+
 ## Pairing
 
 ### Beurer or Sanitas pairing problems

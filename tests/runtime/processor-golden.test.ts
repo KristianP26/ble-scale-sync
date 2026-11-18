@@ -210,6 +210,17 @@ const CORPUS: Scenario[] = [
     live: { kg: 120.0, ohm: 0 },
   },
   {
+    id: 'single-implausible-weight',
+    users: ['dad'],
+    yaml: true,
+    exporters: [GARMIN],
+    history: [
+      { kg: 1e134, at: -300 },
+      { kg: 84.0, at: -200 },
+    ],
+    live: { kg: 1.6777215e134, ohm: 480 },
+  },
+  {
     id: 'single-scale-user-slot',
     users: [{ ...USERS.dad, beurer_user_index: 1 }],
     exporters: [GARMIN],
@@ -299,6 +310,14 @@ const CORPUS: Scenario[] = [
     exporters: [GARMIN],
     history: [{ kg: 61.0, at: -300 }],
     live: { kg: 120.0, ohm: 0 },
+  },
+  {
+    id: 'multi-implausible-weight',
+    users: ['dad', 'mom'],
+    yaml: true,
+    exporters: [GARMIN],
+    history: [{ kg: 61.0, at: -300 }],
+    live: { kg: 1.6777215e134, ohm: 480 },
   },
   {
     id: 'multi-stored-attribution',

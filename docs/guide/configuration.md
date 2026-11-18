@@ -131,6 +131,8 @@ out_of_range: skip
 | -------------- | ------- | ----------- |
 | `out_of_range` | `warn`  | What happens to a reading outside the `weight_range` of the user it goes to. `warn` logs and exports it; `skip` logs it and stops before the exporters and the `last_known_weight` update. `skip` suits a household with several users. See [Multi-user](/multi-user). |
 
+Independent of this setting, a reading that is not a number or lies outside 0.5-700 kg is dropped and logged; it is never exported and never changes `last_known_weight`.
+
 ### Users
 
 At least one user is required.

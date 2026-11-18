@@ -1200,6 +1200,136 @@ describe('processReading: out_of_range', () => {
   });
 });
 
+// ─── Implausible weight (ADR D108) ──────────────────────────────────────────
+
+describe('processReading: implausible weight', () => {
+  const warnings = (): string => warnSpy.mock.calls.map((c) => c.map(String).join(' ')).join(' | ');
+
+  it.each([Number.NaN, Infinity, -1, 0, 0.49, 700.01, 1.6777215e134])(
+    'single-user: drops %s kg and leaves nothing behind',
+    async (weight) => {
+      const ctx = makeCtx([dad]);
+      const ok = await processReading(ctx, rawReading({ weight, impedance: 0 }), {
+        singleUserExporters: [fakeExporter()],
+      });
+
+      expect(ok).toBe(true);
+      expect(dispatchExports).not.toHaveBeenCalled();
+      expect(ctx.lastExportedWeights.has('dad')).toBe(false);
+      expect(updateLastKnownWeight).not.toHaveBeenCalled();
+      expect(checkAndLogUpdate).not.toHaveBeenCalled();
+      expect(warnings()).toMatch(
+        /Dropping a reading of .* kg from FakeScale: not a plausible body weight \(0\.5-700 kg\)/,
+      );
+    },
+  );
+
+  it.each([0.5, 700])('single-user: exports the band edge %s kg', async (weight) => {
+    const ctx = makeCtx([dad]);
+    await processReading(ctx, rawReading({ weight, impedance: 0 }), {
+      singleUserExporters: [fakeExporter()],
+    });
+
+    expect(dispatchExports).toHaveBeenCalledTimes(1);
+    expect(warnings()).not.toMatch(/not a plausible body weight/);
+  });
+
+  it('multi-user: a corrupt weight is not matched and does not become last_known_weight', async () => {
+    const ctx = makeCtx([dad, mom], { configSource: 'yaml', configPath: '/tmp/config.yaml' });
+    const ok = await processReading(ctx, rawReading({ weight: 1e134, impedance: 0 }), {
+      getExportersForUser: () => [fakeExporter()],
+    });
+
+    expect(ok).toBe(true);
+    expect(dispatchExports).not.toHaveBeenCalled();
+    expect(updateLastKnownWeight).not.toHaveBeenCalled();
+    expect(ctx.config.users[0].last_known_weight).toBe(82);
+    expect(warnings()).not.toMatch(/\[UserMatch\]/);
+  });
+
+  it('a corrupt live frame next to a plausible stored record exports only the record', async () => {
+    const ctx = makeCtx([dad]);
+    const raw: RawReading = {
+      reading: { weight: 1e134, impedance: 0 },
+      adapter: fakeAdapter(),
+      history: [{ weight: 82.5, impedance: 480, timestamp: new Date('2025-07-01T07:00:00Z') }],
+    };
+    await processReading(ctx, raw, { singleUserExporters: [fakeExporter()] });
+
+    expect(dispatchExports).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(dispatchExports).mock.calls[0][2]?.historical).toBe(true);
+  });
+
+  it('beeps for a dropped live frame and never shows it, but stays quiet for a stored one', async () => {
+    const display = fakeDisplay();
+    const ctx = makeCtx([dad], { display });
+    await processReading(ctx, rawReading({ weight: 1e134, impedance: 0 }), {
+      singleUserExporters: [fakeExporter()],
+    });
+    expect(display.beep).toHaveBeenCalledTimes(1);
+    expect(display.beep).toHaveBeenCalledWith(600, 150, 3);
+    expect(display.reading).not.toHaveBeenCalled();
+
+    display.beep.mockClear();
+    const raw: RawReading = {
+      reading: { weight: 82.5, impedance: 480 },
+      adapter: fakeAdapter(),
+      history: [{ weight: 1e134, impedance: 0, timestamp: new Date('2025-07-01T07:00:00Z') }],
+    };
+    await processReading(ctx, raw, { singleUserExporters: [fakeExporter()] });
+    expect(display.beep).not.toHaveBeenCalled();
+    expect(display.reading).toHaveBeenCalledTimes(1);
+  });
+
+  it('dry run: a corrupt frame prints no measurement', async () => {
+    const ctx = makeCtx([dad]);
+    await processReading(ctx, rawReading({ weight: 1e134, impedance: 0 }));
+
+    const out = logSpy.mock.calls.map((c) => c.map(String).join(' ')).join('\n');
+    expect(out).not.toMatch(/Dry run\./);
+    expect(out).not.toMatch(/Measurement:/);
+  });
+
+  // A frame dropped here leaves a fresh, valid frame of the same cycle as the
+  // newest live one, and that one is a real weigh-in: it is handled as such.
+  it('multi-user: a corrupt live frame leaves a fresh valid frame to be exported as live', async () => {
+    const ctx = makeCtx([dad, mom]);
+    const raw: RawReading = {
+      reading: { weight: 1e134, impedance: 0 },
+      adapter: fakeAdapter(),
+      history: [{ weight: 82.4, impedance: 480, timestamp: new Date() }],
+    };
+    await processReading(ctx, raw, { getExportersForUser: () => [fakeExporter()] });
+
+    expect(dispatchExports).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(dispatchExports).mock.calls[0][2]?.historical).toBeUndefined();
+  });
+
+  it('logs one line for a run of corrupt stored records', async () => {
+    const ctx = makeCtx([dad]);
+    const at = new Date('2025-07-01T07:00:00Z');
+    const raw: RawReading = {
+      reading: { weight: 82.5, impedance: 480 },
+      adapter: fakeAdapter(),
+      history: Array.from({ length: 5 }, () => ({
+        weight: 1e134,
+        impedance: 0,
+        timestamp: at,
+        fromMemory: true,
+      })),
+    };
+    await processReading(ctx, raw, { singleUserExporters: [fakeExporter()] });
+
+    const dropped = warnSpy.mock.calls
+      .map((c) => c.map(String).join(' '))
+      .filter((l) => l.includes('Dropping'));
+    expect(dropped).toHaveLength(1);
+    expect(dropped[0]).toMatch(/Dropping 5 stored record\(s\) from FakeScale: not a plausible/);
+    expect(dispatchExports).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(dispatchExports).mock.calls[0][2]?.historical).toBeUndefined();
+  });
+});
+
 describe('failed exports are queued for a later cycle (#412)', () => {
   let dir: string;
   let queuePath: string;
