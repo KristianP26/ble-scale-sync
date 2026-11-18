@@ -79,6 +79,20 @@ export function isFromEnvFile(name: string): boolean {
 const ENV_REF_REGEX = /\$(\$?)\{([^}]+)}/g;
 
 /**
+ * Credentials the Home Assistant Supervisor puts in an add-on's environment
+ * (the same value under both names). A config.yaml in /share can be written by
+ * other add-ons, so a reference to either would hand the add-on's Supervisor
+ * access to whatever URL or header the reference lands in.
+ */
+export const BLOCKED_ENV_REFS: readonly string[] = ['SUPERVISOR_TOKEN', 'HASSIO_TOKEN'];
+
+function describePath(path: readonly PropertyKey[]): string {
+  return path
+    .map((p, i) => (typeof p === 'number' ? `[${p}]` : `${i ? '.' : ''}${String(p)}`))
+    .join('');
+}
+
+/**
  * Deep-walk a parsed YAML object and replace `${VAR}` references with
  * `process.env[VAR]`. Throws if a referenced variable is not defined.
  *
@@ -139,6 +153,16 @@ function resolveAt<T>(obj: T, path: PropertyKey[], wholeRefs: Map<string, string
     if (whole && wholeRefs) wholeRefs.set(configPathKey(path), whole[1]);
     return obj.replace(ENV_REF_REGEX, (match, escaped: string, varName: string) => {
       if (escaped) return match.slice(1);
+      // Case-insensitive: Windows reads the environment that way.
+      if (BLOCKED_ENV_REFS.includes(varName.toUpperCase())) {
+        const at = path.length > 0 ? ` (at ${describePath(path)})` : '';
+        throw new Error(
+          `Environment variable '${varName}' cannot be referenced in config.yaml${at}: it is a ` +
+            'Home Assistant Supervisor credential and would be passed on to whatever this value ' +
+            'feeds. Remove the reference. For ble.handler ha-bluetooth with url ' +
+            'ws://supervisor/core/websocket, leave out token: the app reads it itself.',
+        );
+      }
       const value = process.env[varName];
       if (value === undefined) {
         throw new Error(

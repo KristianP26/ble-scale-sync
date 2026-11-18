@@ -248,7 +248,7 @@ kill -HUP NODE_PID                     # any other node process
 
 ### Secret references
 
-Any value can be a `${ENV_VAR}` reference, taken from the environment or from the `.env` next to `config.yaml`. Loading fails if a referenced variable is not set. A reference that is the whole value also works for numbers and booleans (`port: ${MQTT_PORT}`). Write `$${...}` for a literal `${...}`. Variables set in the real environment win over `.env`.
+Any value can be a `${ENV_VAR}` reference, taken from the environment or from the `.env` next to `config.yaml`. Loading fails if a referenced variable is not set. A reference that is the whole value also works for numbers and booleans (`port: ${MQTT_PORT}`). Write `$${...}` for a literal `${...}`. Variables set in the real environment win over `.env`. `SUPERVISOR_TOKEN` and `HASSIO_TOKEN`, the credentials the Home Assistant Supervisor gives the add-on, cannot be referenced; loading fails with an error.
 
 ```yaml
 global_exporters:
