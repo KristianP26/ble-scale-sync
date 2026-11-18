@@ -2,6 +2,8 @@ import type { BleChar, BleDevice } from '../session/ports.js';
 import { withTimeout, bleLog } from '../types.js';
 import { COMMAND_TIMEOUT_MS, type Topics } from './topics.js';
 import type { MqttClient } from './client.js';
+import { MAX_PEER_OBJECT_BYTES, parsePeerObject, peerText } from '../peer-input.js';
+import { parseConnectedPayload, type ConnectedChar } from './payloads.js';
 
 /** Implements BleChar from session/ports.ts over MQTT topics. */
 export class MqttBleChar implements BleChar {
@@ -121,22 +123,23 @@ interface ProxyError {
  * blank payload, which gets a placeholder so the log is not a dangling
  * "ESP32 error:".
  */
-function parseProxyError(raw: string): ProxyError {
-  if (raw.startsWith('{')) {
-    try {
-      const data = JSON.parse(raw) as Record<string, unknown>;
-      if (typeof data.op === 'string') {
-        return {
-          op: data.op,
-          message: typeof data.message === 'string' && data.message ? data.message : '(no detail)',
-          address: typeof data.address === 'string' ? data.address : undefined,
-        };
-      }
-    } catch {
-      // Not JSON after all: treat it as legacy text below.
+function parseProxyError(raw: Buffer): ProxyError {
+  if (raw[0] === 0x7b /* { */) {
+    const parsed = parsePeerObject(raw, MAX_PEER_OBJECT_BYTES);
+    // Not JSON after all falls through to legacy text below.
+    if (parsed.ok && typeof parsed.value.op === 'string') {
+      const data = parsed.value;
+      return {
+        op: data.op as string,
+        message:
+          typeof data.message === 'string' && data.message
+            ? peerText(data.message, 200)
+            : '(no detail)',
+        address: typeof data.address === 'string' ? data.address : undefined,
+      };
     }
   }
-  return { message: raw || '(no detail)' };
+  return { message: peerText(raw, 200) || '(no detail)' };
 }
 
 /** Send GATT connect command over MQTT and wait for the connected response with char list. */
@@ -150,30 +153,26 @@ export async function mqttGattConnect(
   await client.subscribeAsync(t.disconnected);
   await client.subscribeAsync(t.error);
 
-  let resolveResponse!: (v: { chars: Array<{ uuid: string; properties: string[] }> }) => void;
+  let resolveResponse!: (v: { chars: ConnectedChar[] }) => void;
   let rejectResponse!: (err: Error) => void;
-  const responsePromise = new Promise<{ chars: Array<{ uuid: string; properties: string[] }> }>(
-    (resolve, reject) => {
-      resolveResponse = resolve;
-      rejectResponse = reject;
-    },
-  );
+  const responsePromise = new Promise<{ chars: ConnectedChar[] }>((resolve, reject) => {
+    resolveResponse = resolve;
+    rejectResponse = reject;
+  });
   const handler = (topic: string, payload: Buffer) => {
     if (topic === t.connected) {
-      let data: Record<string, unknown>;
-      try {
-        data = JSON.parse(payload.toString());
-      } catch (err) {
-        rejectResponse(new Error(`Invalid connected payload from ESP32: ${err}`));
+      const parsed = parseConnectedPayload(payload);
+      if (!parsed.ok) {
+        rejectResponse(new Error(`Invalid connected payload from ESP32: ${parsed.why}`));
         return;
       }
       // Ignore autonomous connects from ESP32 — those are handled by
       // ReadingWatcher.handleAutonomousConnect, not mqttGattConnect (#201).
-      if (data.autonomous) return;
-      resolveResponse(data as { chars: Array<{ uuid: string; properties: string[] }> });
+      if (parsed.value.autonomous) return;
+      resolveResponse({ chars: parsed.value.chars });
     }
     if (topic === t.error) {
-      const err = parseProxyError(payload.toString());
+      const err = parseProxyError(payload);
       // Current firmware says which operation and device an error belongs to.
       // The topic is shared, so a scan or auto-connect error, or one for a
       // different scale, must not fail this connect. Plain-text payloads come
@@ -186,7 +185,7 @@ export async function mqttGattConnect(
     }
   };
   client.on('message', handler);
-  let response: { chars: Array<{ uuid: string; properties: string[] }> };
+  let response: { chars: ConnectedChar[] };
   try {
     client
       .publishAsync(t.connect, JSON.stringify({ address, addr_type: addrType }))
@@ -228,7 +227,7 @@ export async function mqttGattDisconnect(client: MqttClient, t: Topics): Promise
 export function buildCharMapFromPayload(
   client: MqttClient,
   t: Topics,
-  chars: Array<{ uuid: string; properties: string[] }>,
+  chars: ConnectedChar[],
 ): { charMap: Map<string, BleChar>; device: MqttBleDevice } {
   const charMap = new Map<string, BleChar>();
   for (const char of chars) {

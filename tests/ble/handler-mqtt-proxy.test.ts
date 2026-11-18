@@ -12,6 +12,7 @@ import { adapters as realAdapters } from '../../src/scales/index.js';
 import { MiScale2Adapter } from '../../src/scales/mi-scale-2.js';
 import { applyForcedAdapter } from '../../src/scales/force.js';
 import { bleLog, POST_READING_RECONNECT_MS, SessionTimeoutError } from '../../src/ble/types.js';
+import { _resetPeerInput } from '../../src/ble/peer-input.js';
 import { bleFailureKind } from '../../src/ble/failure-kind.js';
 import { M1690_PROTOCOL_VERSION_REPLY } from '../helpers/yunmai-m1690.js';
 import {
@@ -4120,3 +4121,235 @@ describe('mqtt-proxy GATT session policy', () => {
 
 /** What nextReading resolves with, as far as these tests look at it. */
 type RawReadingLike = { reading: ScaleReading };
+
+// ─── Malformed input from the proxy topics ───────────────────────────────────
+
+describe('malformed input from the proxy topics', () => {
+  const T = {
+    base: PREFIX,
+    status: `${PREFIX}/status`,
+    scanResults: `${PREFIX}/scan/results`,
+    config: `${PREFIX}/config`,
+    beep: `${PREFIX}/beep`,
+    connect: `${PREFIX}/connect`,
+    connected: `${PREFIX}/connected`,
+    disconnect: `${PREFIX}/disconnect`,
+    disconnected: `${PREFIX}/disconnected`,
+    error: `${PREFIX}/error`,
+  };
+  const MALFORMED: Array<[string, string | Buffer]> = [
+    ['null', 'null'],
+    ['an empty array', '[]'],
+    ['a string', '"x"'],
+    ['a number', '5'],
+    ['true', 'true'],
+    ['an empty object', '{}'],
+    ['an autonomous connect without chars', '{"autonomous":true}'],
+    ['an autonomous connect with a numeric address', '{"autonomous":true,"address":5}'],
+    ['a char that is null', '{"chars":[null]}'],
+    ['binary garbage', Buffer.from([0xff, 0xfe, 0x00, 0x7b, 0x80, 0x1b])],
+    ['a 70 KB string', JSON.stringify('x'.repeat(70 * 1024))],
+  ];
+  const TOPICS = [
+    'connected',
+    'scan/results',
+    'status',
+    'error',
+    'disconnected',
+    `notify/${GATT_NOTIFY_UUID}`,
+  ];
+
+  beforeEach(() => {
+    _resetPeerInput();
+    vi.spyOn(bleLog, 'warn').mockImplementation(() => {});
+    vi.spyOn(bleLog, 'info').mockImplementation(() => {});
+    vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+  });
+
+  /** Run a host-initiated GATT connect; `reply` plays the ESP32's answer to the connect command. */
+  async function connectWith(reply: string | Buffer, drive?: () => void) {
+    const { mqttGattConnect } = await import('../../src/ble/handler-mqtt-proxy/gatt.js');
+    let thrown: unknown;
+    mockClient.publishAsync = vi.fn(async (topic: string) => {
+      if (topic === T.connect) {
+        queueMicrotask(() => {
+          try {
+            mockClient._simulateMessage(T.connected, reply);
+            drive?.();
+          } catch (err) {
+            thrown = err;
+          }
+        });
+      }
+    });
+    const result = mqttGattConnect(
+      mockClient as unknown as Parameters<typeof mqttGattConnect>[0],
+      T,
+      'AA:BB:CC:DD:EE:FF',
+      0,
+    );
+    return { result, thrown: () => thrown };
+  }
+
+  it('a live null on connected during mqttGattConnect rejects the connect and throws nothing', async () => {
+    const { result, thrown } = await connectWith('null');
+    await expect(result).rejects.toThrow(/Invalid connected payload from ESP32/);
+    expect(thrown()).toBeUndefined();
+  });
+
+  it.each(MALFORMED)('mqttGattConnect survives %s on connected', async (_label, payload) => {
+    const { result, thrown } = await connectWith(payload);
+    await result.catch(() => {});
+    expect(thrown()).toBeUndefined();
+  });
+
+  it('keeps only the characteristics whose uuid is safe to put in a topic', async () => {
+    const { result } = await connectWith(
+      JSON.stringify({
+        chars: [
+          { uuid: '#', properties: ['notify'] },
+          { uuid: 'a/b', properties: [] },
+          { uuid: '+', properties: [] },
+          { uuid: GATT_NOTIFY_UUID, properties: ['notify'] },
+        ],
+      }),
+    );
+    const { charMap } = await result;
+    expect([...charMap.keys()]).toEqual([GATT_NOTIFY_UUID]);
+  });
+
+  it.each(MALFORMED)('a running watcher survives %s on every topic', async (_label, payload) => {
+    const watcher = new ReadingWatcher(MQTT_PROXY_CONFIG, [createBroadcastAdapter()]);
+    await watcher.start();
+    for (const topic of TOPICS) {
+      expect(() => mockClient._simulateMessage(`${PREFIX}/${topic}`, payload)).not.toThrow();
+    }
+    // Still alive: a valid batch afterwards is delivered.
+    mockClient._simulateMessage(
+      T.scanResults,
+      JSON.stringify([
+        {
+          address: 'AA:BB:CC:DD:EE:FF',
+          name: '',
+          rssi: -50,
+          services: [],
+          manufacturer_id: 0xffff,
+          manufacturer_data: mfrHex(7550),
+        },
+      ]),
+    );
+    expect((await watcher.nextReading()).reading.weight).toBe(75.5);
+    await watcher.stop();
+  });
+
+  it.each(MALFORMED)('mqttScan survives %s on scan/results', async (_label, payload) => {
+    const { mqttScan } = await import('../../src/ble/handler-mqtt-proxy/scan.js');
+    mockClient.subscribeAsync = vi.fn(async (topic: string) => {
+      if (topic === T.scanResults) {
+        queueMicrotask(() => {
+          // A valid batch follows, so a payload that is only skipped still ends the scan.
+          expect(() => mockClient._simulateMessage(T.scanResults, payload)).not.toThrow();
+          mockClient._simulateMessage(T.scanResults, '[]');
+        });
+      }
+      return [];
+    });
+    await mqttScan(mockClient as unknown as Parameters<typeof mqttScan>[0], T).catch(() => {});
+  });
+
+  it('drops scan entries that are not objects or have no valid MAC and keeps the rest', async () => {
+    const watcher = new ReadingWatcher(MQTT_PROXY_CONFIG, [createBroadcastAdapter()]);
+    await watcher.start();
+    const frame = (address: unknown, kg: number) => ({
+      address,
+      name: '',
+      rssi: -50,
+      services: [],
+      manufacturer_id: 0xffff,
+      manufacturer_data: mfrHex(kg),
+    });
+    mockClient._simulateMessage(
+      T.scanResults,
+      JSON.stringify([
+        null,
+        { address: 'not-a-mac' },
+        frame('AA:BB:CC:DD:EE:FF\x1b[2J', 6000),
+        frame('11:22:33:44:55:66', 7550),
+      ]),
+    );
+    expect((await watcher.nextReading()).reading.weight).toBe(75.5);
+    const { getDiscoveredMacs } = await import('../../src/ble/handler-mqtt-proxy/client.js');
+    expect(getDiscoveredMacs()).toEqual(['11:22:33:44:55:66']);
+    for (const call of (mockClient.publishAsync as Mock).mock.calls) {
+      if (call[0] === `${PREFIX}/config`) expect(String(call[1])).not.toContain('x1b');
+    }
+    await watcher.stop();
+  });
+
+  // A parser that throws on one entry must cost that entry, not the batch. The
+  // real adapters never throw (0 of 43 on every frame length tried), so this
+  // proves the isolation with a fake adapter, not a defect in a real one.
+  it('isolates an entry that makes the adapter throw from the rest of the batch', async () => {
+    const watcher = new ReadingWatcher(MQTT_PROXY_CONFIG, [createBroadcastAdapter()]);
+    await watcher.start();
+    mockClient._simulateMessage(
+      T.scanResults,
+      JSON.stringify([
+        {
+          address: 'AA:BB:CC:DD:EE:01',
+          name: '',
+          rssi: -50,
+          services: [],
+          manufacturer_id: 0xffff,
+          manufacturer_data: 'ff',
+        },
+        {
+          address: 'AA:BB:CC:DD:EE:02',
+          name: '',
+          rssi: -50,
+          services: [],
+          manufacturer_id: 0xffff,
+          manufacturer_data: mfrHex(7550),
+        },
+      ]),
+    );
+    expect((await watcher.nextReading()).reading.weight).toBe(75.5);
+    await watcher.stop();
+  });
+
+  it('shows a status payload with control characters as one escaped line', async () => {
+    const watcher = new ReadingWatcher(MQTT_PROXY_CONFIG, [createBroadcastAdapter()]);
+    await watcher.start();
+    mockClient._simulateMessage(T.status, 'online\r\n2026-11-18 [BLE] FAKE\x1b[2J');
+    const line = vi
+      .mocked(bleLog.info)
+      .mock.calls.map((c) => String(c[0]))
+      .find((l) => l.startsWith('ESP32 status:'))!;
+    expect(line).toBeDefined();
+    expect(line).not.toMatch(/[\r\n\x1b]/);
+    expect(line).toContain('\\x0d\\x0a');
+    await watcher.stop();
+  });
+
+  it('shows an error payload with control characters escaped', async () => {
+    mockClient.publishAsync = vi.fn(async (topic: string) => {
+      if (topic === T.connect) {
+        queueMicrotask(() =>
+          mockClient._simulateMessage(
+            T.error,
+            JSON.stringify({ op: 'connect', message: 'bad\nline\x1b[2J' }),
+          ),
+        );
+      }
+    });
+    const { mqttGattConnect } = await import('../../src/ble/handler-mqtt-proxy/gatt.js');
+    await expect(
+      mqttGattConnect(
+        mockClient as unknown as Parameters<typeof mqttGattConnect>[0],
+        T,
+        'AA:BB:CC:DD:EE:FF',
+        0,
+      ),
+    ).rejects.toThrow('ESP32 error: bad\\x0aline\\x1b[2J');
+  });
+});

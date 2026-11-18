@@ -15,6 +15,11 @@ const MAC_REGEX = /^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$/;
 const CB_UUID_REGEX =
   /^([0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}|[0-9A-Fa-f]{32})$/;
 
+/** True when `v` is a string MAC address (XX:XX:XX:XX:XX:XX), the form the ESP32 proxy reports. */
+export function isMacAddress(v: unknown): v is string {
+  return typeof v === 'string' && MAC_REGEX.test(v);
+}
+
 /** Human-readable hint reused in every "invalid scale id" message. */
 export const SCALE_ID_HINT = 'a MAC address (XX:XX:XX:XX:XX:XX) or CoreBluetooth UUID';
 

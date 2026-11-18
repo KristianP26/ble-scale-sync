@@ -135,6 +135,13 @@ The log shows `Dropping a reading of ... kg from ...: not a plausible body weigh
 1. Weigh in again. A single dropped frame is not a problem, and the next good weigh-in exports as usual.
 2. If it repeats, make a [raw capture](#capturing-every-frame-for-a-scale-that-is-not-decoded-correctly) and [report an issue](#report-an-issue) with the scale model.
 
+### `Ignored a malformed ... from the ESP32 proxy`
+
+The log shows `Ignored a malformed scan batch from the ESP32 proxy: ...` or a similar line with another message name. The server dropped a message under `topic_prefix` that is not what the firmware publishes. Only the first one each minute is a warning.
+
+1. Check that no other client publishes under the `topic_prefix` of this proxy.
+2. If the board runs firmware from another release than the server, [flash it again](/guide/esp32-proxy#flashing-the-firmware) from the same release.
+
 ## Pairing
 
 ### Beurer or Sanitas pairing problems
