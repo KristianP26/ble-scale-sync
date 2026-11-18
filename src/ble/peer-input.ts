@@ -135,6 +135,16 @@ export function warnThrottled(key: string, text: string, options: ThrottleOption
   log.warn(text + more);
 }
 
+/**
+ * True for a message the broker replays from its store after a subscribe. A live
+ * publish has `retain: false` even when the publisher set the flag, so this
+ * tells a stored copy from a current one. Null-safe: test doubles and older
+ * callers pass no packet.
+ */
+export function isRetained(packet?: { retain?: boolean }): boolean {
+  return packet?.retain === true;
+}
+
 /** Test seam: the throttle state is module-wide. */
 export function _resetPeerInput(): void {
   throttled.clear();

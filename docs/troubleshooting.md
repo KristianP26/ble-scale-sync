@@ -142,6 +142,8 @@ The log shows `Ignored a malformed scan batch from the ESP32 proxy: ...` or a si
 1. Check that no other client publishes under the `topic_prefix` of this proxy.
 2. If the board runs firmware from another release than the server, [flash it again](/guide/esp32-proxy#flashing-the-firmware) from the same release.
 
+A line `Failed to handle a ... from the ESP32 proxy: ...` is a different case: the message was well formed and handling it failed. [Report an issue](#report-an-issue) with the line, a `DEBUG=true` log and the scale model.
+
 ## Pairing
 
 ### Beurer or Sanitas pairing problems

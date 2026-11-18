@@ -13,6 +13,7 @@ import { MiScale2Adapter } from '../../src/scales/mi-scale-2.js';
 import { applyForcedAdapter } from '../../src/scales/force.js';
 import { bleLog, POST_READING_RECONNECT_MS, SessionTimeoutError } from '../../src/ble/types.js';
 import { _resetPeerInput } from '../../src/ble/peer-input.js';
+import { topics } from '../../src/ble/handler-mqtt-proxy/topics.js';
 import { bleFailureKind } from '../../src/ble/failure-kind.js';
 import { M1690_PROTOCOL_VERSION_REPLY } from '../helpers/yunmai-m1690.js';
 import {
@@ -30,6 +31,11 @@ vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
 
 // ─── Mock MQTT client ────────────────────────────────────────────────────────
 
+/** The slice of an MQTT publish packet the handlers look at. */
+interface MockPacket {
+  retain?: boolean;
+}
+
 interface MockMqttClient {
   connected: boolean;
   on: Mock;
@@ -41,29 +47,36 @@ interface MockMqttClient {
   publish: Mock;
   publishAsync: Mock;
   endAsync: Mock;
-  _listeners: Map<string, Array<(topic: string, payload: Buffer) => void>>;
-  _simulateMessage: (topic: string, payload: string | Buffer) => void;
+  _listeners: Map<string, Array<(topic: string, payload: Buffer, packet?: MockPacket) => void>>;
+  _simulateMessage: (topic: string, payload: string | Buffer, packet?: MockPacket) => void;
 }
 
 function createMockMqttClient(): MockMqttClient {
-  const listeners = new Map<string, Array<(topic: string, payload: Buffer) => void>>();
+  const listeners = new Map<
+    string,
+    Array<(topic: string, payload: Buffer, packet?: MockPacket) => void>
+  >();
 
   const client: MockMqttClient = {
     connected: true,
     _listeners: listeners,
-    on: vi.fn((event: string, handler: (topic: string, payload: Buffer) => void) => {
-      if (!listeners.has(event)) listeners.set(event, []);
-      listeners.get(event)!.push(handler);
-      return client;
-    }),
-    removeListener: vi.fn((event: string, handler: (topic: string, payload: Buffer) => void) => {
-      const handlers = listeners.get(event);
-      if (handlers) {
-        const idx = handlers.indexOf(handler);
-        if (idx >= 0) handlers.splice(idx, 1);
-      }
-      return client;
-    }),
+    on: vi.fn(
+      (event: string, handler: (topic: string, payload: Buffer, packet?: MockPacket) => void) => {
+        if (!listeners.has(event)) listeners.set(event, []);
+        listeners.get(event)!.push(handler);
+        return client;
+      },
+    ),
+    removeListener: vi.fn(
+      (event: string, handler: (topic: string, payload: Buffer, packet?: MockPacket) => void) => {
+        const handlers = listeners.get(event);
+        if (handlers) {
+          const idx = handlers.indexOf(handler);
+          if (idx >= 0) handlers.splice(idx, 1);
+        }
+        return client;
+      },
+    ),
     subscribe: vi.fn(() => client),
     subscribeAsync: vi.fn(async () => []),
     unsubscribe: vi.fn(() => client),
@@ -71,11 +84,11 @@ function createMockMqttClient(): MockMqttClient {
     publish: vi.fn(() => client),
     publishAsync: vi.fn(async () => undefined),
     endAsync: vi.fn(async () => undefined),
-    _simulateMessage(topic: string, payload: string | Buffer) {
+    _simulateMessage(topic: string, payload: string | Buffer, packet?: MockPacket) {
       const buf = Buffer.isBuffer(payload) ? payload : Buffer.from(payload);
       const handlers = listeners.get('message') ?? [];
       for (const handler of [...handlers]) {
-        handler(topic, buf);
+        handler(topic, buf, packet);
       }
     },
   };
@@ -4314,6 +4327,9 @@ describe('malformed input from the proxy topics', () => {
       ]),
     );
     expect((await watcher.nextReading()).reading.weight).toBe(75.5);
+    // A throw after the entry parsed is a failure of ours, never "malformed peer data".
+    const warned = vi.mocked(bleLog.warn).mock.calls.map((c) => String(c[0]));
+    expect(warned.some((l) => l.includes('Ignored a malformed scan entry'))).toBe(false);
     await watcher.stop();
   });
 
@@ -4351,5 +4367,151 @@ describe('malformed input from the proxy topics', () => {
         0,
       ),
     ).rejects.toThrow('ESP32 error: bad\\x0aline\\x1b[2J');
+  });
+});
+
+// ─── Retained messages and listener guards ───────────────────────────────────
+
+describe('retained messages and listener guards', () => {
+  const RETAINED = { retain: true };
+  const T = topics(MQTT_PROXY_CONFIG.topic_prefix, MQTT_PROXY_CONFIG.device_id);
+  const frame = (kg: number) =>
+    JSON.stringify([
+      {
+        address: 'AA:BB:CC:DD:EE:FF',
+        name: '',
+        rssi: -50,
+        services: [],
+        manufacturer_id: 0xffff,
+        manufacturer_data: mfrHex(kg),
+      },
+    ]);
+
+  beforeEach(() => {
+    _resetPeerInput();
+    vi.spyOn(bleLog, 'warn').mockImplementation(() => {});
+    vi.spyOn(bleLog, 'info').mockImplementation(() => {});
+    vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+  });
+
+  it('a watcher queues a live batch and ignores a retained one', async () => {
+    const watcher = new ReadingWatcher(MQTT_PROXY_CONFIG, [createBroadcastAdapter()]);
+    await watcher.start();
+    mockClient._simulateMessage(T.scanResults, frame(6000), RETAINED);
+    mockClient._simulateMessage(T.scanResults, frame(7550), { retain: false });
+    expect((await watcher.nextReading()).reading.weight).toBe(75.5);
+    await watcher.stop();
+  });
+
+  it('a watcher ignores a retained connected payload and still logs a retained status', async () => {
+    const watcher = new ReadingWatcher(MQTT_PROXY_CONFIG, [createGattAdapter()]);
+    await watcher.start();
+    mockClient._simulateMessage(
+      T.connected,
+      JSON.stringify({
+        autonomous: true,
+        address: 'AA:BB:CC:DD:EE:FF',
+        chars: [{ uuid: GATT_NOTIFY_UUID, properties: ['notify'] }],
+      }),
+      RETAINED,
+    );
+    expect(
+      vi.mocked(bleLog.info).mock.calls.some((c) => String(c[0]).includes('autonomous connect')),
+    ).toBe(false);
+    mockClient._simulateMessage(T.status, 'online', RETAINED);
+    expect(
+      vi.mocked(bleLog.info).mock.calls.some((c) => String(c[0]) === 'ESP32 status: online'),
+    ).toBe(true);
+    await watcher.stop();
+  });
+
+  it('logs a replayed status once, and a changed one again', async () => {
+    const watcher = new ReadingWatcher(MQTT_PROXY_CONFIG, [createBroadcastAdapter()]);
+    await watcher.start();
+    const infoStatus = () =>
+      vi.mocked(bleLog.info).mock.calls.filter((c) => String(c[0]).startsWith('ESP32 status:'));
+    mockClient._simulateMessage(T.status, 'online', RETAINED);
+    mockClient._simulateMessage(T.status, 'online', RETAINED);
+    mockClient._simulateMessage(T.status, 'online', RETAINED);
+    expect(infoStatus()).toHaveLength(1);
+    mockClient._simulateMessage(T.status, 'offline');
+    mockClient._simulateMessage(T.status, 'online');
+    expect(infoStatus()).toHaveLength(3);
+    await watcher.stop();
+  });
+
+  it('a single-shot scan waits past a retained null for the live batch', async () => {
+    const { mqttScan } = await import('../../src/ble/handler-mqtt-proxy/scan.js');
+    mockClient.subscribeAsync = vi.fn(async (topic: string) => {
+      if (topic === T.scanResults) {
+        queueMicrotask(() => {
+          mockClient._simulateMessage(T.scanResults, 'null', RETAINED);
+          mockClient._simulateMessage(T.scanResults, frame(6000), RETAINED);
+          mockClient._simulateMessage(T.scanResults, frame(7550));
+        });
+      }
+      return [];
+    });
+    const entries = await mqttScan(mockClient as unknown as Parameters<typeof mqttScan>[0], T);
+    expect(entries).toHaveLength(1);
+    expect(entries[0].manufacturer_data).toBe(mfrHex(7550));
+  });
+
+  it('mqttGattConnect does not take a retained connected payload for its answer', async () => {
+    const { mqttGattConnect } = await import('../../src/ble/handler-mqtt-proxy/gatt.js');
+    const chars = [{ uuid: GATT_NOTIFY_UUID, properties: ['notify'] }];
+    mockClient.publishAsync = vi.fn(async (topic: string) => {
+      if (topic === T.connect) {
+        queueMicrotask(() => {
+          mockClient._simulateMessage(T.connected, 'null', RETAINED);
+          mockClient._simulateMessage(T.connected, JSON.stringify({ chars }));
+        });
+      }
+    });
+    const { charMap } = await mqttGattConnect(
+      mockClient as unknown as Parameters<typeof mqttGattConnect>[0],
+      T,
+      'AA:BB:CC:DD:EE:FF',
+      0,
+    );
+    expect([...charMap.keys()]).toEqual([GATT_NOTIFY_UUID]);
+  });
+
+  it('a retained disconnected does not end a session', async () => {
+    const { MqttBleDevice } = await import('../../src/ble/handler-mqtt-proxy/gatt.js');
+    const device = new MqttBleDevice(
+      mockClient as unknown as ConstructorParameters<typeof MqttBleDevice>[0],
+      T.disconnected,
+    );
+    const onDisconnect = vi.fn();
+    device.onDisconnect(onDisconnect);
+    mockClient._simulateMessage(T.disconnected, '', RETAINED);
+    expect(onDisconnect).not.toHaveBeenCalled();
+    mockClient._simulateMessage(T.disconnected, '');
+    expect(onDisconnect).toHaveBeenCalledTimes(1);
+  });
+
+  it('an exception from the adapter parser does not escape the notification listener', async () => {
+    const { MqttBleChar } = await import('../../src/ble/handler-mqtt-proxy/gatt.js');
+    const char = new MqttBleChar(
+      mockClient as unknown as ConstructorParameters<typeof MqttBleChar>[0],
+      PREFIX,
+      GATT_NOTIFY_UUID,
+    );
+    const onData = vi.fn(() => {
+      throw new TypeError('parser blew up');
+    });
+    await char.subscribe(onData);
+    expect(() =>
+      mockClient._simulateMessage(`${PREFIX}/notify/${GATT_NOTIFY_UUID}`, Buffer.from([1])),
+    ).not.toThrow();
+    expect(onData).toHaveBeenCalledTimes(1);
+    expect(
+      vi
+        .mocked(bleLog.warn)
+        .mock.calls.some((c) =>
+          String(c[0]).startsWith('Failed to handle a notification from the ESP32 proxy'),
+        ),
+    ).toBe(true);
   });
 });

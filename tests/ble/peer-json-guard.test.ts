@@ -28,4 +28,19 @@ describe('JSON from a peer', () => {
       .map((f) => relative(BLE_DIR, f));
     expect(offenders).toEqual(['peer-input.ts']);
   });
+
+  it('guards every message listener of the MQTT proxy handler with guardedListener', () => {
+    const dir = join(BLE_DIR, 'handler-mqtt-proxy');
+    const lacking = sourceFiles(dir)
+      .map((f) => {
+        const text = readFileSync(f, 'utf8');
+        return {
+          file: relative(BLE_DIR, f),
+          listeners: (text.match(/\.on\('message'/g) ?? []).length,
+          guards: (text.match(/guardedListener\(/g) ?? []).length,
+        };
+      })
+      .filter((f) => f.guards < f.listeners);
+    expect(lacking).toEqual([]);
+  });
 });

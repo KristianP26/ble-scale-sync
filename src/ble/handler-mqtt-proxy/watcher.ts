@@ -50,7 +50,13 @@ import {
   type ConnectedChar,
   type ScanResultEntry,
 } from './payloads.js';
-import { peerText, reportPeerFault } from '../peer-input.js';
+import {
+  guardedListener,
+  isRetained,
+  peerText,
+  reportPeerFault,
+  warnThrottled,
+} from '../peer-input.js';
 
 const DEDUP_WINDOW_MS = 30_000;
 
@@ -116,7 +122,10 @@ export class ReadingWatcher implements Watcher {
   });
   private _client: MqttClient | null = null;
   private _lifecycleHandlers: LifecycleHandler[] = [];
-  private _messageHandler: ((topic: string, payload: Buffer) => void) | null = null;
+  private _messageHandler:
+    ((topic: string, payload: Buffer, packet?: { retain?: boolean }) => void) | null = null;
+  /** The last status text logged and when, so a replayed `online` is not a line every time. */
+  private lastStatus: { text: string; at: number } | null = null;
   private _subscribedTopics: string[] = [];
   /** Set at start and on every scan-results message; the liveness signal (#281). */
   private lastAdvertAt: number | null = null;
@@ -147,6 +156,7 @@ export class ReadingWatcher implements Watcher {
     // a stale entry would otherwise be removed twice by the next stop().
     this._lifecycleHandlers = [];
     this._subscribedTopics = [];
+    this.lastStatus = null;
     // The liveness clock starts at connect, not at the epoch, so a proxy that
     // has simply not spoken yet is not read as one that has stopped.
     this.lastAdvertAt = Date.now();
@@ -228,55 +238,87 @@ export class ReadingWatcher implements Watcher {
     }
 
     // Message handler: store reference for cleanup
-    this._messageHandler = (topic: string, payload: Buffer) => {
-      if (topic === t.status) {
-        bleLog.info(`ESP32 status: ${peerText(payload, 64)}`);
-        return;
-      }
-
-      // Handle autonomous GATT connect from ESP32 (#201).
-      // The ESP32 publishes the same `connected` payload with an extra
-      // `autonomous: true` flag when it auto-connects to a known scale MAC.
-      if (topic === t.connected) {
-        this.handleConnectedMessage(payload);
-        return;
-      }
-
-      if (topic !== t.scanResults) return;
-
-      const parsed = parseScanResults(payload);
-      if (!parsed.ok) {
-        reportPeerFault('the ESP32 proxy', 'scan batch', parsed.why);
-        return;
-      }
-      if (parsed.dropped > 0) {
-        reportPeerFault(
-          'the ESP32 proxy',
-          'scan entry',
-          `${parsed.dropped} of ${parsed.total} entries dropped`,
-        );
-      }
-      const results = parsed.entries;
-      // Stamped before the targetMac filter and only for a batch with at least
-      // one valid entry: the proxy is proven alive by hearing ANY device, and
-      // the scale itself only advertises while somebody is standing on it
-      // (#281). Garbage that parses as an empty batch does not count.
-      if (results.length > 0) this.lastAdvertAt = Date.now();
-      const candidates = this.targetMac
-        ? results.filter((e) => e.address.toLowerCase() === this.targetMac!.toLowerCase())
-        : results;
-
-      for (const entry of candidates) {
-        // One entry that fails must not take the rest of the batch with it.
-        try {
-          this.handleScanEntry(entry);
-        } catch (err) {
-          reportPeerFault('the ESP32 proxy', 'scan entry', errMsg(err));
+    this._messageHandler = guardedListener(
+      'the ESP32 proxy',
+      'message',
+      (topic: string, payload: Buffer, packet?: { retain?: boolean }) => {
+        if (topic === t.status) {
+          this.logStatus(peerText(payload, 64));
+          return;
         }
-      }
-      // No match this scan, keep listening
-    };
+
+        // Only the firmware's `status` is ever retained. A retained copy of any
+        // other topic is a stored message replayed after a subscribe: it is not
+        // what the proxy is doing now and must not start a reading or a connect.
+        if (isRetained(packet)) {
+          bleLog.debug(`Ignoring a retained message on ${topic}`);
+          return;
+        }
+
+        // Handle autonomous GATT connect from ESP32 (#201).
+        // The ESP32 publishes the same `connected` payload with an extra
+        // `autonomous: true` flag when it auto-connects to a known scale MAC.
+        if (topic === t.connected) {
+          this.handleConnectedMessage(payload);
+          return;
+        }
+
+        if (topic !== t.scanResults) return;
+
+        const parsed = parseScanResults(payload);
+        if (!parsed.ok) {
+          reportPeerFault('the ESP32 proxy', 'scan batch', parsed.why);
+          return;
+        }
+        if (parsed.dropped > 0) {
+          reportPeerFault(
+            'the ESP32 proxy',
+            'scan entry',
+            `${parsed.dropped} of ${parsed.total} entries dropped`,
+          );
+        }
+        const results = parsed.entries;
+        // Stamped before the targetMac filter and only for a batch with at least
+        // one valid entry: the proxy is proven alive by hearing ANY device, and
+        // the scale itself only advertises while somebody is standing on it
+        // (#281). Garbage that parses as an empty batch does not count.
+        if (results.length > 0) this.lastAdvertAt = Date.now();
+        const candidates = this.targetMac
+          ? results.filter((e) => e.address.toLowerCase() === this.targetMac!.toLowerCase())
+          : results;
+
+        for (const entry of candidates) {
+          // One entry that fails must not take the rest of the batch with it.
+          try {
+            this.handleScanEntry(entry);
+          } catch (err) {
+            // The entry parsed, so a throw here is a defect on our side, not bad peer data.
+            warnThrottled(
+              'peer-throw|the ESP32 proxy|scan entry',
+              `Failed to handle a scan entry from the ESP32 proxy: ${peerText(errMsg(err))}`,
+            );
+          }
+        }
+        // No match this scan, keep listening
+      },
+    );
     client.on('message', this._messageHandler);
+  }
+
+  /**
+   * Log the proxy's status as info when it changes or a minute has passed; a
+   * retained `online` replayed after every resubscribe would otherwise be a
+   * line each time, while a real online/offline flap stays visible.
+   */
+  private logStatus(text: string): void {
+    const now = Date.now();
+    const last = this.lastStatus;
+    if (last && last.text === text && now - last.at < 60_000) {
+      bleLog.debug(`ESP32 status: ${text}`);
+      return;
+    }
+    this.lastStatus = { text, at: now };
+    bleLog.info(`ESP32 status: ${text}`);
   }
 
   /** A `connected` message: only an autonomous connect starts anything here. */

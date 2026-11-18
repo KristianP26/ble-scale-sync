@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   guardedListener,
   isPlainObject,
+  isRetained,
   parsePeerArray,
   parsePeerJson,
   parsePeerObject,
@@ -164,5 +165,16 @@ describe('guardedListener', () => {
     expect(String(warn.mock.calls[0][0])).toBe(
       'Failed to handle a notification from the ESP32 proxy: boom',
     );
+  });
+});
+
+describe('isRetained', () => {
+  it.each([
+    [{ retain: true }, true],
+    [{ retain: false }, false],
+    [{}, false],
+    [undefined, false],
+  ])('%j -> %s', (packet, expected) => {
+    expect(isRetained(packet)).toBe(expected);
   });
 });
