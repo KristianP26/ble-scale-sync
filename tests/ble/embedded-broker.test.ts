@@ -502,6 +502,32 @@ describe('startEmbeddedBroker connection limits', () => {
   });
 });
 
+describe('startEmbeddedBroker password check', () => {
+  // timingSafeEqual on the raw bytes: two passwords that decode to the same
+  // text after a lossy UTF-8 conversion must not match.
+  it('does not accept a password that differs only in invalid UTF-8 bytes', async () => {
+    const broker = await startEmbeddedBroker({
+      port: 0,
+      bindHost: '127.0.0.1',
+      username: 'user',
+      password: '\u{FFFD}',
+    });
+    try {
+      await expect(
+        connectAsync(broker.url, {
+          clientId: 'bytes-pass',
+          username: 'user',
+          password: Buffer.from([0xff]),
+          reconnectPeriod: 0,
+          connectTimeout: 2000,
+        }),
+      ).rejects.toThrow();
+    } finally {
+      await broker.close();
+    }
+  });
+});
+
 describe('startEmbeddedBroker keep alive limit', () => {
   const connectWith = (url: string, keepalive: number, clientId: string): Promise<MqttClient> =>
     connectAsync(url, { clientId, keepalive, reconnectPeriod: 0, connectTimeout: 2000 });

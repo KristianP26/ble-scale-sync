@@ -95,7 +95,7 @@ export interface EmbeddedBrokerHandle {
 }
 
 /** Timing-safe string comparison. Handles length mismatch without leaking it. */
-function safeStringEqual(a: string, b: string): boolean {
+function safeStringEqual(a: string | Buffer, b: string | Buffer): boolean {
   // Pad shorter to the longer length so timingSafeEqual doesn't throw,
   // then require equal lengths for success.
   const bufA = Buffer.from(a);
@@ -157,9 +157,10 @@ export async function startEmbeddedBroker(
     const expectedUser = opts.username!;
     const expectedPass = opts.password ?? '';
     aedes.authenticate = (_client, username, password, callback) => {
-      const passStr = password ? password.toString() : '';
       const userOk = username != null && safeStringEqual(username, expectedUser);
-      const passOk = safeStringEqual(passStr, expectedPass);
+      // The password stays bytes: toString() would replace invalid UTF-8 with
+      // U+FFFD and make different byte strings compare equal.
+      const passOk = safeStringEqual(password ?? '', expectedPass);
       if (userOk && passOk) {
         callback(null, true);
       } else {
