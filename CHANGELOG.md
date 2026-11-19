@@ -4,6 +4,74 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.42.0](https://github.com/KristianP26/ble-scale-sync/compare/v1.41.0...v1.42.0) (2026-11-19)
+
+
+### Added
+
+* **addon:** do not restart after a clean exit 0 ([#506](https://github.com/KristianP26/ble-scale-sync/issues/506)) ([eefae3d](https://github.com/KristianP26/ble-scale-sync/commit/eefae3d01bf4e037af22050a291653234e9df178))
+* **addon:** expose skip_metabolic_age as the garmin_skip_metabolic_age option ([#539](https://github.com/KristianP26/ble-scale-sync/issues/539)) ([c403a5f](https://github.com/KristianP26/ble-scale-sync/commit/c403a5f50c90670533779ed9eb0aa1e370546c84)), closes [#538](https://github.com/KristianP26/ble-scale-sync/issues/538)
+* **addon:** TLS for the embedded broker from the add-on config folder ([5690eae](https://github.com/KristianP26/ble-scale-sync/commit/5690eae7b79300ab901d5b5435875a1b003b6b7d))
+* **firmware:** add a display_topics switch ([681cb60](https://github.com/KristianP26/ble-scale-sync/commit/681cb60cff56af5cf431c0893e8dab7b86e001d6))
+* **firmware:** answer screenshot requests only when config.json asks for them ([7f8b0a7](https://github.com/KristianP26/ble-scale-sync/commit/7f8b0a7508958e4e6439c8bc05011a412bc5fc83))
+* **mqtt-proxy:** reload the embedded broker certificate and warn before it expires ([5d0a833](https://github.com/KristianP26/ble-scale-sync/commit/5d0a833c01c1b70df4d20c9c7ddd3e3c2d2b6a27))
+* **mqtt-proxy:** serve the embedded broker over TLS ([bf81c48](https://github.com/KristianP26/ble-scale-sync/commit/bf81c4874647aeb329daf889dd4f8b196d5cde53))
+* **wizard:** offer TLS for the embedded broker ([e03d626](https://github.com/KristianP26/ble-scale-sync/commit/e03d6269dae503353ef5d1a7ff0bdf954308fce4))
+
+
+### Fixed
+
+* **addon:** do not write the Supervisor token reference into config.yaml ([f38d567](https://github.com/KristianP26/ble-scale-sync/commit/f38d567303d821cc225be663f36f97242056f392))
+* **addon:** drop the old token line of the documented ha-bluetooth snippet ([d7fdbb0](https://github.com/KristianP26/ble-scale-sync/commit/d7fdbb063fa460664e281d30841d9ff230593c9d))
+* **addon:** refuse to start when a custom config reads the Supervisor token ([b76b3eb](https://github.com/KristianP26/ble-scale-sync/commit/b76b3ebe7f28c8c18254f222196d905742fa69f1))
+* **ble:** keep a frame an adapter cannot parse from ending the process ([d9a8286](https://github.com/KristianP26/ble-scale-sync/commit/d9a82860d25f8b775fe461b68ebe9ee22549f176))
+* **config:** never expand SUPERVISOR_TOKEN or HASSIO_TOKEN references ([a1d70ac](https://github.com/KristianP26/ble-scale-sync/commit/a1d70ac0ea47c3629dc61da79b513ba89ffa2791))
+* **deps:** bump zod from 4.6.5 to 4.6.7 ([46b09ab](https://github.com/KristianP26/ble-scale-sync/commit/46b09ab73fb6fba9cf9a46abbdc37ab0f2a9b688))
+* **deps:** require ws 8.21.0 or newer and tar 7.5.19 or newer ([8d35d5d](https://github.com/KristianP26/ble-scale-sync/commit/8d35d5da8468d33b6f60ca33663c29ca199c1df4))
+* **docker:** pin the compose example images to the release ([df0600e](https://github.com/KristianP26/ble-scale-sync/commit/df0600eab3e67512fccb45f3a64f9bf90d39c3d0))
+* **esphome-proxy:** cap the plaintext frame buffer and throttle its error log ([666323b](https://github.com/KristianP26/ble-scale-sync/commit/666323b55c4d379ad4d3dd415434dc34e584e17a))
+* **esphome-proxy:** do not connect a Mi Scale 2 from the single-shot scan ([d744a30](https://github.com/KristianP26/ble-scale-sync/commit/d744a3085482727f4582d5994051ea7a41f0b64f)), closes [#537](https://github.com/KristianP26/ble-scale-sync/issues/537)
+* **esphome-proxy:** read a Mi Scale 2 from its advertisements, never over GATT ([7a0d6eb](https://github.com/KristianP26/ble-scale-sync/commit/7a0d6ebc9b1b6fd83a108a84a55f10bd6873f866)), closes [#537](https://github.com/KristianP26/ble-scale-sync/issues/537)
+* **exporters:** do not follow redirects in HTTP exporters ([075c065](https://github.com/KristianP26/ble-scale-sync/commit/075c06594d41d5b5432cbab0cc84f9ee9b24e13a))
+* **firmware:** bound and sanitize the display payloads ([7986ae8](https://github.com/KristianP26/ble-scale-sync/commit/7986ae82403d87c59530f2232b34cb34df28e4ca))
+* **firmware:** bound the MQTT command queue ([1f24b5d](https://github.com/KristianP26/ble-scale-sync/commit/1f24b5d2b0bcd9fa1a3d273d51492ac43c1a9ec5))
+* **firmware:** ignore retained commands on the MQTT topics ([88271e4](https://github.com/KristianP26/ble-scale-sync/commit/88271e45f2dabc37a3dd8b0e8f4c28e2d760c672))
+* **firmware:** keep the MQTT reader alive when a message cannot be handled ([a354ca9](https://github.com/KristianP26/ble-scale-sync/commit/a354ca926940bbcae869043204453a8ae7cd66d1))
+* **firmware:** refuse a quoted mqtt_tls value ([49de57b](https://github.com/KristianP26/ble-scale-sync/commit/49de57b3c051659015a0f48c36248dfb7c651c7a))
+* **firmware:** warn when a CA file is checked against an IP address ([380bea7](https://github.com/KristianP26/ble-scale-sync/commit/380bea7b17292be39140917906286dc6ecbdc6ad))
+* **ha-bluetooth:** ignore a frame that is not the expected JSON shape ([983350c](https://github.com/KristianP26/ble-scale-sync/commit/983350c432bcbf9c76af3e0020f05c8a3c2fae74))
+* **ha-bluetooth:** read the Supervisor token from the environment ([5d1ee1d](https://github.com/KristianP26/ble-scale-sync/commit/5d1ee1dd35c2ad46c4f883c0d7f5f3630d04e621))
+* **logger:** escape terminal control characters in every log line ([c579f8e](https://github.com/KristianP26/ble-scale-sync/commit/c579f8e037dcbbdbc4137299e5bddc720339fb39))
+* **mqtt-proxy:** bound the known-scale sets ([550460f](https://github.com/KristianP26/ble-scale-sync/commit/550460fdc28edb7b658a5f7378eaae76e26f5c4e))
+* **mqtt-proxy:** cap embedded broker connections and the wait for CONNECT ([7da1075](https://github.com/KristianP26/ble-scale-sync/commit/7da10759c9e546e8379c9e040e9021c903f202d8))
+* **mqtt-proxy:** close embedded broker connections that announce an oversized packet ([3c07ed0](https://github.com/KristianP26/ble-scale-sync/commit/3c07ed054c735051a95925e9f383de370193da01))
+* **mqtt-proxy:** compare the embedded broker password as bytes ([8bafbb2](https://github.com/KristianP26/ble-scale-sync/commit/8bafbb23a900a281d44d7c18662e065007079a29))
+* **mqtt-proxy:** ignore retained messages and guard every message listener ([6573a07](https://github.com/KristianP26/ble-scale-sync/commit/6573a0711a2f6fe415d2186ad4e046add833fd8b))
+* **mqtt-proxy:** keep the embedded broker topic ACL on for an empty topic_prefix ([2060822](https://github.com/KristianP26/ble-scale-sync/commit/20608222d35aca7e04ce9771b0ed88105e9eddb6))
+* **mqtt-proxy:** limit embedded broker retained publishes to the device status and config ([87813c5](https://github.com/KristianP26/ble-scale-sync/commit/87813c592e88cf285e95ff2bf848b6daca47c2a7))
+* **mqtt-proxy:** log rejected logins and ACL denials of the embedded broker at warn ([295338e](https://github.com/KristianP26/ble-scale-sync/commit/295338e6690b5149adeee955a4ab248152ac6040))
+* **mqtt-proxy:** refuse a LAN bind without username and password when called directly ([4543ff8](https://github.com/KristianP26/ble-scale-sync/commit/4543ff87b8b0b51f8dea96adbecccfc5b77080d5))
+* **mqtt-proxy:** refuse embedded broker clients with keep alive 0 or over 300 s ([0fe7a46](https://github.com/KristianP26/ble-scale-sync/commit/0fe7a463c6d2b93ce07ba2c5d8f9d06e0934172b))
+* **mqtt-proxy:** validate the shape of what the ESP32 proxy publishes ([3079ca3](https://github.com/KristianP26/ble-scale-sync/commit/3079ca390e48277b50dfe4bbe0b9bb898211a0a0))
+* **qn:** remember a classic scale's protocol byte for sessions without a scale-info frame ([c817701](https://github.com/KristianP26/ble-scale-sync/commit/c81770138dcc3c2915d8a98e762f833a00659aca)), closes [#501](https://github.com/KristianP26/ble-scale-sync/issues/501)
+* **robi-s9:** log every frame before the layout check ([4d55a71](https://github.com/KristianP26/ble-scale-sync/commit/4d55a71ddc52775f91dabc4fd5fc3a75dc1b18b8)), closes [#540](https://github.com/KristianP26/ble-scale-sync/issues/540)
+* **robi-s9:** read the length-prefixed frames of the JEETIF2421 ([dd0075b](https://github.com/KristianP26/ble-scale-sync/commit/dd0075b9ff3b12aa5d7a6de18e5469d35bfd4c56)), closes [#540](https://github.com/KristianP26/ble-scale-sync/issues/540)
+* **runtime:** drop a reading that is not a plausible body weight ([f9a410b](https://github.com/KristianP26/ble-scale-sync/commit/f9a410b8091d061e2214029d96813b64c56e6279))
+* **runtime:** ignore a saved weight that is not a plausible body weight ([754789b](https://github.com/KristianP26/ble-scale-sync/commit/754789b2fb258e73d10c1e4eaf3d259f72f618cf))
+* **scales:** match a scale whose name arrives padded with whitespace ([42abfc1](https://github.com/KristianP26/ble-scale-sync/commit/42abfc119233f8858cf7a0d992dfcbb988505ff3)), closes [#503](https://github.com/KristianP26/ble-scale-sync/issues/503)
+* **trisa:** reject a weight or resistance with an impossible exponent ([c09bf78](https://github.com/KristianP26/ble-scale-sync/commit/c09bf78e4fc203208ffae341b398ae30afcda448))
+* **wger:** send the API token only to the configured server ([7b4e72e](https://github.com/KristianP26/ble-scale-sync/commit/7b4e72ed876989351c0ee009d3a3ed2c7cb00746))
+
+
+### Changed
+
+* **worker:** cache the stats responses for five minutes ([041b5db](https://github.com/KristianP26/ble-scale-sync/commit/041b5db6c757f19d98a2ab7404111c9e621b9ed5))
+
+
+### Docs
+
+* **scales:** drop Experimental for the Huawei CH100 ([11088f6](https://github.com/KristianP26/ble-scale-sync/commit/11088f6204c56407281dbd9bf49c7d8e245c040c)), closes [#503](https://github.com/KristianP26/ble-scale-sync/issues/503)
+
 ## [1.41.0](https://github.com/KristianP26/ble-scale-sync/compare/v1.40.0...v1.41.0) (2026-11-15)
 
 

@@ -2,7 +2,7 @@ services:
   ble-scale-sync:
     # Pinned to a release, so an update is a change you make. To follow the
     # newest release instead, use the tag latest (or a minor line such as X.Y).
-    image: ghcr.io/kristianp26/ble-scale-sync:1.41.0 # x-release-please-version
+    image: ghcr.io/kristianp26/ble-scale-sync:1.42.0 # x-release-please-version
     container_name: ble-scale-sync
 
     # Host network is required for BLE (BlueZ uses D-Bus on the host)
