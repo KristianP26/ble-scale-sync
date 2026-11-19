@@ -410,7 +410,7 @@ users:
 
 The weight is a weight entry on the reading's calendar day, so a [stored weigh-in](#historical-readings) lands on its own date. With `sync_measurements`, body fat and water (percent) and muscle and bone (kg) become custom measurements; the categories are created on first use. A failed measurement is logged and does not block the weight.
 
-Wger stores the weight in the unit of your Wger profile, so the exporter reads `/api/v2/userprofile/` before each export and sends pounds to a profile set to pounds; the API key must be allowed to read the profile. The calendar day comes from the host clock, so in Docker set `TZ` to your time zone, or a late-evening weigh-in lands on the next day.
+Wger stores the weight in the unit of your Wger profile, so the exporter reads `/api/v2/userprofile/` before each export and sends pounds to a profile set to pounds; the API key must be allowed to read the profile. The API key goes only to `base_url`; behind a reverse proxy, forward `Host` and `X-Forwarded-Proto` so Wger builds its page links with that address. The calendar day comes from the host clock, so in Docker set `TZ` to your time zone, or a late-evening weigh-in lands on the next day.
 
 ## HealthLog {#healthlog}
 
