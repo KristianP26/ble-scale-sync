@@ -56,7 +56,7 @@ _Weight only_ means the weight is read and body composition is estimated from BM
 | Sanitas SBF72 / SBF73                                                  | Yes              | Needs user slot 1 in the vendor app |
 | Beurer BF720 / BF105 / BF500 / BF788 / BF915 / BF950                   | Yes              | Needs `users[].beurer_pin` and a bonded link; see [Beurer and Sanitas](./scales/beurer) |
 | A&D UC-352BLE                                                          | Weight only      | Experimental. Linux (BlueZ) only; needs `ble.scale_mac` and a one-time pairing |
-| Huawei CH100 / AH100                                                   | Yes              | Experimental. Not on macOS; see [Known limitations](#huawei-ch100-ah100) |
+| Huawei CH100 / AH100                                                   | Yes              | Experimental for the AH100. Not on macOS; see [Known limitations](#huawei-ch100-ah100) |
 | Soehnle Shape200 / Shape100 / Shape50 / Style100                       | Yes              | Needs user slot 1 in the vendor app |
 | Medisana BS430 / BS440 / BS444                                         | Yes              | Stored weigh-ins are exported from the second session on; see [Medisana](#medisana-bs430-bs440-bs444) |
 | Active Era BS-06 and other `AC 27` scales                              | Yes              | Detected by manufacturer id `0x27AC`; wake it before stepping on |
@@ -186,7 +186,7 @@ In Docker, set `TZ`: the scale's clock is set to the host's local time. Report r
 
 ### Huawei CH100 / AH100
 
-Experimental. The scale encrypts every frame with its Bluetooth address, which macOS does not reveal. Read it from Linux, Windows, an [ESPHome proxy](/guide/esphome-proxy) or the [ESP32 proxy](/guide/esp32-proxy).
+The AH100 is experimental. The scale encrypts every frame with its Bluetooth address, which macOS does not reveal. Read it from Linux, Windows, an [ESPHome proxy](/guide/esphome-proxy) or the [ESP32 proxy](/guide/esp32-proxy).
 
 If the log says `the scale refused this host`, bind the scale once with openScale as its first user, then weigh in again.
 

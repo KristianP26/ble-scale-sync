@@ -15,18 +15,10 @@ import { COMMAND_TIMEOUT_MS, topics, type Topics } from './topics.js';
 import { type MqttClient, createMqttClient } from './client.js';
 import { mqttGattConnect, mqttGattDisconnect } from './gatt.js';
 import { registerScaleMac } from './display.js';
+import { guardedListener, isRetained, reportPeerFault } from '../peer-input.js';
+import { parseScanResults, type ScanResultEntry } from './payloads.js';
 
-export interface ScanResultEntry {
-  address: string;
-  name: string;
-  rssi: number;
-  services: string[];
-  addr_type?: number;
-  manufacturer_id?: number | null;
-  manufacturer_data?: string | null;
-  /** Array of {uuid, data} service-data entries (hex-encoded data). */
-  service_data?: Array<{ uuid: string; data: string }> | null;
-}
+export type { ScanResultEntry };
 
 /** Build BleDeviceInfo from a scan result entry, including manufacturer and service data. */
 export function toBleDeviceInfo(entry: ScanResultEntry): BleDeviceInfo {
@@ -56,14 +48,21 @@ export async function waitForEsp32Online(client: MqttClient, t: Topics): Promise
   const promise = new Promise<void>((res) => {
     resolve = res;
   });
-  const onMessage = (topic: string, payload: Buffer) => {
-    if (topic === t.status) {
-      const msg = payload.toString();
-      if (msg === 'online') resolve();
-      else if (msg === 'offline') sawOffline = true;
-      // If 'offline', keep waiting. ESP32 may come back before timeout.
-    }
-  };
+  // Retained copies of `status` are consumed on purpose: the broker's stored
+  // value is how a proxy that is already up is seen at all.
+  const onMessage = guardedListener(
+    'the ESP32 proxy',
+    'status',
+    (topic: string, payload: Buffer) => {
+      if (topic === t.status) {
+        // Longer than any status word is not one; do not decode a large payload for a compare.
+        const msg = payload.length <= 16 ? payload.toString() : '';
+        if (msg === 'online') resolve();
+        else if (msg === 'offline') sawOffline = true;
+        // If 'offline', keep waiting. ESP32 may come back before timeout.
+      }
+    },
+  );
   client.on('message', onMessage);
   try {
     await client.subscribeAsync(t.status);
@@ -112,15 +111,32 @@ export async function mqttScan(client: MqttClient, t: Topics): Promise<ScanResul
     resolveResults = res;
     rejectResults = rej;
   });
-  const handler = (topic: string, payload: Buffer) => {
-    if (topic === t.scanResults) {
-      try {
-        resolveResults(JSON.parse(payload.toString()) as ScanResultEntry[]);
-      } catch (err) {
-        rejectResults(new Error(`ESP32 sent invalid scan results: ${err}`));
+  const handler = guardedListener(
+    'the ESP32 proxy',
+    'scan batch',
+    (topic: string, payload: Buffer, packet?: { retain?: boolean }) => {
+      // A retained batch is a stored one from an earlier scan, not the next one.
+      if (isRetained(packet)) {
+        bleLog.debug('Ignoring a retained scan/results message');
+        return;
       }
-    }
-  };
+      if (topic === t.scanResults) {
+        const parsed = parseScanResults(payload);
+        if (!parsed.ok) {
+          rejectResults(new Error(`ESP32 sent invalid scan results: ${parsed.why}`));
+          return;
+        }
+        if (parsed.dropped > 0) {
+          reportPeerFault(
+            'the ESP32 proxy',
+            'scan entry',
+            `${parsed.dropped} of ${parsed.total} entries dropped`,
+          );
+        }
+        resolveResults(parsed.entries);
+      }
+    },
+  );
   client.on('message', handler);
   await client.subscribeAsync(t.scanResults);
   // ESP32 scans autonomously, just wait for the next result

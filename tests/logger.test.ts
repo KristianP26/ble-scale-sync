@@ -75,6 +75,56 @@ describe('createLogger()', () => {
     }
   });
 
+  describe('terminal control characters', () => {
+    const out = (): string => logSpy.mock.calls[0][0] as string;
+
+    it('escapes ESC and OSC sequences so they cannot reach the terminal', () => {
+      createLogger('X').info('x\x1b[2J\x1b]0;title\x07y');
+      expect(out()).not.toMatch(/[\x00-\x08\x0b-\x1f\x7f]/);
+      expect(out()).toContain('x\\x1b[2J\\x1b]0;title\\x07y');
+    });
+
+    it('escapes a lone CR and folds CRLF to LF', () => {
+      const log = createLogger('X');
+      log.info('a\rb');
+      log.info('a\r\nb');
+      expect(logSpy.mock.calls[0][0]).toMatch(/\[X\] a\\x0db$/);
+      expect(logSpy.mock.calls[1][0]).toMatch(/\[X\] a\nb$/);
+    });
+
+    it('keeps LF and TAB, so stack traces and multi-line messages stay intact', () => {
+      createLogger('X').info('x\n    at f (file:1:1)\n\tz');
+      expect(out().endsWith('x\n    at f (file:1:1)\n\tz')).toBe(true);
+    });
+
+    it('escapes C1 controls and Unicode line separators', () => {
+      createLogger('X').info('a\u009bb\u2028c\u2029d');
+      expect(out().endsWith('a\\x9bb\\u2028c\\u2029d')).toBe(true);
+    });
+
+    it('does not double backslashes in paths', () => {
+      createLogger('X').info('C:\\Users\\x\\y');
+      expect(out().endsWith('C:\\Users\\x\\y')).toBe(true);
+    });
+
+    it('turns a leading CRLF into the leading-newline layout', () => {
+      createLogger('X').info('\r\nfoo');
+      expect(out()).toMatch(/^\n\d{4}-\d{2}-\d{2} .+ \[X\] foo$/);
+    });
+
+    it('escapes after redaction, so a secret is still hidden', () => {
+      createLogger('X').info('probe https://u:pw@h/x\x1b[2J');
+      expect(out()).not.toContain('pw');
+      expect(out()).toContain('\\x1b[2J');
+    });
+
+    it.each(['debug', 'info', 'warn', 'error'] as const)('applies at the %s level', (level) => {
+      createLogger('X')[level]('a\x1bb');
+      const spy = level === 'warn' ? warnSpy : level === 'error' ? errorSpy : logSpy;
+      expect(spy.mock.calls[0][0]).toContain('a\\x1bb');
+    });
+  });
+
   it('hides a header value echoed into a stack that spans lines', () => {
     const log = createLogger('Run');
     log.error(

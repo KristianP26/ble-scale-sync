@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 import type { MqttProxyConfig } from '../../config/schema.js';
 import { withTimeout } from '../types.js';
 import { COMMAND_TIMEOUT_MS } from './topics.js';
+import { BoundedSet } from '../advertisement.js';
 
 export type MqttClient = Awaited<ReturnType<typeof import('mqtt').connectAsync>>;
 
@@ -65,6 +66,15 @@ export async function createMqttClient(config: MqttProxyConfig): Promise<MqttCli
 // ─── Shared proxy state (module-private) ─────────────────────────────────────
 
 /**
+ * Scales remembered per set, oldest out (ADR D108). A MAC enters only through a
+ * reading a scale produced, so 64 is far above any household; the cap exists so
+ * a flood of broadcast frames with fresh addresses cannot grow the set, the
+ * config published to the ESP32 and the memory of this process without bound.
+ * A scale that falls out is registered again by its next reading.
+ */
+export const MAX_KNOWN_SCALE_MACS = 64;
+
+/**
  * Module-level state shared across MQTT proxy functions.
  * Owned exclusively by this module; other modules go through the accessor
  * helpers below so the mutable state stays explicit and resettable in tests.
@@ -72,12 +82,12 @@ export async function createMqttClient(config: MqttProxyConfig): Promise<MqttCli
 const proxyState = {
   persistentClient: null as MqttClient | null,
   pendingConnect: null as Promise<MqttClient> | null,
-  discoveredScaleMacs: new Set<string>(),
+  discoveredScaleMacs: new BoundedSet<string>(MAX_KNOWN_SCALE_MACS),
   /**
    * Subset of discoveredScaleMacs read from advertisements, never over GATT
    * (#422). Sent to the ESP32 so it stops autonomously connecting to them.
    */
-  passiveScaleMacs: new Set<string>(),
+  passiveScaleMacs: new BoundedSet<string>(MAX_KNOWN_SCALE_MACS),
   displayUsers: [] as DisplayUser[],
 };
 

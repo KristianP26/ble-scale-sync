@@ -9,6 +9,7 @@ import {
   BoundedMap,
   evaluateAdvertisement,
   GraceTimers,
+  identifiedAsAdvertisementRead,
   logAdvert,
   ManufacturerDataCache,
   safeName,
@@ -93,6 +94,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
         // GATT is connected on demand; guard so repeated advertisements for
         // the same scale do not open parallel sessions.
         const gattInFlight = new Set<string>();
+        const skippedAdvertRead = new Set<string>();
 
         const g = new GraceTimers(IMPEDANCE_GRACE_MS, (address, gr) => {
           bleLog.info(
@@ -203,7 +205,21 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
             return;
           }
 
-          // decision.kind === 'gatt': connect on demand through the proxy that saw it.
+          // decision.kind === 'gatt'. A scale read from its advertisements is
+          // not connected (#537). A frame with its service data waits above, but
+          // the named scan response can arrive without service data and lands
+          // here, as does a forced adapter. Keep waiting for the broadcast.
+          if (identifiedAsAdvertisementRead(adapter, info, adapters)) {
+            if (!skippedAdvertRead.has(addrLc)) {
+              skippedAdvertRead.add(addrLc);
+              bleLog.debug(
+                `${adapter.name} (${address}): read from its advertisements, not over GATT`,
+              );
+            }
+            return;
+          }
+
+          // Connect on demand through the proxy that saw it.
           if (gattInFlight.has(addrLc)) return;
           gattInFlight.add(addrLc);
           bleLog.info(`Matched: ${adapter.name} (${address}); opening GATT via ESPHome proxy`);

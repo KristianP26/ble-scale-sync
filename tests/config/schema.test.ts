@@ -658,6 +658,91 @@ describe('BleSchema', () => {
     expect(result.success).toBe(false);
   });
 
+  describe('embedded broker TLS keys', () => {
+    const lan = { username: 'u', password: 'p' };
+    const parse = (mqtt_proxy: Record<string, unknown>) =>
+      BleSchema.safeParse({ handler: 'mqtt-proxy', mqtt_proxy });
+
+    it('accepts an absolute certificate and key together', () => {
+      const result = parse({
+        ...lan,
+        embedded_broker_tls_cert: '/certs/broker.pem',
+        embedded_broker_tls_key: '/certs/broker.key',
+      });
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.mqtt_proxy?.embedded_broker_tls_cert).toBe('/certs/broker.pem');
+        expect(result.data.mqtt_proxy?.embedded_broker_tls_key).toBe('/certs/broker.key');
+      }
+    });
+
+    it('adds no default, so a config without TLS keys has none', () => {
+      const result = parse(lan);
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect('embedded_broker_tls_cert' in (result.data.mqtt_proxy ?? {})).toBe(false);
+        expect('embedded_broker_tls_key' in (result.data.mqtt_proxy ?? {})).toBe(false);
+      }
+    });
+
+    it('accepts a path that starts with ~/', () => {
+      const result = parse({
+        ...lan,
+        embedded_broker_tls_cert: '~/broker.pem',
+        embedded_broker_tls_key: '~/broker.key',
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it('rejects a relative path', () => {
+      const result = parse({
+        ...lan,
+        embedded_broker_tls_cert: 'certs/broker.pem',
+        embedded_broker_tls_key: '/certs/broker.key',
+      });
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues[0].message).toContain('absolute path');
+        expect(result.error.issues[0].path).toEqual(['mqtt_proxy', 'embedded_broker_tls_cert']);
+      }
+    });
+
+    it('rejects a certificate without a key and a key without a certificate', () => {
+      const noKey = parse({ ...lan, embedded_broker_tls_cert: '/certs/broker.pem' });
+      expect(noKey.success).toBe(false);
+      if (!noKey.success) {
+        expect(noKey.error.issues[0].message).toContain('must be set together');
+        expect(noKey.error.issues[0].path).toEqual(['mqtt_proxy', 'embedded_broker_tls_key']);
+      }
+      const noCert = parse({ ...lan, embedded_broker_tls_key: '/certs/broker.key' });
+      expect(noCert.success).toBe(false);
+      if (!noCert.success) {
+        expect(noCert.error.issues[0].path).toEqual(['mqtt_proxy', 'embedded_broker_tls_cert']);
+      }
+    });
+
+    it('rejects TLS keys next to broker_url', () => {
+      const result = parse({
+        broker_url: 'mqtt://192.168.1.10:1883',
+        embedded_broker_tls_cert: '/certs/broker.pem',
+        embedded_broker_tls_key: '/certs/broker.key',
+      });
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues[0].message).toContain('only apply to the embedded broker');
+      }
+    });
+
+    it('treats null like an unset key', () => {
+      const result = parse({
+        broker_url: 'mqtt://192.168.1.10:1883',
+        embedded_broker_tls_cert: null,
+        embedded_broker_tls_key: null,
+      });
+      expect(result.success).toBe(true);
+    });
+  });
+
   it('accepts handler esphome-proxy with esphome_proxy config', () => {
     const result = BleSchema.safeParse({
       handler: 'esphome-proxy',
@@ -754,6 +839,22 @@ describe('BleSchema', () => {
         ha_bluetooth: { url: 'http://ha.local:8123', token: '' },
       }).success,
     ).toBe(false);
+  });
+
+  it('lets ha_bluetooth leave out the token for the Supervisor URL only', () => {
+    const ha = (ha_bluetooth: Record<string, unknown>) =>
+      BleSchema.safeParse({ handler: 'ha-bluetooth', ha_bluetooth });
+    expect(ha({ url: 'ws://supervisor/core/websocket' }).success).toBe(true);
+    expect(ha({ url: 'ws://supervisor/core/websocket', token: null }).success).toBe(true);
+    const other = ha({ url: 'ws://ha.example:8123/api/websocket' });
+    expect(other.success).toBe(false);
+    if (!other.success) {
+      expect(other.error.issues[0].message).toBe(
+        'Home Assistant long-lived access token is required',
+      );
+      expect(other.error.issues[0].path).toEqual(['ha_bluetooth', 'token']);
+    }
+    expect(ha({ url: 'ws://supervisor/core/websocket', token: '' }).success).toBe(false);
   });
 
   it('accepts handler auto without mqtt_proxy', () => {

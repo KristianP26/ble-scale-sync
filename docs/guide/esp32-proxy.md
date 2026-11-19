@@ -70,12 +70,16 @@ Edit `config.json`:
   "mqtt_tls": false,
   "mqtt_ca_file": null,
   "mqtt_tls_hostname": null,
+  "display_topics": true,
+  "screenshot": false,
   "device_id": "esp32-ble-proxy",
   "topic_prefix": "ble-proxy"
 }
 ```
 
 With `"board": null` the board is detected from the chip. Detection cannot tell a WROOM-32 from an Atom Echo, so on a WROOM-32 set `"board": "esp_wroom_32"` or pass `--board esp_wroom_32` to `flash.sh`. Other values: `atom_echo`, `esp32_s3`, `guition_4848`.
+
+`display_topics` and `screenshot` apply to boards with a display. `display_topics` (default `true`) shows the readings and export results the server sends; `false` ignores them. `screenshot` (default `false`) lets `firmware/tools/capture_screenshot.py` request a dump of the screen. These two and `mqtt_tls` take `true` or `false` without quotes, and the ESP32 refuses to start on a quoted value. After a change, upload the file with `./flash.sh --app-only`. The serial console prints `Display topics: on, screenshot: off` at boot.
 
 ### 3. Flash {#_2-flash}
 
@@ -144,11 +148,11 @@ ble:
 
 Restart BLE Scale Sync. `ble-scale-sync setup` (`npm run setup` from a clone) asks for the same values. The broker of the [MQTT exporter](/exporters#mqtt) can serve the proxy too.
 
-`broker_url` takes `mqtts://` for TLS, which covers only the server's own connection. For TLS on the ESP32's connection, set in `config.json`:
+`broker_url` takes `mqtts://` for TLS, which covers only the server's own connection; the [embedded broker](#embedded-broker-tls) serves TLS itself. For TLS on the ESP32's connection, set in `config.json`:
 
 - `"mqtt_tls": true`;
 - `"mqtt_ca_file"`: a CA certificate file in `firmware/`, which `flash.sh` uploads with the app. Without it the link is encrypted but the broker is not verified;
-- `"mqtt_tls_hostname"`: the broker's certificate name, when `mqtt_broker` is an IP address.
+- `"mqtt_tls_hostname"`: the broker's certificate name, when `mqtt_broker` is an IP address. With a CA file and an IP address but no name, the serial console prints `MQTT TLS: mqtt_broker is an IP address, set mqtt_tls_hostname ...` and the check may fail.
 
 ### Embedded broker
 
@@ -166,14 +170,89 @@ ble:
     password: '${MQTT_PASSWORD}'
 ```
 
-The schema rejects an embedded broker on a non-loopback address without `username` and `password`. If another broker already holds port 1883, startup fails: set `embedded_broker_port` to a free port such as `1884`, and the same `mqtt_port` in `config.json`. Allow the port through the host firewall.
+The schema rejects an embedded broker on a non-loopback address without `username` and `password`. If another broker already holds port 1883, startup fails: set `embedded_broker_port` to a free port such as `18883`, and the same `mqtt_port` in `config.json`. Allow the port through the host firewall.
+
+The embedded broker closes a connection whose first packet is over 16 KiB or whose later packet is over 1 MiB (a scan result of 500 devices stays under 600 KiB), keeps at most 32 connections open, and expects the CONNECT packet within 15 seconds. It refuses a keep alive of 0 or over 300 seconds; the ESP32 firmware and the app use 60 seconds. A retained publish is accepted only on `<topic_prefix>/<device_id>/status` and `<topic_prefix>/<device_id>/config`; a client that retains another topic is disconnected. It logs an oversized packet, a refused connection, a failed login and a publish or subscribe outside `topic_prefix` as a warning, each at most once a minute.
+
+### Encrypt the ESP32 connection {#embedded-broker-tls}
+
+Without TLS the broker's login and every reading cross the network in plain text. With a certificate and its private key the embedded broker serves TLS only on `embedded_broker_port`, and a plain MQTT client is refused there. The app reaches its own broker over a loopback-only listener.
+
+1. Create the certificate. Replace `ble-scale-sync.lan` with a name of your choice (it needs no DNS entry) and `192.168.1.100` with this machine's LAN address. The commands are tested with OpenSSL 3.
+
+   ```bash
+   mkdir broker-cert && cd broker-cert
+   cat > ca.cnf <<'EOF'
+   [ca]
+   default_ca = c
+   [c]
+   database = index.txt
+   new_certs_dir = .
+   serial = serial
+   default_md = sha256
+   policy = p
+   unique_subject = no
+   copy_extensions = copy
+   [p]
+   commonName = supplied
+   [req]
+   distinguished_name = dn
+   prompt = no
+   [dn]
+   CN = ble-scale-sync.lan
+   [ext]
+   subjectAltName = DNS:ble-scale-sync.lan,IP:192.168.1.100
+   basicConstraints = critical,CA:TRUE
+   EOF
+   : > index.txt && echo 01 > serial
+   openssl req -new -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes \
+     -keyout broker.key -out broker.csr -config ca.cnf
+   openssl ca -batch -selfsign -config ca.cnf -keyfile broker.key -in broker.csr \
+     -out broker.pem -startdate 19600101000000Z -enddate 21001231235959Z \
+     -extensions ext -notext
+   chmod 600 broker.key
+   ```
+
+   The ESP32 does not know the date, so the certificate has to be valid from before 1970. The recipe starts it in 1960 and ends it in 2100, which is why `broker.key` has to stay private. If it leaks, create a new pair and flash the new `broker.pem`.
+
+2. Set the two keys and the port in `config.yaml`, and restart BLE Scale Sync. `ble-scale-sync setup` asks for both files when the embedded broker listens on the LAN.
+
+   ```yaml
+   ble:
+     handler: mqtt-proxy
+     mqtt_proxy:
+       embedded_broker_port: 8883 # the conventional MQTT over TLS port
+       embedded_broker_tls_cert: /etc/ble-scale-sync/broker.pem # PEM, absolute or ~/
+       embedded_broker_tls_key: /etc/ble-scale-sync/broker.key # PEM, no passphrase
+       username: myuser
+       password: '${MQTT_PASSWORD}'
+   ```
+
+3. Copy `broker.pem` into `firmware/` and set these keys in the ESP32 `config.json`, then run `./flash.sh --app-only`. `mqtt_broker` stays the IP address, and `mqtt_tls_hostname` is the DNS name from the certificate.
+
+   ```json
+   "mqtt_port": 8883,
+   "mqtt_tls": true,
+   "mqtt_ca_file": "broker.pem",
+   "mqtt_tls_hostname": "ble-scale-sync.lan"
+   ```
+
+4. Check the log for `Embedded MQTT broker listening on 0.0.0.0:8883 (TLS, authentication enabled)`, and the certificate with `openssl s_client -connect 192.168.1.100:8883 -servername ble-scale-sync.lan`.
+
+Set both keys or neither, and not together with `broker_url`. A missing, unreadable, encrypted or mismatched file stops startup with a message that names the file, and the broker never falls back to plain MQTT. `ble-scale-sync validate` (`npm run validate` from a clone) reads the files on the machine it runs on, so run it inside the container when the paths are container paths.
+
+The broker re-reads both files once a day, and a renewed certificate applies to new connections without a restart. It logs the end date of the certificate at start and warns when it is less than 30 days away or past. The certificate of the recipe runs until 2100, so the warning does not fire for it.
+
+With Docker, add `'8883:8883'` under `ports` and `./certs:/certs:ro` under `volumes` of the service, and use `/certs/...` paths. The app runs as user `node` (uid 1000), so that user must be able to read the key file.
+
+A certificate from a public CA starts today, and the ESP32 cannot verify it. With such a certificate set `mqtt_tls: true` without `mqtt_ca_file`: the link is encrypted and the broker is not verified.
 
 ### Home Assistant add-on
 
 In the [add-on](/guide/home-assistant-addon#bluetooth-transports), set **Bluetooth transport** to `mqtt-proxy` and pick the broker with **ESP32 proxy broker**:
 
 - `shared` (default) uses the broker of the add-on's MQTT options, which is the Mosquitto broker add-on when MQTT auto-detection is on, even with the MQTT exporter off. Give the ESP32 its own login on that broker (a Home Assistant user, or an entry under `logins` in the Mosquitto add-on) and put it in `mqtt_user` and `mqtt_password` of `config.json`.
-- `embedded` starts the broker inside the add-on. **Embedded broker username** and **Embedded broker password** are required, since it listens on the host network. The Mosquitto add-on holds port 1883 on the host, so set **Embedded broker port** to a free one such as `1884` and the same `mqtt_port` in `config.json`.
+- `embedded` starts the broker inside the add-on. **Embedded broker username** and **Embedded broker password** are required, since it listens on the host network. The Mosquitto add-on holds ports 1883, 1884, 8883 and 8884 on the host, so set **Embedded broker port** to another one such as `18883` and the same `mqtt_port` in `config.json`. To encrypt the ESP32's connection, turn on **Embedded broker TLS**, copy `broker.pem` and `broker.key` from the [recipe](#embedded-broker-tls) into the add-on's own config folder, `/addon_configs/<slug>/` on the host (the Samba share `addon_configs` shows it). The add-on reads it read-only. The options default to those two file names; enter other names if you used them.
 
 `mqtt_broker` in `config.json` is the Home Assistant host's IP address for the Mosquitto add-on and for `embedded`, or the broker's own address when you set one by hand. **ESP32 proxy device ID** and **ESP32 proxy topic prefix** must match `device_id` and `topic_prefix`.
 
@@ -201,7 +280,13 @@ A GATT scale is connected by the ESP32 itself the moment it sees a known scale's
 
 The ESP32 forwards the notifications of each characteristic in the order they arrive. If publishing to MQTT stalls, it holds up to 16 notifications per characteristic, then drops the oldest and prints `Notify ...: queue full, ...` on the serial console.
 
+Commands from the server wait in a queue of at most 32 commands and 4 KB of payload. A command beyond that is dropped, and the serial console prints `Command queue limit reached ...` and, once the queue is empty again, `Command queue drained, ...`.
+
 The firmware ends a GATT session and resumes scanning when the link is down, when the server has not engaged within 20 s, or after 3 minutes. It prints `GATT session guard: ...` on the serial console.
+
+The ESP32 ignores a retained message on every topic except `config`, so a retained command is not replayed after each reconnect. A message it cannot handle is dropped with `MQTT message dropped: ...` on the serial console, and the connection to the broker stays up.
+
+The server ignores retained copies of every topic except `status`, and drops messages that are not what the firmware sends: invalid JSON, the wrong shape, or an address that is not a MAC. It logs the first such message each minute.
 
 ## MQTT topics
 
@@ -214,8 +299,8 @@ All topics start with `{topic_prefix}/{device_id}/` (default `ble-proxy/esp32-bl
 | `scan/results` | ESP32 -> Server | JSON array of discovered devices |
 | `config` | Server -> ESP32 | Retained JSON: `scales` (MACs), `users`, `passive` (MACs read from advertisements, never connected), `autoConnect` (`false` disables the autonomous connect), `lazy_notify` (`true`: enable a notification only on `subscribe/{uuid}`) |
 | `beep` | Server -> ESP32 | Empty, or JSON with `freq` (20 to 4000 Hz), `duration` (1 to 500 ms), `repeat` (1 to 3); values outside are clamped |
-| `display/reading` | Server -> ESP32 | JSON with user slug, name, weight, impedance and exporter list |
-| `display/result` | Server -> ESP32 | JSON with user slug, name, weight and per-exporter results |
+| `display/reading` | Server -> ESP32 | Display boards, unless `display_topics` is `false`: JSON with user slug, name, weight (0 to 1000), impedance and exporter list. Text is cut to 40 characters without `#`, lists to 16 rows. A bad payload is answered on `error` |
+| `display/result` | Server -> ESP32 | Display boards, unless `display_topics` is `false`: JSON with user slug, name, weight and per-exporter results, cut like `display/reading` |
 | `connect` | Server -> ESP32 | JSON with `address` and `addr_type` |
 | `connected` | ESP32 -> Server | JSON with `address`, the discovered `chars` (uuid and properties), and `autonomous: true` when the ESP32 connected on its own |
 | `disconnect` | Server -> ESP32 | Any payload |
@@ -225,7 +310,7 @@ All topics start with `{topic_prefix}/{device_id}/` (default `ble-proxy/esp32-bl
 | `write/{uuid}` | Server -> ESP32 | Raw bytes to write |
 | `read/{uuid}` | Server -> ESP32 | Empty; triggers a read |
 | `read/{uuid}/response` | ESP32 -> Server | Raw bytes read |
-| `screenshot` | Server -> ESP32 | Display boards: request a framebuffer dump. Refused (an `error` with `op: "screenshot"`) during a BLE connection |
+| `screenshot` | Server -> ESP32 | Display boards with `"screenshot": true`: request a framebuffer dump. Refused (an `error` with `op: "screenshot"`) during a BLE connection |
 | `screenshot/info`, `screenshot/{n}`, `screenshot/done` | ESP32 -> Server | Display size and format, the RGB565 framebuffer in numbered chunks, then the chunk count |
 
 The firmware files are described in [`firmware/`](https://github.com/KristianP26/ble-scale-sync/tree/main/firmware) in the repository.

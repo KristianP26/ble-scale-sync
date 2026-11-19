@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { parse } from 'yaml';
+import { genericUpdate, lf } from './helpers/release-please-generic.js';
 
 /**
  * Guard for the add-on base image pin (review I-03, the #318 trap).
@@ -13,13 +14,8 @@ import { parse } from 'yaml';
  * exact release the add-on reports, and release-please moves both together.
  *
  * release-please itself is not a dependency here, so its Generic updater is
- * mirrored below (version scope only, anything else throws). Source:
- * googleapis/release-please, src/updaters/generic.ts.
- *
- * Line endings are normalized: Windows checkouts have core.autocrlf on.
+ * mirrored in tests/helpers/release-please-generic.ts.
  */
-const lf = (s: string): string => s.replace(/\r\n/g, '\n');
-
 const BUILD_PATH = 'ble-scale-sync-addon/build.yaml';
 const CONFIG_PATH = 'ble-scale-sync-addon/config.yaml';
 const IMAGE = 'ghcr.io/kristianp26/ble-scale-sync';
@@ -30,40 +26,6 @@ const config = lf(readFileSync(resolve(CONFIG_PATH), 'utf8'));
 const rpConfig = JSON.parse(readFileSync(resolve('.release-please-config.json'), 'utf8')) as {
   packages: Record<string, { 'extra-files'?: Array<string | { type?: string; path: string }> }>;
 };
-
-// Same patterns as release-please's Generic updater. Not global on purpose:
-// the updater replaces the FIRST semver-looking string on each line.
-const VERSION_REGEX = /\d+\.\d+\.\d+(-[\w.]+)?(\+[-\w.]+)?/;
-const INLINE_REGEX = /x-release-please-(major|minor|patch|version-date|version|date)/;
-const BLOCK_START_REGEX = /x-release-please-start-(major|minor|patch|version-date|version|date)/;
-const BLOCK_END_REGEX = /x-release-please-end/;
-
-function genericUpdate(content: string, version: string): string {
-  let inBlock = false;
-  const onlyVersion = (scope: string): void => {
-    if (scope !== 'version') throw new Error(`scope ${scope} is not mirrored by this test`);
-  };
-  return content
-    .split('\n')
-    .map((line) => {
-      const inline = INLINE_REGEX.exec(line);
-      if (inline) {
-        onlyVersion(inline[1]);
-        return line.replace(VERSION_REGEX, version);
-      }
-      if (inBlock) {
-        if (BLOCK_END_REGEX.test(line)) inBlock = false;
-        return line.replace(VERSION_REGEX, version);
-      }
-      const start = BLOCK_START_REGEX.exec(line);
-      if (start) {
-        onlyVersion(start[1]);
-        inBlock = true;
-      }
-      return line;
-    })
-    .join('\n');
-}
 
 const reportedVersion = (yamlText: string): unknown =>
   (parse(yamlText) as { version?: unknown }).version;

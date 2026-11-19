@@ -185,6 +185,32 @@ function waitForReading(
 // ─── Legacy mode tests ──────────────────────────────────────────────────────
 
 describe('waitForReading() — legacy mode', () => {
+  it('a frame the adapter cannot parse does not end the process or the session', async () => {
+    const notifyChar = createMockChar();
+    const writeChar = createMockChar();
+    const device = createMockDevice();
+    const { charMap } = createCharMap([
+      [NOTIFY_UUID, notifyChar],
+      [WRITE_UUID, writeChar],
+    ]);
+
+    let n = 0;
+    const adapter = createLegacyAdapter({
+      parseNotification: vi.fn(() => {
+        if (++n === 1) throw new RangeError('The value of "offset" is out of range');
+        return { weight: 80, impedance: 600 };
+      }),
+    });
+
+    const promise = waitForReading(charMap, device, adapter, PROFILE, '');
+    await vi.waitFor(() => expect(notifyChar.subscribeCalled).toBe(true));
+
+    expect(() => notifyChar.triggerData(Buffer.from([0x01]))).not.toThrow();
+    notifyChar.triggerData(Buffer.from([0x02]));
+
+    await expect(promise).resolves.toEqual(SAMPLE_BODY_COMP);
+  });
+
   it('resolves with body composition on complete reading', async () => {
     const notifyChar = createMockChar();
     const writeChar = createMockChar();

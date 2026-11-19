@@ -74,7 +74,7 @@ The container needs no host network, D-Bus mount or `NET_ADMIN`. `docker-compose
 
 ## Behavior {#how-it-works}
 
-The node forwards each advertisement to BLE Scale Sync, which matches it against the scale adapters and parses a broadcast reading directly. A GATT scale is connected through the node when it advertises, read, and disconnected. If it is still on afterwards, see [When a session ends](/guide/transports#when-a-session-ends). The proxy does not bond, so a scale that needs an encrypted link, such as the Beurer BF720 family, can only be read with a local adapter on Linux.
+The node forwards each advertisement to BLE Scale Sync, which matches it against the scale adapters and parses a broadcast reading directly. A GATT scale is connected through the node when it advertises, read, and disconnected. If it is still on afterwards, see [When a session ends](/guide/transports#when-a-session-ends). A scale that is read from its advertisements, such as the Xiaomi Mi Scale 2, is not read over GATT: its weigh-in is taken from the broadcast. An advertisement that carries only the generic body composition service can still open one connection, which is closed before anything is written. The proxy does not bond, so a scale that needs an encrypted link, such as the Beurer BF720 family, can only be read with a local adapter on Linux.
 
 ## Troubleshooting
 

@@ -113,3 +113,29 @@ describe('getOrCreatePersistentClient', () => {
     }
   });
 });
+
+describe('known-scale sets', () => {
+  it('keeps at most 64 discovered MACs and drops the oldest', async () => {
+    const { addDiscoveredMac, getDiscoveredMacs, hasDiscoveredMac } =
+      await import('../../src/ble/handler-mqtt-proxy/client.js');
+    const mac = (i: number) => `AA:BB:CC:DD:00:${i.toString(16).padStart(2, '0')}`;
+    for (let i = 0; i < 100; i++) addDiscoveredMac(mac(i));
+    expect(getDiscoveredMacs()).toHaveLength(64);
+    expect(hasDiscoveredMac(mac(0))).toBe(false);
+    expect(hasDiscoveredMac(mac(99))).toBe(true);
+    // A scale that fell out comes back with its next reading.
+    addDiscoveredMac(mac(0));
+    expect(hasDiscoveredMac(mac(0))).toBe(true);
+    expect(getDiscoveredMacs()).toHaveLength(64);
+  });
+
+  it('keeps at most 64 passive MACs and drops the oldest', async () => {
+    const { addPassiveMac, getPassiveMacs, isPassiveMac } =
+      await import('../../src/ble/handler-mqtt-proxy/client.js');
+    const mac = (i: number) => `AA:BB:CC:DD:01:${i.toString(16).padStart(2, '0')}`;
+    for (let i = 0; i < 100; i++) addPassiveMac(mac(i));
+    expect(getPassiveMacs()).toHaveLength(64);
+    expect(isPassiveMac(mac(0))).toBe(false);
+    expect(isPassiveMac(mac(99))).toBe(true);
+  });
+});

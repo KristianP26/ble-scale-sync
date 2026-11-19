@@ -549,3 +549,47 @@ describe('Trisa measurement time (D-06, D027)', () => {
     expect(reading!.timestamp).toBeUndefined();
   });
 });
+
+describe('Trisa base-10 float guard', () => {
+  const frame = (flags: number, ...parts: Buffer[]): Buffer =>
+    Buffer.concat([Buffer.from([flags]), ...parts]);
+  const parse = (buf: Buffer) => makeAdapter().parseCharNotification!(uuid16(0x8a21), buf);
+
+  it('rejects the frame from the report: 00 ff ff ff 7f', () => {
+    expect(parse(Buffer.from([0x00, 0xff, 0xff, 0xff, 0x7f]))).toBeNull();
+  });
+
+  it.each([127, -128, 3, -8])('rejects a weight with exponent %i', (exponent) => {
+    expect(parse(frame(0x00, encodeFloat(16_777_215, exponent)))).toBeNull();
+  });
+
+  it.each([
+    [8040, -2, 80.4],
+    [800, -1, 80],
+    [80, 0, 80],
+    [10_000_000, -7, 1],
+    [7, 2, 700],
+  ])('decodes mantissa %i with exponent %i as %f kg', (mantissa, exponent, kg) => {
+    expect(parse(frame(0x00, encodeFloat(mantissa, exponent)))!.weight).toBeCloseTo(kg, 6);
+  });
+
+  it('rejects a weight outside 0.5-700 kg that has an allowed exponent', () => {
+    expect(parse(frame(0x00, encodeFloat(49, -2)))).toBeNull(); // 0.49 kg
+    expect(parse(frame(0x00, encodeFloat(70_001, -2)))).toBeNull(); // 700.01 kg
+  });
+
+  it.each([127, -128, 4, -6])(
+    'leaves the impedance at 0 for a resistance with exponent %i',
+    (e) => {
+      const buf = frame(0x04, encodeFloat(8000, -2), encodeFloat(16_777_215, e));
+      const reading = parse(buf);
+      expect(reading).not.toBeNull();
+      expect(reading!.impedance).toBe(0);
+    },
+  );
+
+  it('still decodes a resistance with exponent -1', () => {
+    const reading = parse(frame(0x04, encodeFloat(8000, -2), encodeFloat(5000, -1)));
+    expect(reading!.impedance).toBeCloseTo(30, 6);
+  });
+});

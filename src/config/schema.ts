@@ -1,8 +1,10 @@
+import { isAbsolute } from 'node:path';
 import { z } from 'zod';
 import { isLoopback } from '../ble/loopback.js';
+import { isSupervisorUrl } from '../ble/handler-ha-bluetooth/supervisor.js';
 import { isValidScaleId, SCALE_ID_HINT } from '../ble/scale-id.js';
 import { cliCommand } from '../cli-invocation.js';
-import { findTokenDirCollisions } from './token-dirs.js';
+import { findTokenDirCollisions, expandHome } from './token-dirs.js';
 import { QN_BLE_OPTIONS } from '../scales/qn-scale/options.js';
 import { RMSC04_BLE_OPTIONS } from '../scales/renpho-msc04-options.js';
 
@@ -61,20 +63,41 @@ export type EsphomeEndpointConfig = z.infer<typeof EsphomeEndpointSchema>;
  * SMLIGHT SLZB, Shelly). Passive only; scales that need a GATT connection are
  * not reachable this way.
  */
-export const HaBluetoothSchema = z.object({
-  url: z
-    .string()
-    .min(1, 'Home Assistant URL is required')
-    .refine((v) => /^(https?|wss?):\/\//.test(v), {
-      message: 'Must start with http://, https://, ws:// or wss://',
-    }),
-  // Long-lived access token of an administrator user; the subscription is
-  // admin-only. Keep it in .env and reference it as ${HA_TOKEN}.
-  token: z.string().min(1, 'Home Assistant long-lived access token is required'),
-  // Optional: only accept advertisements heard by this HA scanner (its `source`
-  // id as shown in HA's Bluetooth advertisement monitor, e.g. the proxy's MAC).
-  source: z.string().optional().nullable(),
-});
+export const HaBluetoothSchema = z
+  .object({
+    url: z
+      .string()
+      .min(1, 'Home Assistant URL is required')
+      .refine((v) => /^(https?|wss?):\/\//.test(v), {
+        message: 'Must start with http://, https://, ws:// or wss://',
+      }),
+    // Long-lived access token of an administrator user; the subscription is
+    // admin-only. Keep it in .env and reference it as ${HA_TOKEN}. The add-on's
+    // Supervisor URL needs none: the app reads the add-on's own token itself.
+    token: z
+      .string()
+      .min(1, 'Home Assistant long-lived access token is required')
+      .optional()
+      .nullable(),
+    // Optional: only accept advertisements heard by this HA scanner (its `source`
+    // id as shown in HA's Bluetooth advertisement monitor, e.g. the proxy's MAC).
+    source: z.string().optional().nullable(),
+  })
+  .superRefine((c, ctx) => {
+    if (c.token || isSupervisorUrl(c.url)) return;
+    ctx.addIssue({
+      code: 'custom',
+      message: 'Home Assistant long-lived access token is required',
+      path: ['token'],
+    });
+  });
+
+const TlsFilePathSchema = z
+  .string()
+  .min(1, 'Must not be empty')
+  .refine((v) => isAbsolute(expandHome(v)), {
+    message: 'Must be an absolute path or start with ~/',
+  });
 
 export const MqttProxySchema = z
   .object({
@@ -95,6 +118,11 @@ export const MqttProxySchema = z
       .string()
       .regex(/^\S+$/, 'Must be a non-empty hostname or IP with no whitespace')
       .default('0.0.0.0'),
+    // PEM files of the embedded broker's TLS identity. Absolute on purpose: a
+    // relative path would have to be resolved against the config directory in
+    // every loader and in the wizard scan, the F-11 class of bug.
+    embedded_broker_tls_cert: TlsFilePathSchema.optional().nullable(),
+    embedded_broker_tls_key: TlsFilePathSchema.optional().nullable(),
     auto_connect: z
       .boolean()
       .default(true)
@@ -108,6 +136,26 @@ export const MqttProxySchema = z
   // only the username let a missing or empty password through, and the broker
   // then accepted that username with an empty password from anyone on the LAN.
   .superRefine((c, ctx) => {
+    // Before the broker_url return below: a TLS key next to broker_url would
+    // look like encryption and do nothing.
+    const tlsCert = !!c.embedded_broker_tls_cert;
+    const tlsKey = !!c.embedded_broker_tls_key;
+    if (tlsCert !== tlsKey) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'embedded_broker_tls_cert and embedded_broker_tls_key must be set together.',
+        path: [tlsCert ? 'embedded_broker_tls_key' : 'embedded_broker_tls_cert'],
+      });
+    }
+    if (c.broker_url && (tlsCert || tlsKey)) {
+      ctx.addIssue({
+        code: 'custom',
+        message:
+          'embedded_broker_tls_cert/key only apply to the embedded broker. ' +
+          'Remove them, or remove mqtt_proxy.broker_url.',
+        path: [tlsCert ? 'embedded_broker_tls_cert' : 'embedded_broker_tls_key'],
+      });
+    }
     if (c.broker_url) return;
     if (isLoopback(c.embedded_broker_bind)) return;
     if (c.username && c.password) return;

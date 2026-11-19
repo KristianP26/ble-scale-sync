@@ -5,10 +5,14 @@ import {
   DedupWindow,
   ManufacturerDataCache,
   readsFromAdvertisement,
+  identifiedAsAdvertisementRead,
 } from '../../src/ble/advertisement.js';
 import { MiScale2Adapter } from '../../src/scales/mi-scale-2.js';
 import { QnScaleAdapter } from '../../src/scales/qn-scale/index.js';
 import { applyForcedAdapter } from '../../src/scales/force.js';
+import { adapters as registry } from '../../src/scales/index.js';
+import { resolveAdapter } from '../../src/scales/resolve.js';
+import { MI2_537_REMOVED } from '../helpers/mi-scale-2-537.js';
 import type { RawReading } from '../../src/ble/shared.js';
 import type {
   ScaleAdapter,
@@ -57,6 +61,16 @@ const parseMfg = (data: Buffer): ScaleReading => ({
 });
 
 describe('evaluateAdvertisement', () => {
+  it('treats an advertisement the parser throws on as unparseable', () => {
+    const adapter = baseAdapter({
+      parseBroadcast: () => {
+        throw new RangeError('out of range');
+      },
+    });
+    expect(() => evaluateAdvertisement(adapter, MFG(75, 0))).not.toThrow();
+    expect(evaluateAdvertisement(adapter, MFG(75, 0)).kind).not.toBe('complete');
+  });
+
   it('returns complete for a non-passive adapter on any non-null reading', () => {
     const adapter = baseAdapter({ parseBroadcast: parseMfg });
     const d = evaluateAdvertisement(adapter, MFG(75, 0));
@@ -178,6 +192,48 @@ describe('readsFromAdvertisement (#422)', () => {
   it('is false for preferPassive without any advertisement parser', () => {
     const odd = baseAdapter({ preferPassive: true } as Partial<ScaleAdapter>);
     expect(readsFromAdvertisement(odd)).toBe(false);
+  });
+});
+
+describe('identifiedAsAdvertisementRead (#537)', () => {
+  const BCS = '0000181b00001000800000805f9b34fb';
+  const removed = Buffer.from(MI2_537_REMOVED, 'hex');
+  const mi = registry.find((a) => a.name === 'Xiaomi Mi Scale 2')!;
+
+  it('is true for a nameless frame that carries the 0x181B service data', () => {
+    const info: BleDeviceInfo = {
+      localName: '',
+      serviceUuids: [BCS],
+      serviceData: [{ uuid: BCS, data: removed }],
+    };
+    expect(resolveAdapter(info, registry)).toBe(mi);
+    expect(identifiedAsAdvertisementRead(mi, info, registry)).toBe(true);
+  });
+
+  it('is true for the named scan response, which has no service data', () => {
+    const info: BleDeviceInfo = { localName: 'MIBFS', serviceUuids: [BCS] };
+    expect(identifiedAsAdvertisementRead(mi, info, registry)).toBe(true);
+  });
+
+  it('is false when the pick rests on the advertised 0x181B service alone', () => {
+    // A nameless Beurer BF950 or Huawei CH100 looks like this until its
+    // characteristics are known, so it still has to be connected (D021, D031).
+    const info: BleDeviceInfo = { localName: '', serviceUuids: [BCS] };
+    expect(resolveAdapter(info, registry)).toBe(mi);
+    expect(identifiedAsAdvertisementRead(mi, info, registry)).toBe(false);
+  });
+
+  it('is false for an adapter that is not read from advertisements', () => {
+    const qn = registry.find((a) => a.name === 'QN Scale')!;
+    const info: BleDeviceInfo = { localName: 'QN-Scale', serviceUuids: [] };
+    expect(resolveAdapter(info, registry)).toBe(qn);
+    expect(identifiedAsAdvertisementRead(qn, info, registry)).toBe(false);
+  });
+
+  it('is true for a forced Mi Scale 2 shown a bare advertisement', () => {
+    const forced = applyForcedAdapter(registry, 'Xiaomi Mi Scale 2');
+    const info: BleDeviceInfo = { localName: '', serviceUuids: [BCS] };
+    expect(identifiedAsAdvertisementRead(forced[0], info, forced)).toBe(true);
   });
 });
 

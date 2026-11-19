@@ -26,6 +26,7 @@ if board.HAS_DISPLAY:
 # strings (an open network); the rest must be non-empty.
 REQUIRED_CONFIG_KEYS = ("wifi_ssid", "wifi_password", "mqtt_broker", "mqtt_port", "device_id", "topic_prefix")
 _NON_EMPTY_CONFIG_KEYS = ("mqtt_broker", "device_id", "topic_prefix")
+_BOOL_CONFIG_KEYS = ("mqtt_tls", "screenshot", "display_topics")
 
 
 def config_problems(c):
@@ -46,6 +47,11 @@ def config_problems(c):
     # bool is an int subclass, so it is excluded explicitly.
     if "mqtt_port" not in missing and (type(port) is not int or not 0 < port < 65536):
         problems.append("mqtt_port must be a number from 1 to 65535, without quotes")
+    # A quoted "true" would otherwise read as "off" and nobody would know why; for
+    # mqtt_tls that means a plaintext link that sends the password unencrypted.
+    for k in _BOOL_CONFIG_KEYS:
+        if c.get(k) is not None and type(c[k]) is not bool:
+            problems.append(f"{k} must be true or false, without quotes")
     return problems
 
 
@@ -71,6 +77,14 @@ def load_config(path="config.json"):
 
 
 cfg = load_config()
+
+# Display-board features the host reaches over MQTT. A screenshot dumps what the
+# panel shows (user names, weights) and holds the main loop for seconds, so it is
+# answered only with "screenshot": true in config.json. The display topics are
+# what a display board is for: on there unless "display_topics": false. Boards
+# without a display never subscribe to either.
+SCREENSHOT_ENABLED = bool(board.HAS_DISPLAY) and cfg.get("screenshot") is True
+DISPLAY_TOPICS_ENABLED = bool(board.HAS_DISPLAY) and cfg.get("display_topics") is not False
 
 PREFIX = cfg["topic_prefix"]
 DEVICE_ID = cfg["device_id"]
@@ -127,8 +141,20 @@ _ending_session = False
 # Set True after on_connect finishes re-subscribing (avoids race with isconnected)
 _subs_ready = False
 
-# Pending commands set by the sync callback, processed in the async main loop
+# Pending commands set by the sync callback, processed in the async main loop.
+# The loop takes one command at a time and one can hold it for seconds (a host
+# connect up to HOST_CONNECT_BUDGET_MS, a subscribe about 3 s, a GATT write or
+# read 1 s, a beep 3 s) while the broker keeps delivering. The largest burst a
+# real host is estimated to send is about 16 commands (3 subscribes, 8 handshake
+# writes, a disconnect, a beep, 2 display messages), so 32 is twice that. An
+# entry is estimated at 150 B plus its payload, on a heap of about 85 KB (board
+# without PSRAM); none of these numbers is measured on a board. The byte budget
+# stops a flood of large payloads from eating the heap.
 _pending = []
+MAX_PENDING_COMMANDS = 32
+MAX_PENDING_BYTES = 4096
+# Commands refused since main() last reported: on_message counts, main() prints.
+_pending_dropped = 0
 
 # Scale MAC detection for instant beep
 _scale_macs = set()
@@ -175,8 +201,54 @@ mqtt_config["clean"] = True
 mqtt_config["queue_len"] = 0  # callback mode
 
 
+def _pending_bytes():
+    n = 0
+    for _t, m in _pending:
+        n += len(m)
+    return n
+
+
+def _queue_command(t, msg):
+    """Queue one host command, or refuse and count it when the queue is full.
+
+    The newest command is the one refused. What is queued keeps its order, so a
+    handshake is cut at its end and never in the middle, and the marker that
+    reports a lost link (appended to _pending directly, not through here) is
+    never displaced. main() reports the count.
+    """
+    global _pending_dropped
+    if len(_pending) < MAX_PENDING_COMMANDS and _pending_bytes() + len(msg) <= MAX_PENDING_BYTES:
+        _pending.append((t, msg))
+        return True
+    if not _pending_dropped:
+        print(f"Command queue limit reached ({len(_pending)} commands, {_pending_bytes()} bytes held), dropping new commands")
+    _pending_dropped += 1
+    return False
+
+
 def on_message(topic_bytes, msg, retained):
-    """Sync callback — queue the command for async processing."""
+    """Sync callback for every subscribed topic. Never raises.
+
+    mqtt_as calls this inside its reader task and catches only OSError around
+    it. Any other exception ends that task without a word, the link then looks
+    alive until the keepalive check reconnects it (derived from the mqtt_as
+    ping interval, not measured on a board), so one message that made this
+    raise cut the ESP32 off from the broker.
+    """
+    try:
+        _handle_message(topic_bytes, msg, retained)
+    except Exception as e:
+        # A MemoryError here usually means the heap is full of what was just
+        # refused: collect first, and let nothing in the report itself escape.
+        gc.collect()
+        try:
+            print(f"MQTT message dropped: {describe_exc(e)}")
+        except Exception:
+            pass
+
+
+def _handle_message(topic_bytes, msg, retained):
+    """Apply a config message, or queue any other one for the main loop."""
     global _scale_macs, _auto_connect, _lazy_notify, _last_host_activity, _host_engaged
     global _passive_macs
     t = topic_bytes.decode() if isinstance(topic_bytes, (bytes, bytearray)) else topic_bytes
@@ -198,11 +270,26 @@ def on_message(topic_bytes, msg, retained):
         except Exception as e:
             print(f"Bad config payload: {e}")
         return
-    # Any host command counts as engagement with the current GATT session (#296).
+    # The host retains only `config`. A retained command is a replay the broker
+    # repeats on every reconnect, so it would run again after each reboot.
+    if retained:
+        return
+    # Our own read answer, echoed back by the read/# subscription; the loop
+    # skips it anyway, so it need not take a slot.
+    if t.startswith(topic("read/")) and t.endswith("/response"):
+        return
+    # Not subscribed when off, so this only catches a message that arrives anyway.
+    if t == topic("screenshot") and not SCREENSHOT_ENABLED:
+        return
+    if (t == topic("display/reading") or t == topic("display/result")) and not DISPLAY_TOPICS_ENABLED:
+        return
+    if not _queue_command(t, msg):
+        return
+    # Any accepted host command counts as engagement with the current GATT
+    # session (#296); a refused one is not the host talking.
     _last_host_activity = time.ticks_ms()
     if _gatt_session_armed:
         _host_engaged = True
-    _pending.append((t, msg))
 
 
 async def on_connect(client_ref):
@@ -213,9 +300,10 @@ async def on_connect(client_ref):
     await client_ref.subscribe(topic("disconnect"), 0)
     await client_ref.subscribe(topic("config"), 0)
     await client_ref.subscribe(topic("beep"), 0)
-    if board.HAS_DISPLAY:
+    if DISPLAY_TOPICS_ENABLED:
         await client_ref.subscribe(topic("display/reading"), 0)
         await client_ref.subscribe(topic("display/result"), 0)
+    if SCREENSHOT_ENABLED:
         await client_ref.subscribe(topic("screenshot"), 0)
     # Re-subscribe write/read wildcards if a BLE device is connected
     if _char_subscribed:
@@ -272,6 +360,11 @@ def mqtt_tls_settings(c, read_file):
     params = {}
     if ca_file:
         import ssl
+
+        if not c.get("mqtt_tls_hostname") and _is_ip_literal(host):
+            # A warning, not a refusal: a certificate that carries the IP as its
+            # common name may still verify on some builds.
+            print("MQTT TLS: mqtt_broker is an IP address, set mqtt_tls_hostname to a name in the broker certificate or verification may fail")
 
         try:
             cadata = read_file(ca_file)
@@ -746,6 +839,46 @@ async def scan_loop():
         await _batch_scan_loop()
 
 
+# ─── Display payloads ────────────────────────────────────────────────────────
+
+# Text and rows the 480 px screen can show. A longer name or list would only be
+# clipped, and an unbounded one is memory the LVGL label allocates on the heap.
+MAX_DISPLAY_TEXT = 40
+MAX_DISPLAY_ROWS = 16
+
+
+def _display_payload(msg):
+    d = json.loads(msg)
+    if not isinstance(d, dict):
+        raise ValueError("display payload must be a JSON object")
+    return d
+
+
+def _display_text(v):
+    # "#" opens a colour tag in the recolored result list.
+    return v.replace("#", "")[:MAX_DISPLAY_TEXT] if isinstance(v, str) else ""
+
+
+def _display_weight(v):
+    # bool is an int subclass.
+    # `not (0 <= v <= 1000)` and not two comparisons: a NaN fails both of those.
+    if type(v) is bool or not isinstance(v, (int, float)) or not (0 <= v <= 1000):
+        raise ValueError("weight must be a number from 0 to 1000")
+    return v
+
+
+def _display_export(e):
+    if not isinstance(e, dict):
+        return {"name": "", "ok": False}
+    return {"name": _display_text(e.get("name")), "ok": e.get("ok") is True}
+
+
+def _display_rows(rows, make):
+    if not isinstance(rows, list):
+        return []
+    return [make(r) for r in rows[:MAX_DISPLAY_ROWS]]
+
+
 # ─── Command handlers ─────────────────────────────────────────────────────────
 
 def make_publish_fn(u):
@@ -1016,8 +1149,13 @@ async def _connect_with_retry():
 # ─── Main loop ────────────────────────────────────────────────────────────────
 
 async def main():
+    global _pending_dropped
     print(f"Board: {board.BOARD_NAME}")
     if board.HAS_DISPLAY:
+        # Computed first: the simplest f-string form for MicroPython's parser.
+        shown = "on" if DISPLAY_TOPICS_ENABLED else "off"
+        shot = "on" if SCREENSHOT_ENABLED else "off"
+        print(f"Display topics: {shown}, screenshot: {shot}")
         ui.init()
         asyncio.create_task(_connection_monitor())
     await _connect_with_retry()
@@ -1048,26 +1186,26 @@ async def main():
                         else:
                             beep()
                 elif t == topic("display/reading"):
-                    if board.HAS_DISPLAY:
-                        d = json.loads(msg)
+                    if DISPLAY_TOPICS_ENABLED:
+                        d = _display_payload(msg)
                         ui.on_reading(
-                            d.get("slug", ""),
-                            d.get("name", ""),
-                            d.get("weight", 0),
+                            _display_text(d.get("slug", "")),
+                            _display_text(d.get("name", "")),
+                            _display_weight(d.get("weight", 0)),
                             d.get("impedance"),
-                            d.get("exporters", []),
+                            _display_rows(d.get("exporters", []), _display_text),
                         )
                 elif t == topic("display/result"):
-                    if board.HAS_DISPLAY:
-                        d = json.loads(msg)
+                    if DISPLAY_TOPICS_ENABLED:
+                        d = _display_payload(msg)
                         ui.on_result(
-                            d.get("slug", ""),
-                            d.get("name", ""),
-                            d.get("weight", 0),
-                            d.get("exports", []),
+                            _display_text(d.get("slug", "")),
+                            _display_text(d.get("name", "")),
+                            _display_weight(d.get("weight", 0)),
+                            _display_rows(d.get("exports", []), _display_export),
                         )
                 elif t == topic("screenshot"):
-                    if board.HAS_DISPLAY:
+                    if SCREENSHOT_ENABLED:
                         await handle_screenshot()
                 elif t.startswith(topic("subscribe/")):
                     uuid_str = t[len(topic("subscribe/")):]
@@ -1085,6 +1223,13 @@ async def main():
                 sys.print_exception(e)
                 op, address, uuid = _error_context(t, msg)
                 await publish_error(describe_exc(e), op, address, uuid)
+
+        # Reported once the queue has emptied, so a flood prints two lines, not
+        # one per refused command. Nothing is published: an error message per
+        # refused command would only add to the flood.
+        if _pending_dropped:
+            dropped, _pending_dropped = _pending_dropped, 0
+            print(f"Command queue drained, {dropped} command(s) were dropped")
 
         await asyncio.sleep_ms(50)
         gc_counter += 1

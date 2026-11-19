@@ -5,7 +5,7 @@ import type { ExporterSchema } from '../interfaces/exporter-schema.js';
 import type { WgerConfig } from './config.js';
 import { toLocalDate } from './intervals.js';
 import { withRetry, httpError, NonRetryableError } from '../utils/retry.js';
-import { sendWithRetry, probe } from './http.js';
+import { sendWithRetry, probe, fetchNoRedirect } from './http.js';
 import { errMsg } from '../utils/error.js';
 
 const log = createLogger('Wger');
@@ -87,12 +87,19 @@ export class WgerExporter implements Exporter {
   readonly supportsBackdate = true;
   private readonly config: WgerConfig;
   private readonly apiBase: string;
+  private readonly origin: string;
   /** name -> category id, resolved lazily on first export and cached. */
   private categories: Map<string, WgerCategoryId> | null = null;
 
   constructor(config: WgerConfig) {
     this.config = config;
     this.apiBase = `${config.baseUrl.replace(/\/+$/, '')}/api/v2`;
+    try {
+      this.origin = new URL(this.apiBase).origin;
+    } catch {
+      // The app builds exporters at start and on reload; a bare "Invalid URL" there names nothing.
+      throw new Error('Wger base_url is not a valid URL (include https://)');
+    }
   }
 
   private headers(): Record<string, string> {
@@ -181,7 +188,7 @@ export class WgerExporter implements Exporter {
    * `kg` or `lb` is refused rather than guessed at.
    */
   private async fetchWeightUnit(): Promise<WgerWeightUnit> {
-    const response = await fetch(`${this.apiBase}/userprofile/`, {
+    const response = await fetchNoRedirect(`${this.apiBase}/userprofile/`, {
       headers: this.headers(),
       signal: AbortSignal.timeout(10_000),
     });
@@ -197,6 +204,31 @@ export class WgerExporter implements Exporter {
     );
   }
 
+  /**
+   * The next-page link, only when it points at the configured server: every
+   * request carries the API token, and a link in a response body is the
+   * server's to choose. Throws rather than stopping, because a half-read list
+   * would make the caller create the categories that sit on the later pages.
+   */
+  private nextPage(next: unknown): string | null {
+    if (next === null || next === undefined) return null;
+    if (typeof next !== 'string') throw new Error('Wger returned an invalid next-page link');
+    let target: URL;
+    try {
+      target = new URL(next, this.apiBase);
+    } catch {
+      throw new Error('Wger returned an invalid next-page link');
+    }
+    if (target.origin !== this.origin) {
+      throw new Error(
+        `Wger returned a next-page link to ${target.origin}, not ${this.origin}; not followed, ` +
+          'the API token goes only to base_url. Behind a reverse proxy, forward Host and ' +
+          'X-Forwarded-Proto so Wger builds its links with your address.',
+      );
+    }
+    return target.toString();
+  }
+
   /** List existing measurement categories, create any missing ones, cache name->id. */
   private async resolveCategories(): Promise<Map<string, WgerCategoryId>> {
     if (this.categories) return this.categories;
@@ -205,7 +237,7 @@ export class WgerExporter implements Exporter {
     let url: string | null = `${this.apiBase}/measurement-category/`;
     let pages = 0;
     while (url && pages < 50) {
-      const response = await fetch(url, {
+      const response = await fetchNoRedirect(url, {
         headers: this.headers(),
         signal: AbortSignal.timeout(10_000),
       });
@@ -216,13 +248,13 @@ export class WgerExporter implements Exporter {
       for (const c of json.results) {
         if (!map.has(c.name)) map.set(c.name, c.id);
       }
-      url = json.next;
+      url = this.nextPage(json.next);
       pages++;
     }
 
     for (const cat of MEASUREMENT_CATEGORIES) {
       if (map.has(cat.name)) continue;
-      const response = await fetch(`${this.apiBase}/measurement-category/`, {
+      const response = await fetchNoRedirect(`${this.apiBase}/measurement-category/`, {
         method: 'POST',
         headers: this.headers(),
         body: JSON.stringify({ name: cat.name, unit: cat.unit }),

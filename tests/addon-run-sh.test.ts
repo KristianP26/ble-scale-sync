@@ -15,6 +15,8 @@ import {
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { parse } from 'yaml';
+import { BLOCKED_ENV_REFS, resolveEnvReferences } from '../src/config/env-refs.js';
+import { isSupervisorUrl } from '../src/ble/handler-ha-bluetooth/supervisor.js';
 import { UserSchema } from '../src/config/schema.js';
 import { isValidScaleId } from '../src/ble/scale-id.js';
 
@@ -528,6 +530,255 @@ const TYPE_TRAPS = [
   '',
 ].join('\n');
 
+describe('addon-config.mjs check-env-refs', () => {
+  function check(fileContent: string): { status: number | null; out: string; err: string } {
+    return withTempDir((dir) => {
+      const file = join(dir, 'config.yaml');
+      writeFileSync(file, fileContent);
+      const res = spawnSync(process.execPath, [ADDON_CONFIG, 'check-env-refs', file], {
+        encoding: 'utf8',
+      });
+      return { status: res.status, out: res.stdout, err: res.stderr };
+    });
+  }
+
+  const OTHER_HA = 'ws://ha.example:8123/api/websocket';
+
+  it('names the path of a reference and exits 6', () => {
+    const r = check(
+      `ble:\n  handler: ha-bluetooth\n  ha_bluetooth:\n    url: ${OTHER_HA}\n    token: '\${SUPERVISOR_TOKEN}'\n`,
+    );
+    expect(r).toEqual({ status: 6, out: 'ble.ha_bluetooth.token\n', err: '' });
+  });
+
+  it('finds a HASSIO_TOKEN reference inside a longer value, in any letter case', () => {
+    const r = check(
+      'global_exporters:\n  - type: webhook\n    url: http://example.test/hook\n    headers:\n      X-Api-Key: "k-${hassio_token}-x"\n',
+    );
+    expect(r.status).toBe(6);
+    expect(r.out).toBe('global_exporters[0].headers.X-Api-Key\n');
+  });
+
+  it('sees what the app sees: a double-quoted escape and an alias are references too', () => {
+    // A text search for the literal reference misses both.
+    const escape = check('url: "\\x24{SUPERVISOR_TOKEN}"\n');
+    expect(escape).toMatchObject({ status: 6, out: 'url\n' });
+    const alias = check("a: &t '${SUPERVISOR_TOKEN}'\nb:\n  - *t\n");
+    expect(alias).toMatchObject({ status: 6 });
+    expect(alias.out.split('\n').sort()).toEqual(['', 'a', 'b[0]']);
+  });
+
+  it('passes a literal $${...}, another variable and a file without references', () => {
+    for (const file of [
+      "token: '$${SUPERVISOR_TOKEN}'\n",
+      "token: '${HA_TOKEN}'\n",
+      'version: 1\n',
+      '',
+    ]) {
+      expect(check(file), file).toEqual({ status: 0, out: '', err: '' });
+    }
+  });
+
+  it('exits 7, without a crash, for YAML it cannot read', () => {
+    // An alias with no anchor throws from toJS() and is not in doc.errors.
+    for (const file of ['users: [unclosed\n', 'x: *nope\n', 'k: 1\nk: 2\n']) {
+      expect(check(file), file).toEqual({ status: 7, out: '', err: '' });
+    }
+    expect(check('a: &a [1]\nb: *a\n').status).toBe(0);
+  });
+
+  it('never prints a value', () => {
+    const r = check("secret: swordfish\nurl: 'http://x/${SUPERVISOR_TOKEN}/swordfish'\n");
+    expect(r.status).toBe(6);
+    expect(r.out).toBe('url\n');
+    expect(r.out + r.err).not.toContain('swordfish');
+  });
+
+  it('prints at most 20 paths and keeps odd key characters out of the line', () => {
+    const many = Array.from({ length: 30 }, (_, i) => `k${i}: '\${HASSIO_TOKEN}'`).join('\n');
+    expect(check(`${many}\n`).out.trimEnd().split('\n')).toHaveLength(20);
+    expect(check("'a b;c': '${HASSIO_TOKEN}'\n").out).toBe('a?b?c\n');
+  });
+
+  it('agrees with the app on which strings are refused', () => {
+    // Guards drift of the list and the syntax copied into the .mjs.
+    const strings = [
+      '${SUPERVISOR_TOKEN}',
+      'x${HASSIO_TOKEN}y',
+      '${supervisor_token}',
+      '${Hassio_Token}',
+      '$${SUPERVISOR_TOKEN}',
+      '${HA_TOKEN}',
+      '${SUPERVISOR_TOKEN_2}',
+      '${ SUPERVISOR_TOKEN }',
+      'SUPERVISOR_TOKEN',
+    ];
+    for (const s of strings) {
+      const flagged = check(`v: ${JSON.stringify(s)}\n`).status === 6;
+      let refused = false;
+      try {
+        resolveEnvReferences({ v: s });
+      } catch (err) {
+        refused = (err as Error).message.includes('cannot be referenced');
+      }
+      expect(flagged, s).toBe(refused);
+    }
+  });
+
+  it('lists the same names as the app', () => {
+    const copy = /const BLOCKED_ENV_REFS = \[([^\]]*)\];/.exec(readFileSync(ADDON_CONFIG, 'utf8'));
+    expect(copy, 'BLOCKED_ENV_REFS not found in addon-config.mjs').not.toBeNull();
+    const names = [...copy![1].matchAll(/'([A-Za-z0-9_]+)'/g)].map((m) => m[1]);
+    expect(names).toEqual([...BLOCKED_ENV_REFS]);
+  });
+
+  it('is run by run.sh on the copy that becomes the config, before the app starts', () => {
+    expect(customConfigBranch()).toMatch(/node "\$ADDON_CONFIG" check-env-refs "\$FRESH"/);
+  });
+});
+
+describe('addon-config.mjs drop-supervisor-token', () => {
+  const SUPERVISOR = 'ws://supervisor/core/websocket';
+
+  function legacy(token: string, url = SUPERVISOR): string {
+    return `ble:\n  handler: ha-bluetooth\n  ha_bluetooth:\n    url: ${url}\n    token: ${token}\n    source: AA:BB:CC:DD:EE:FF\n`;
+  }
+
+  function drop(fileContent: string): { status: number | null; after: string; err: string } {
+    return withTempDir((dir) => {
+      const file = join(dir, 'config.yaml');
+      writeFileSync(file, fileContent);
+      const res = spawnSync(process.execPath, [ADDON_CONFIG, 'drop-supervisor-token', file], {
+        encoding: 'utf8',
+      });
+      return { status: res.status, after: readFileSync(file, 'utf8'), err: res.stderr };
+    });
+  }
+
+  const WITHOUT_TOKEN = {
+    ble: {
+      handler: 'ha-bluetooth',
+      ha_bluetooth: { url: SUPERVISOR, source: 'AA:BB:CC:DD:EE:FF' },
+    },
+  };
+
+  it.each(["'${SUPERVISOR_TOKEN}'", '"${SUPERVISOR_TOKEN}"', '${SUPERVISOR_TOKEN}'])(
+    'removes the token line written as %s and keeps every other key',
+    (token) => {
+      const r = drop(legacy(token));
+      expect(r.status).toBe(0);
+      expect(r.err).toBe('');
+      expect(parse(r.after)).toEqual(WITHOUT_TOKEN);
+    },
+  );
+
+  it.each([
+    'ws://supervisor/core/websocket',
+    'ws://supervisor/core/api/websocket',
+    'http://supervisor/core/websocket',
+  ])('accepts the Supervisor URL %s', (url) => {
+    expect(drop(legacy("'${SUPERVISOR_TOKEN}'", url)).status).toBe(0);
+  });
+
+  it.each([
+    ['another URL', legacy("'${SUPERVISOR_TOKEN}'", 'ws://ha.example:8123/api/websocket')],
+    [
+      'a Supervisor look-alike host',
+      legacy("'${SUPERVISOR_TOKEN}'", 'ws://supervisor.evil/core/websocket'),
+    ],
+    ['another port', legacy("'${SUPERVISOR_TOKEN}'", 'ws://supervisor:8123/core/websocket')],
+    ['a token of your own', legacy("'${HA_TOKEN}'")],
+    ['a HASSIO_TOKEN reference', legacy("'${HASSIO_TOKEN}'")],
+    ['a lower-case reference', legacy("'${supervisor_token}'")],
+    ['a reference inside a longer value', legacy("'${SUPERVISOR_TOKEN}x'")],
+    ['a literal $${...}', legacy("'$${SUPERVISOR_TOKEN}'")],
+    ['an alias for the token', `x: &t '\${SUPERVISOR_TOKEN}'\n${legacy('*t')}`],
+    ['no ha_bluetooth block', 'ble:\n  handler: local\n'],
+    ['no token', "ble:\n  ha_bluetooth:\n    url: 'ws://supervisor/core/websocket'\n"],
+    ['ble that is not a map', 'ble: ha-bluetooth\n'],
+    ['an empty file', ''],
+  ])('leaves the file as it is for %s (exit 8)', (_name, file) => {
+    const r = drop(file);
+    expect(r.status).toBe(8);
+    expect(r.after).toBe(file);
+  });
+
+  it('leaves a file that is not valid YAML as it is (exit 7)', () => {
+    for (const file of ['ble: [unclosed\n', 'x: *nope\n', 'k: 1\nk: 2\n']) {
+      const r = drop(file);
+      expect(r, file).toMatchObject({ status: 7, after: file, err: '' });
+    }
+  });
+
+  it('does not change the type of any other value in the file', () => {
+    const block = '  ha_bluetooth:\n    url: ws://supervisor/core/websocket\n';
+    const withLine = TYPE_TRAPS.replace(
+      '  scale_mac: 12:34:56:12:34:56\n',
+      `  scale_mac: 12:34:56:12:34:56\n${block}    token: '\${SUPERVISOR_TOKEN}'\n`,
+    );
+    const r = drop(withLine);
+    expect(r.status).toBe(0);
+    expect(parse(r.after)).toEqual(
+      parse(
+        TYPE_TRAPS.replace(
+          '  scale_mac: 12:34:56:12:34:56\n',
+          `  scale_mac: 12:34:56:12:34:56\n${block}`,
+        ),
+      ),
+    );
+  });
+
+  it('keeps a long password on one line', () => {
+    const password = 'p'.repeat(120);
+    const r = drop(
+      `${legacy("'${SUPERVISOR_TOKEN}'")}global_exporters:\n  - type: mqtt\n    password: "${password}"\n`,
+    );
+    expect(r.status).toBe(0);
+    expect(r.after).toContain(`password: ${JSON.stringify(password)}`);
+  });
+
+  it('is run by run.sh before the check that refuses the reference', () => {
+    const branch = customConfigBranch();
+    const dropAt = branch.indexOf('node "$ADDON_CONFIG" drop-supervisor-token "$FRESH"');
+    const checkAt = branch.indexOf('node "$ADDON_CONFIG" check-env-refs "$FRESH"');
+    expect(dropAt).toBeGreaterThan(-1);
+    expect(checkAt).toBeGreaterThan(dropAt);
+  });
+
+  it('judges a URL like the app does', () => {
+    // Guards drift of the URL test copied into the .mjs.
+    const urls = [
+      'ws://supervisor/core/websocket',
+      'ws://supervisor/core/api/websocket',
+      'http://supervisor/core/websocket',
+      'https://supervisor/core/websocket',
+      'wss://supervisor/core/websocket',
+      'ws://supervisor/core/websocket/',
+      'ws://supervisor/core',
+      'ws://supervisor/homeassistant/websocket',
+      'ws://supervisor:8123/core/websocket',
+      'ws://supervisor./core/websocket',
+      'ws://supervisor.evil.example/core/websocket',
+      'ws://u:p@supervisor/core/websocket',
+      'ws://supervisor/core/websocket?x=1',
+      'ws://supervisor/core/websocket#x',
+      'ws://ha.local:8123/api/websocket',
+      'garbage',
+    ];
+    for (const url of urls) {
+      const dropped = drop(legacy("'${SUPERVISOR_TOKEN}'", JSON.stringify(url))).status === 0;
+      expect(dropped, url).toBe(isSupervisorUrl(url));
+    }
+  }, 30_000);
+
+  it('leaves a file alone when an alias still points at the token line', () => {
+    const file = `${legacy("&t '${SUPERVISOR_TOKEN}'")}other: *t\n`;
+    const res = drop(file);
+    expect(res.status).toBe(8);
+    expect(res.after).toBe(file);
+  });
+});
+
 describe('addon-config.mjs merge-weights', () => {
   function merge(fresh: string, persistent: string | null): { status: number | null; out: string } {
     return withTempDir((dir) => {
@@ -932,6 +1183,24 @@ describe.skipIf(!SHELL)('run.sh restarts the app after it exits', () => {
     expect(r.stdout.match(/Starting BLE Scale Sync/g)).toHaveLength(4);
   }, 30_000);
 
+  it('does not restart after a clean exit 0 (a finished single run)', () => {
+    const r = run([COUNT, 'exit 0'].join('\n'), supervisorBlock());
+    expect(r.starts).toBe(1);
+    expect(r.stdout).toMatch(/finished \(exit code 0\); not restarting/);
+    expect(r.stdout).not.toMatch(/restart #1/);
+    expect(r.status).toBe(0);
+  }, 30_000);
+
+  it('restarts after exit 1 and stops at the first exit 0', () => {
+    const block = supervisorBlock().replace(/^RESTART_DELAY_MIN=\d+$/m, 'RESTART_DELAY_MIN=1');
+    // Exit 1 twice (an empty single run), then 0: stops there, no third restart.
+    const r = run([COUNT, '[ "$n" -ge 3 ] || exit 1', 'exit 0'].join('\n'), block);
+    expect(r.starts).toBe(3);
+    expect(r.stdout).toMatch(/exited with code 1 after \d+s; restart #2/);
+    expect(r.stdout).toMatch(/finished \(exit code 0\); not restarting/);
+    expect(r.status).toBe(0);
+  }, 30_000);
+
   it('stops without another start when SIGTERM arrives during the delay', () => {
     // The real 5 s delay: the stop must cut it short.
     const stub = [COUNT, '(sleep 0.5; kill -TERM "$PPID") &', 'exit 1'].join('\n');
@@ -1007,9 +1276,28 @@ describe('add-on option ble_transport (#420)', () => {
       'mqtt_proxy_device_id',
       'mqtt_proxy_topic_prefix',
       'mqtt_proxy_embedded_broker_port',
+      // The two file names; the switch has no entry, an empty read is skipped.
+      'mqtt_proxy_embedded_tls_certfile',
+      'mqtt_proxy_embedded_tls_keyfile',
     ]) {
       expect(block, key).toContain(`${key}=${String(MANIFEST.options[key])}`);
     }
+  });
+
+  it('maps its own config folder read-only and not ssl, for the embedded broker certificate', () => {
+    const map = (
+      parse(lf(readFileSync('ble-scale-sync-addon/config.yaml', 'utf8'))) as {
+        map: string[];
+      }
+    ).map;
+    expect(map).toContain('addon_config:ro');
+    expect(map.some((m) => m.startsWith('ssl'))).toBe(false);
+    expect(map).toContain('share:rw');
+    expect(RUN_SH).toMatch(/^CERT_DIR="\/config"$/m);
+    expect(MANIFEST.options).toHaveProperty('mqtt_proxy_embedded_tls', false);
+    expect(SCHEMA.mqtt_proxy_embedded_tls).toBe('bool?');
+    expect(SCHEMA.mqtt_proxy_embedded_tls_certfile).toBe('str?');
+    expect(SCHEMA.mqtt_proxy_embedded_tls_keyfile).toBe('str?');
   });
 
   it('lists the options in the same order in options and schema, the order of the form', () => {
@@ -1140,6 +1428,65 @@ describe.skipIf(!SHELL)('run.sh ble_transport_problem', { timeout: 30_000 }, () 
     for (const vars of runnable) {
       expect(problem(vars), JSON.stringify(vars)).toEqual({ status: 0, out: '' });
     }
+  });
+
+  describe('embedded broker TLS files', () => {
+    const TLS_ON = {
+      ...MQTT_EMBEDDED,
+      MQTT_PROXY_USERNAME: 'esp32',
+      MQTT_PROXY_PASSWORD: 'pw',
+      MQTT_PROXY_TLS: 'true',
+      MQTT_PROXY_TLS_CERT: 'broker.pem',
+      MQTT_PROXY_TLS_KEY: 'broker.key',
+    };
+
+    /** The verdict with `files` present in a fresh config folder. */
+    function withSsl(vars: Record<string, string>, files: string[]) {
+      return withTempDir((raw) => {
+        const dir = raw.replace(/\\/g, '/');
+        for (const name of files) writeFileSync(join(raw, name), '');
+        return problem({ ...vars, CERT_DIR: dir });
+      });
+    }
+
+    it('says nothing when both files are in the config folder, or TLS is off', () => {
+      expect(withSsl(TLS_ON, ['broker.pem', 'broker.key'])).toEqual({ status: 0, out: '' });
+      expect(withSsl({ ...TLS_ON, MQTT_PROXY_TLS: 'false' }, [])).toEqual({ status: 0, out: '' });
+      expect(withSsl({ ...TLS_ON, MQTT_PROXY_TLS: '' }, [])).toEqual({ status: 0, out: '' });
+    });
+
+    it('names the option of a file that is not there', () => {
+      const missing = (option: string) =>
+        `mqtt_proxy_embedded_tls is on, but ${option} does not name a readable file in the ` +
+        "add-on config folder. Put the certificate in the add-on's folder under addon_configs " +
+        'and enter its file name, or turn mqtt_proxy_embedded_tls off.';
+      expect(withSsl(TLS_ON, ['broker.key']).out).toBe(missing('mqtt_proxy_embedded_tls_certfile'));
+      expect(withSsl(TLS_ON, ['broker.pem']).out).toBe(missing('mqtt_proxy_embedded_tls_keyfile'));
+      expect(withSsl(TLS_ON, []).out).toBe(missing('mqtt_proxy_embedded_tls_certfile'));
+    });
+
+    it('wants a file name, not a path or a name that starts with a dot', () => {
+      for (const name of ['/etc/passwd', '../x.pem', 'a/b.pem', '.hidden', 'a..b', 'a b.pem']) {
+        expect(
+          withSsl({ ...TLS_ON, MQTT_PROXY_TLS_CERT: name }, ['broker.key', 'broker.pem']).out,
+          name,
+        ).toBe(
+          'mqtt_proxy_embedded_tls_certfile takes a file name in the add-on config folder, not a path.',
+        );
+        expect(
+          withSsl({ ...TLS_ON, MQTT_PROXY_TLS_KEY: name }, ['broker.key', 'broker.pem']).out,
+          name,
+        ).toBe(
+          'mqtt_proxy_embedded_tls_keyfile takes a file name in the add-on config folder, not a path.',
+        );
+      }
+    });
+
+    it('does not look at the files for the shared broker', () => {
+      expect(
+        withSsl({ ...MQTT_SHARED, MQTT_BROKER_URL: 'mqtt://h:1883', MQTT_PROXY_TLS: 'true' }, []),
+      ).toEqual({ status: 0, out: '' });
+    });
   });
 
   it('names what is wrong, and returns 0 so set -e lets the caller report it', () => {

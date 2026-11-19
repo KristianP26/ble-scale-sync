@@ -6,7 +6,7 @@ import type { Exporter, ExportContext, ExportResult } from '../interfaces/export
 import type { ExporterSchema } from '../interfaces/exporter-schema.js';
 import type { StravaConfig } from './config.js';
 import { withRetry, httpError } from '../utils/retry.js';
-import { probe } from './http.js';
+import { probe, fetchNoRedirect } from './http.js';
 import { errMsg } from '../utils/error.js';
 import { cliCommand } from '../cli-invocation.js';
 import { atomicWrite } from '../config/write.js';
@@ -102,7 +102,7 @@ export class StravaExporter implements Exporter {
         const tokens = this.loadTokens();
         const accessToken = await this.ensureFreshToken(tokens);
 
-        const response = await fetch('https://www.strava.com/api/v3/athlete', {
+        const response = await fetchNoRedirect('https://www.strava.com/api/v3/athlete', {
           method: 'PUT',
           headers: {
             Authorization: `Bearer ${accessToken}`,
@@ -150,7 +150,7 @@ export class StravaExporter implements Exporter {
     }
 
     log.info('Access token expired or about to, refreshing...');
-    const response = await fetch('https://www.strava.com/oauth/token', {
+    const response = await fetchNoRedirect('https://www.strava.com/oauth/token', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({

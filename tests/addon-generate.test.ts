@@ -94,6 +94,8 @@ interface GenerateCase {
   supervisorToken?: string;
   /** Replies of GET /services/mqtt, in call order; the last one repeats. */
   supervisor?: SupervisorReply[];
+  /** Files to create (empty) in the add-on config folder of this run, by name. */
+  certFiles?: string[];
 }
 
 interface Generated {
@@ -137,11 +139,14 @@ function generate(c: GenerateCase): Generated {
         writeFileSync(`${stub}/reply.${i + 1}.body`, JSON.stringify(r.body));
     });
     writeFileSync(`${dir}/options.json`, JSON.stringify(c.options));
+    mkdirSync(`${dir}/config`);
+    for (const name of c.certFiles ?? []) writeFileSync(`${dir}/config/${name}`, '');
 
     const script = [
       'set -e',
       `OPTIONS='${dir}/options.json'`,
       `FRESH='${dir}/fresh.yaml'`,
+      `CERT_DIR='${dir}/config'`,
       logFunction(),
       ...GENERATE_BLOCKS.map(block),
     ]
@@ -456,6 +461,7 @@ describe.skipIf(!HARNESS)(
             password: "garmin-password"
             token_dir: <tmp>/garmin-tokens
             weight_only: false
+            skip_metabolic_age: false
             upload_timeout_sec: 180
 
         runtime:
@@ -960,6 +966,141 @@ describe.skipIf(!HARNESS)(
         expect(r.stdout).toContain('WARNING: mqtt_proxy_broker embedded wants port 1883');
       });
 
+      it('embedded: warns about every port the Mosquitto add-on maps, and only those', () => {
+        for (const port of [1883, 1884, 8883, 8884]) {
+          const r = generate({
+            options: { ...EMBEDDED, mqtt_proxy_embedded_broker_port: port },
+            supervisorToken: 'supervisor-token-sentinel',
+            supervisor: [MOSQUITTO_REPLY],
+          });
+          expectLoads(r);
+          expect(r.stdout, String(port)).toContain(
+            `WARNING: mqtt_proxy_broker embedded wants port ${port}, which the Mosquitto broker add-on`,
+          );
+        }
+        const free = generate({
+          options: { ...EMBEDDED, mqtt_proxy_embedded_broker_port: 18883 },
+          supervisorToken: 'supervisor-token-sentinel',
+          supervisor: [MOSQUITTO_REPLY],
+        });
+        expectLoads(free);
+        expect(free.stdout).not.toContain('WARNING: mqtt_proxy_broker');
+      });
+
+      describe('embedded broker TLS', () => {
+        const TLS = {
+          ...EMBEDDED,
+          mqtt_proxy_embedded_broker_port: 18883,
+          mqtt_proxy_embedded_tls: true,
+        };
+
+        it('writes the certificate and key from the config folder, and the app loads them', () => {
+          const r = generate({ options: TLS, certFiles: ['broker.pem', 'broker.key'] });
+          const config = expectLoads(r);
+          expect(config.ble?.mqtt_proxy).toMatchObject({
+            embedded_broker_port: 18883,
+            embedded_broker_tls_cert: expect.stringMatching(/\/config\/broker\.pem$/),
+            embedded_broker_tls_key: expect.stringMatching(/\/config\/broker\.key$/),
+          });
+          expect(r.text).toContain('embedded_broker_tls_cert: "<tmp>/config/broker.pem"');
+          expect(r.stdout).toContain(
+            '(embedded broker on port 18883, TLS, device esp32-ble-proxy)',
+          );
+          expect(r.stdout).not.toContain('embedded-broker-secret');
+        });
+
+        it('uses the file names of the options, and the defaults for an emptied one', () => {
+          const named = generate({
+            options: {
+              ...TLS,
+              mqtt_proxy_embedded_tls_certfile: ' my.pem ',
+              mqtt_proxy_embedded_tls_keyfile: 'my.key',
+            },
+            certFiles: ['my.pem', 'my.key'],
+          });
+          expectLoads(named);
+          expect(named.text).toContain('embedded_broker_tls_cert: "<tmp>/config/my.pem"');
+          expect(named.text).toContain('embedded_broker_tls_key: "<tmp>/config/my.key"');
+
+          const emptied = generate({
+            options: {
+              ...TLS,
+              mqtt_proxy_embedded_tls_certfile: '',
+              mqtt_proxy_embedded_tls_keyfile: '',
+            },
+            certFiles: ['broker.pem', 'broker.key'],
+          });
+          expectLoads(emptied);
+          expect(emptied.text).toContain('<tmp>/config/broker.pem');
+          expect(emptied.text).toContain('<tmp>/config/broker.key');
+        });
+
+        it('stops when a file is not in the config folder, naming the option only', () => {
+          expectStopped(
+            generate({ options: TLS, certFiles: ['broker.key'] }),
+            'mqtt_proxy_embedded_tls is on, but mqtt_proxy_embedded_tls_certfile does not name a ' +
+              'readable file in the add-on config folder.',
+          );
+          expectStopped(
+            generate({ options: TLS, certFiles: ['broker.pem'] }),
+            'mqtt_proxy_embedded_tls is on, but mqtt_proxy_embedded_tls_keyfile does not name a ' +
+              'readable file in the add-on config folder.',
+          );
+        });
+
+        it('stops on a path or a name that climbs out of the config folder', () => {
+          for (const name of ['/etc/passwd', '../data/options.json', 'sub/broker.key', '.hidden']) {
+            expectStopped(
+              generate({
+                options: { ...TLS, mqtt_proxy_embedded_tls_keyfile: name },
+                certFiles: ['broker.pem'],
+              }),
+              'mqtt_proxy_embedded_tls_keyfile takes a file name in the add-on config folder, not a path.',
+            );
+          }
+        });
+
+        it('reads a switch set to false, or a missing one, as off', () => {
+          // opt() reads false as unset: the switch needs opt_bool, or "false"
+          // would be reported as set but ignored (or worse, turn TLS on).
+          const missing: Record<string, unknown> = { ...EMBEDDED };
+          delete missing.mqtt_proxy_embedded_tls;
+          for (const options of [{ ...EMBEDDED, mqtt_proxy_embedded_tls: false }, missing]) {
+            const r = generate({ options });
+            expectLoads(r);
+            expect(r.text).not.toContain('embedded_broker_tls');
+            expect(r.stdout).toContain('(embedded broker on port 1883, device');
+            expect(r.stdout).not.toContain('mqtt_proxy_embedded_tls');
+          }
+        });
+
+        it('shared: names the TLS options it ignores', () => {
+          const r = generate({
+            options: {
+              ...SHARED,
+              mqtt_auto: false,
+              mqtt_broker_url: 'mqtt://h:1883',
+              mqtt_proxy_embedded_tls: true,
+              mqtt_proxy_embedded_tls_certfile: 'my.pem',
+            },
+          });
+          expectLoads(r);
+          expect(r.text).not.toContain('embedded_broker_tls');
+          expect(r.stdout).toContain(
+            'only apply to mqtt_proxy_broker embedded, so they are ignored: ' +
+              'mqtt_proxy_embedded_tls, mqtt_proxy_embedded_tls_certfile.',
+          );
+        });
+
+        it('a certificate or key set but TLS off writes neither key', () => {
+          const r = generate({
+            options: { ...EMBEDDED, mqtt_proxy_embedded_tls_certfile: 'my.pem' },
+          });
+          expectLoads(r);
+          expect(r.text).not.toContain('embedded_broker_tls');
+        });
+      });
+
       it('shared: names the embedded-only options it ignores', () => {
         const r = generate({
           options: {
@@ -984,23 +1125,20 @@ describe.skipIf(!HARNESS)(
       const TOKEN = 'ab'.repeat(56);
       const HA = { ...DEFAULTS, ble_transport: 'ha-bluetooth', scale_mac: 'A0:85:61:91:E9:4F' };
 
-      it('reads Home Assistant through the Supervisor with a token reference, not the token', () => {
+      it('reads Home Assistant through the Supervisor and writes no token at all', () => {
         const r = generate({ options: HA, supervisorToken: TOKEN });
         expect(r.text).toContain('    url: "ws://supervisor/core/websocket"\n');
-        expect(r.text).toContain('    token: "${SUPERVISOR_TOKEN}"\n');
+        expect(r.text).not.toContain('SUPERVISOR_TOKEN');
         expect(r.text).not.toContain(TOKEN);
         expect(r.stdout).not.toContain(TOKEN);
         expect(r.stdout).toContain('Bluetooth transport: ha-bluetooth');
 
-        // The app resolves the reference from the environment the Supervisor
-        // gives the add-on, which the restart loop passes on to it.
-        process.env.SUPERVISOR_TOKEN = TOKEN;
+        // The app reads SUPERVISOR_TOKEN itself for this URL, so the file loads
+        // without it in the environment and carries no token.
         const config = expectLoads(r);
         expect(config.ble?.handler).toBe('ha-bluetooth');
-        expect(config.ble?.ha_bluetooth).toMatchObject({
-          url: 'ws://supervisor/core/websocket',
-          token: TOKEN,
-        });
+        expect(config.ble?.ha_bluetooth).toMatchObject({ url: 'ws://supervisor/core/websocket' });
+        expect(config.ble?.ha_bluetooth?.token).toBeUndefined();
         expect(config.ble?.scale_mac).toBe('A0:85:61:91:E9:4F');
       });
 
@@ -1030,7 +1168,8 @@ describe.skipIf(!HARNESS)(
           expect(res.status, res.stdout + res.stderr).toBe(0);
           writeLastKnownWeight(config, 'default', 72.5);
           const saved = readFileSync(config, 'utf8');
-          expect(saved).toContain('token: "${SUPERVISOR_TOKEN}"');
+          expect(saved).toContain('url: "ws://supervisor/core/websocket"');
+          expect(saved).not.toContain('SUPERVISOR_TOKEN');
           expect(saved).toMatch(/last_known_weight: 72.5/);
           expect(saved).not.toContain(TOKEN);
         } finally {
@@ -1055,16 +1194,20 @@ describe.skipIf(!HARNESS)('run.sh custom_config and the transport options', () =
     return `${RUN_SH.slice(start, end)}\nfi\n`;
   }
 
-  function run(options: Record<string, unknown>): { status: number | null; stdout: string } {
+  function run(
+    options: Record<string, unknown>,
+    file = 'version: 1\n',
+  ): { status: number | null; stdout: string; freshLeft: boolean; fresh: string } {
     const raw = mkdtempSync(join(tmpdir(), 'addon-custom-'));
     const dir = raw.replace(/\\/g, '/');
     try {
       writeFileSync(`${dir}/options.json`, JSON.stringify(options));
-      writeFileSync(`${dir}/custom.yaml`, 'version: 1\n');
+      writeFileSync(`${dir}/custom.yaml`, file);
       const script = [
         'set -e',
         `OPTIONS='${dir}/options.json'`,
         `FRESH='${dir}/fresh.yaml'`,
+        `ADDON_CONFIG='${resolve('ble-scale-sync-addon/addon-config.mjs').replace(/\\/g, '/')}'`,
         logFunction(),
         ...['option readers', 'yaml escape', 'option checks', 'ble transport', 'mode'].map(block),
         customBranch().replaceAll('/share/ble-scale-sync/config.yaml', `${dir}/custom.yaml`),
@@ -1074,13 +1217,116 @@ describe.skipIf(!HARNESS)('run.sh custom_config and the transport options', () =
         env: { PATH: process.env.PATH },
       });
       expect(res.stderr).toBe('');
-      return { status: res.status, stdout: res.stdout.replaceAll(dir, '<tmp>') };
+      return {
+        status: res.status,
+        stdout: res.stdout.replaceAll(dir, '<tmp>'),
+        freshLeft: existsSync(`${dir}/fresh.yaml`),
+        fresh: existsSync(`${dir}/fresh.yaml`) ? readFileSync(`${dir}/fresh.yaml`, 'utf8') : '',
+      };
     } finally {
       rmSync(raw, { recursive: true, force: true });
     }
   }
 
   const CUSTOM = { ...DEFAULTS, custom_config: true };
+
+  describe('Supervisor token references in the file', () => {
+    // Not the Supervisor URL, so these stay refusals whatever else is done to
+    // the documented ha-bluetooth snippet.
+    const OTHER_HA = 'ws://ha.example:8123/api/websocket';
+    const REFUSED: [string, string][] = [
+      [
+        'a plain reference',
+        `ble:\n  handler: ha-bluetooth\n  ha_bluetooth:\n    url: ${OTHER_HA}\n    token: '\${SUPERVISOR_TOKEN}'\n`,
+      ],
+      [
+        'a HASSIO_TOKEN reference in an exporter header',
+        'global_exporters:\n  - type: webhook\n    url: http://example.test/hook\n    headers:\n      X-Api-Key: "k-${hassio_token}"\n',
+      ],
+      [
+        'a double-quoted escape of the dollar sign',
+        'global_exporters:\n  - type: webhook\n    url: "\\x24{SUPERVISOR_TOKEN}"\n',
+      ],
+      [
+        'an alias of a reference',
+        "x-ref: &t '${SUPERVISOR_TOKEN}'\nglobal_exporters:\n  - type: webhook\n    url: http://example.test/hook\n    headers:\n      X-Api-Key: *t\n",
+      ],
+    ];
+
+    it.each(REFUSED)('stops the add-on on %s', (_name, file) => {
+      const r = run(CUSTOM, file);
+      expect(r.status).toBe(1);
+      expect(r.stdout).toContain(
+        'ERROR: <tmp>/custom.yaml reads the Supervisor token through a ${...} reference, at: ',
+      );
+      expect(r.freshLeft).toBe(false);
+    });
+
+    it('names the config path of the reference', () => {
+      const r = run(CUSTOM, REFUSED[1][1]);
+      expect(r.stdout).toContain('at: global_exporters[0].headers.X-Api-Key');
+    });
+
+    it('goes on with a clean file, a literal $${...} and another variable', () => {
+      for (const file of [
+        'version: 1\n',
+        "global_exporters:\n  - type: webhook\n    url: http://example.test/hook\n    headers:\n      X-Api-Key: '$${SUPERVISOR_TOKEN}'\n",
+        "ble:\n  handler: ha-bluetooth\n  ha_bluetooth:\n    url: ws://ha.example:8123/api/websocket\n    token: '${HA_TOKEN}'\n",
+      ]) {
+        const r = run(CUSTOM, file);
+        expect(r.status, file).toBe(0);
+        expect(r.stdout, file).not.toContain('Supervisor token');
+        // A wrong ADDON_CONFIG path would switch the check off without a failure.
+        expect(r.stdout, file).not.toContain('could not check');
+      }
+    });
+
+    it('leaves a file that is not YAML to the app', () => {
+      const r = run(CUSTOM, 'users: [unclosed\n');
+      expect(r.status).toBe(0);
+      expect(r.stdout).not.toContain('could not check');
+    });
+  });
+
+  describe('the old ha-bluetooth snippet of the add-on guide', () => {
+    const LEGACY = [
+      'ble:',
+      '  handler: ha-bluetooth',
+      '  ha_bluetooth:',
+      '    url: ws://supervisor/core/websocket',
+      "    token: '${SUPERVISOR_TOKEN}'",
+      '    source: AA:BB:CC:DD:EE:FF',
+      '',
+    ].join('\n');
+
+    it('starts, says the line is ignored and leaves it out of the working copy', () => {
+      const r = run(CUSTOM, LEGACY);
+      expect(r.status).toBe(0);
+      expect(r.stdout).toContain(
+        'NOTE: ble.ha_bluetooth.token in <tmp>/custom.yaml is the Supervisor token reference.',
+      );
+      expect(r.stdout).not.toContain('could not check');
+      expect(r.fresh).not.toContain('SUPERVISOR_TOKEN');
+      expect(parse(r.fresh)).toEqual({
+        ble: {
+          handler: 'ha-bluetooth',
+          ha_bluetooth: { url: 'ws://supervisor/core/websocket', source: 'AA:BB:CC:DD:EE:FF' },
+        },
+      });
+    });
+
+    it('is refused when the URL is not the Supervisor one', () => {
+      const r = run(CUSTOM, LEGACY.replace('ws://supervisor/core/websocket', 'ws://ha.example/ws'));
+      expect(r.status).toBe(1);
+      expect(r.stdout).toContain('at: ble.ha_bluetooth.token');
+      expect(r.stdout).not.toContain('NOTE: ble.ha_bluetooth.token');
+    });
+
+    it('says nothing for a file without the line', () => {
+      const r = run(CUSTOM, 'version: 1\n');
+      expect(r.stdout).not.toContain('NOTE: ble.ha_bluetooth.token');
+    });
+  });
 
   it('names the transport options it ignores, never their values', () => {
     const r = run({

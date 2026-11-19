@@ -4,7 +4,7 @@ import type { Exporter, ExportContext, ExportResult } from '../interfaces/export
 import type { ExporterSchema } from '../interfaces/exporter-schema.js';
 import type { IntervalsConfig } from './config.js';
 import { httpError } from '../utils/retry.js';
-import { sendWithRetry, probe } from './http.js';
+import { sendWithRetry, probe, fetchNoRedirect } from './http.js';
 import { errMsg } from '../utils/error.js';
 
 const log = createLogger('Intervals');
@@ -103,7 +103,7 @@ export class IntervalsExporter implements Exporter {
   private async resolveAthleteTimeZone(): Promise<string | null> {
     if (this.athleteTimeZone) return this.athleteTimeZone;
     try {
-      const response = await fetch(
+      const response = await fetchNoRedirect(
         `${API_BASE}/api/v1/athlete/${encodeURIComponent(this.config.athleteId)}`,
         { headers: { Authorization: this.authHeader() }, signal: AbortSignal.timeout(5000) },
       );

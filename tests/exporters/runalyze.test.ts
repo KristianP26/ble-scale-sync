@@ -185,6 +185,17 @@ describe('RunalyzeExporter', () => {
       expect(result.error).toBe('invalid token');
     });
 
+    it('does not follow a redirect, so the token header goes nowhere else', async () => {
+      mockFetch.mockResolvedValue(
+        new Response(null, { status: 308, headers: { location: 'https://other.example/x' } }),
+      );
+      const result = await new RunalyzeExporter(defaultConfig).healthcheck();
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('HTTP 308: redirected to https://other.example');
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      expect(mockFetch.mock.calls[0][1].redirect).toBe('manual');
+    });
+
     it('returns failure on a network error', async () => {
       mockFetch.mockRejectedValue(new Error('ECONNREFUSED'));
       const result = await new RunalyzeExporter(defaultConfig).healthcheck();

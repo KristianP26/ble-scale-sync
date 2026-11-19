@@ -10,6 +10,7 @@ import {
   assertPayloadRanges,
 } from '../helpers/scale-test-utils.js';
 import { MI2_LIGHT_STABLE, MI2_WEIGH_IN } from '../helpers/mi-scale-2-422.js';
+import { MI2_537_REMOVED, MI2_537_WEIGH_IN } from '../helpers/mi-scale-2-537.js';
 
 function makeAdapter() {
   return new MiScale2Adapter();
@@ -331,6 +332,18 @@ describe('MiScale2Adapter', () => {
       } finally {
         debug.mockRestore();
       }
+    });
+  });
+
+  // The frames of #537: the advert that opened a GATT connect on esphome-proxy
+  // carries a stable weight but the load-removed bit, the next one is the weigh-in.
+  describe('the removed and weigh-in frames of #537', () => {
+    it('ignores the removed frame and reads 74.25 kg / 444 ohm from the weigh-in', () => {
+      const adapter = makeAdapter();
+      expect(adapter.parseServiceData('181b', Buffer.from(MI2_537_REMOVED, 'hex'))).toBeNull();
+      const reading = adapter.parseServiceData('181b', Buffer.from(MI2_537_WEIGH_IN, 'hex'));
+      expect(reading).toEqual({ weight: 74.25, impedance: 444 });
+      expect(adapter.isComplete(reading!)).toBe(true);
     });
   });
 

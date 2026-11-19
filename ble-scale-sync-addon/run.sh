@@ -7,6 +7,9 @@ OPTIONS="/data/options.json"
 CONFIG="/data/config.yaml"
 FRESH="/tmp/config-fresh.yaml"
 ADDON_CONFIG="/app/addon-config.mjs"
+# The add-on's own config folder, mapped read-only by the manifest
+# (map: addon_config:ro); /addon_configs/<slug> on the host.
+CERT_DIR="/config"
 mkdir -p /data
 
 log() { echo "[ble-scale-sync] $*"; }
@@ -110,7 +113,7 @@ valid_esphome_key() {
 # >>> ble transport
 
 ESPHOME_OPTIONS="esphome_proxy_host esphome_proxy_port esphome_proxy_encryption_key"
-MQTT_PROXY_EMBEDDED_OPTIONS="mqtt_proxy_embedded_broker_port mqtt_proxy_username mqtt_proxy_password"
+MQTT_PROXY_EMBEDDED_OPTIONS="mqtt_proxy_embedded_broker_port mqtt_proxy_username mqtt_proxy_password mqtt_proxy_embedded_tls mqtt_proxy_embedded_tls_certfile mqtt_proxy_embedded_tls_keyfile"
 MQTT_PROXY_OPTIONS="mqtt_proxy_broker mqtt_proxy_device_id mqtt_proxy_topic_prefix $MQTT_PROXY_EMBEDDED_OPTIONS"
 
 # Names of the given transport options that differ from their defaults in the
@@ -123,13 +126,36 @@ transport_options_set() {
     case "$_o=$_v" in
       esphome_proxy_port=6053 | mqtt_proxy_broker=shared | \
         mqtt_proxy_device_id=esp32-ble-proxy | mqtt_proxy_topic_prefix=ble-proxy | \
-        mqtt_proxy_embedded_broker_port=1883)
+        mqtt_proxy_embedded_broker_port=1883 | mqtt_proxy_embedded_tls_certfile=broker.pem | \
+        mqtt_proxy_embedded_tls_keyfile=broker.key)
         continue
         ;;
     esac
     _set="${_set:+$_set, }$_o"
   done
   printf '%s' "$_set"
+  return 0
+}
+
+# Why the embedded broker's TLS files cannot be used, on one line, or nothing.
+# Each option takes a plain file name in the add-on config folder: a path could
+# reach any file the add-on can read. Option names only, never a value.
+embedded_tls_problem() {
+  for _t in "mqtt_proxy_embedded_tls_certfile=$MQTT_PROXY_TLS_CERT" \
+    "mqtt_proxy_embedded_tls_keyfile=$MQTT_PROXY_TLS_KEY"; do
+    _tname=${_t%%=*}
+    _tfile=${_t#*=}
+    case "$_tfile" in
+      */* | .* | *..* | *[[:space:]]*)
+        echo "$_tname takes a file name in the add-on config folder, not a path."
+        return 0
+        ;;
+    esac
+    if [ ! -f "$CERT_DIR/$_tfile" ] || [ ! -r "$CERT_DIR/$_tfile" ]; then
+      echo "mqtt_proxy_embedded_tls is on, but $_tname does not name a readable file in the add-on config folder. Put the certificate in the add-on's folder under addon_configs and enter its file name, or turn mqtt_proxy_embedded_tls off."
+      return 0
+    fi
+  done
   return 0
 }
 
@@ -156,6 +182,9 @@ ble_transport_problem() {
       elif [ "$MQTT_PROXY_BROKER" = "embedded" ] &&
         { [ -z "$MQTT_PROXY_USERNAME" ] || [ -z "$MQTT_PROXY_PASSWORD" ]; }; then
         echo "mqtt_proxy_broker embedded listens on this host's network, so it needs mqtt_proxy_username and mqtt_proxy_password; the ESP32 logs in with them."
+      elif [ "$MQTT_PROXY_BROKER" = "embedded" ] && [ "$MQTT_PROXY_TLS" = "true" ] &&
+        [ -n "$(embedded_tls_problem)" ]; then
+        embedded_tls_problem
       elif [ "$MQTT_PROXY_BROKER" = "shared" ] && [ -z "$MQTT_BROKER_URL" ]; then
         echo "ble_transport is mqtt-proxy with mqtt_proxy_broker shared, but no MQTT broker is available. Start the Mosquitto broker add-on with MQTT auto-detect on, set mqtt_broker_url, or set mqtt_proxy_broker to embedded."
       elif [ "$MQTT_PROXY_BROKER" = "shared" ]; then
@@ -207,6 +236,11 @@ emit_ble_transport() {
         printf '%s\n' "    embedded_broker_port: $MQTT_PROXY_PORT" \
           "    username: \"$(yaml_escape "$MQTT_PROXY_USERNAME")\"" \
           "    password: \"$(yaml_escape "$MQTT_PROXY_PASSWORD")\""
+        if [ "$MQTT_PROXY_TLS" = "true" ]; then
+          printf '%s\n' \
+            "    embedded_broker_tls_cert: \"$(yaml_escape "$CERT_DIR/$MQTT_PROXY_TLS_CERT")\"" \
+            "    embedded_broker_tls_key: \"$(yaml_escape "$CERT_DIR/$MQTT_PROXY_TLS_KEY")\""
+        fi
       fi
       [ -z "$MQTT_PROXY_DEVICE_ID" ] ||
         printf '%s\n' "    device_id: \"$(yaml_escape "$MQTT_PROXY_DEVICE_ID")\""
@@ -215,13 +249,13 @@ emit_ble_transport() {
       ;;
     ha-bluetooth)
       # Home Assistant through the Supervisor's websocket proxy, which this
-      # add-on may use because the manifest sets homeassistant_api. The token
-      # is a reference, never the value: the Supervisor issues a new one on
-      # every add-on start, and the app resolves ${...} from its environment
-      # on load. The path must be written out in full: a bare
-      # http://supervisor/core would become ws://supervisor/core.
+      # add-on may use because the manifest sets homeassistant_api. No token is
+      # written: the app reads SUPERVISOR_TOKEN from its environment for exactly
+      # this URL (the Supervisor issues a new one on every add-on start), and
+      # config.yaml never carries or references it. The path must be written out
+      # in full: a bare http://supervisor/core would become ws://supervisor/core.
       printf '%s\n' '  handler: ha-bluetooth' '  ha_bluetooth:' \
-        '    url: "ws://supervisor/core/websocket"' '    token: "${SUPERVISOR_TOKEN}"'
+        '    url: "ws://supervisor/core/websocket"'
       ;;
   esac
   return 0
@@ -253,6 +287,34 @@ if [ "$CUSTOM_CONFIG" = "true" ]; then
     log "ERROR: Failed to copy custom config from $CUSTOM_PATH"
     exit 1
   fi
+  # The add-on guide used to show `token: '${SUPERVISOR_TOKEN}'` for ha-bluetooth.
+  # The app reads that token itself for the Supervisor URL, so drop exactly that
+  # line from the working copy (never from the file in /share) before the check
+  # below would refuse it. A token line next to any other URL stays and is refused.
+  _dsrc=0
+  node "$ADDON_CONFIG" drop-supervisor-token "$FRESH" 2>/dev/null || _dsrc=$?
+  case "$_dsrc" in
+    0) log "NOTE: ble.ha_bluetooth.token in $CUSTOM_PATH is the Supervisor token reference. The app reads that token itself for this URL, so the line is ignored. Delete it from the file." ;;
+    7 | 8) ;;
+    *) log "WARNING: could not check $CUSTOM_PATH for the old Supervisor token line; if the add-on stops on a token reference, delete the token line." ;;
+  esac
+  # The app never expands ${SUPERVISOR_TOKEN} or ${HASSIO_TOKEN}: whatever such
+  # a value feeds would receive this add-on's Supervisor access. Stop here
+  # instead of starting an app that exits at once and letting the restart loop
+  # below do that for ever. $FRESH is what becomes $CONFIG.
+  _ecrc=0
+  _ecpaths=$(node "$ADDON_CONFIG" check-env-refs "$FRESH" 2>/dev/null) || _ecrc=$?
+  case "$_ecrc" in
+    0 | 7) ;;
+    6)
+      rm -f "$FRESH"
+      log "ERROR: $CUSTOM_PATH reads the Supervisor token through a \${...} reference, at: $(printf '%s' "$_ecpaths" | tr '\n' ' ')"
+      log "The token is a credential of this add-on and is never expanded in config.yaml: whatever the value feeds would receive it."
+      log "Delete the reference. For ble.handler ha-bluetooth use url: ws://supervisor/core/websocket and leave out token: the app reads it itself."
+      exit 1
+      ;;
+    *) log "WARNING: could not check $CUSTOM_PATH for Supervisor token references; the app refuses them anyway." ;;
+  esac
   # In this mode the whole option-to-config generation below is skipped, so any
   # UI option set here does nothing. Say so for the two QN bytes specifically:
   # they are knobs handed to reporters who are chasing a scale that reads
@@ -429,6 +491,13 @@ else
   MQTT_PROXY_PORT=$(opt_int mqtt_proxy_embedded_broker_port 1883)
   MQTT_PROXY_USERNAME=$(opt mqtt_proxy_username)
   MQTT_PROXY_PASSWORD=$(opt mqtt_proxy_password)
+  # opt() would read false as unset, and an unset switch must mean off.
+  MQTT_PROXY_TLS=$(opt_bool mqtt_proxy_embedded_tls)
+  # An emptied name means the manifest's default, as for the device ID.
+  MQTT_PROXY_TLS_CERT=$(opt mqtt_proxy_embedded_tls_certfile | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+  [ -n "$MQTT_PROXY_TLS_CERT" ] || MQTT_PROXY_TLS_CERT=broker.pem
+  MQTT_PROXY_TLS_KEY=$(opt mqtt_proxy_embedded_tls_keyfile | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+  [ -n "$MQTT_PROXY_TLS_KEY" ] || MQTT_PROXY_TLS_KEY=broker.key
 
   # The options that only steer the built-in adapter are not written for a
   # proxy transport, which has no use for them, so that the ble: block and its
@@ -490,11 +559,13 @@ else
   GARMIN_EMAIL=$(opt garmin_email)
   GARMIN_PASSWORD=$(opt garmin_password)
   GARMIN_WEIGHT_ONLY=$(opt_bool garmin_weight_only)
-  # opt_bool echoes the raw option, and this one is interpolated unquoted into
-  # the generated YAML. The add-on schema declares it bool?, but a hand-edited
+  GARMIN_SKIP_METABOLIC_AGE=$(opt_bool garmin_skip_metabolic_age)
+  # opt_bool echoes the raw option, and these are interpolated unquoted into
+  # the generated YAML. The add-on schema declares them bool?, but a hand-edited
   # options.json is not bound by that, and a stray string would produce YAML
   # that fails to parse. Anything that is not exactly "true" is false.
   [ "$GARMIN_WEIGHT_ONLY" = "true" ] || GARMIN_WEIGHT_ONLY=false
+  [ "$GARMIN_SKIP_METABOLIC_AGE" = "true" ] || GARMIN_SKIP_METABOLIC_AGE=false
   GARMIN_UPLOAD_TIMEOUT=$(opt_int garmin_upload_timeout_sec 180)
 
   SCAN_COOLDOWN=$(opt_int scan_cooldown 30)
@@ -586,11 +657,15 @@ else
   _problem=$(ble_transport_problem)
   [ -z "$_problem" ] || ble_transport_error "$_problem"
 
-  # A heuristic, hence only a warning: the Mosquitto add-on maps 1883 on the
-  # host, but the mapping can be changed.
+  # A heuristic, hence only a warning: the Mosquitto add-on maps 1883, 1884,
+  # 8883 and 8884 on the host, but the mapping can be changed.
   if [ "$BLE_TRANSPORT" = "mqtt-proxy" ] && [ "$MQTT_PROXY_BROKER" = "embedded" ] &&
-    [ "$MQTT_PROXY_PORT" = "1883" ] && [ "$MQTT_DETECTED" = "true" ]; then
-    log "WARNING: mqtt_proxy_broker embedded wants port 1883, which the Mosquitto broker add-on usually holds on this host. If the broker fails to start, use mqtt_proxy_broker shared, or another mqtt_proxy_embedded_broker_port with the same mqtt_port in the ESP32's config.json."
+    [ "$MQTT_DETECTED" = "true" ]; then
+    case "$MQTT_PROXY_PORT" in
+      1883 | 1884 | 8883 | 8884)
+        log "WARNING: mqtt_proxy_broker embedded wants port $MQTT_PROXY_PORT, which the Mosquitto broker add-on usually holds on this host (it maps 1883, 1884, 8883 and 8884). If the broker fails to start, use mqtt_proxy_broker shared, or another mqtt_proxy_embedded_broker_port with the same mqtt_port in the ESP32's config.json."
+        ;;
+    esac
   fi
 
   _other=""
@@ -623,6 +698,7 @@ else
         _broker="shared broker"
       else
         _broker="embedded broker on port $MQTT_PROXY_PORT"
+        [ "$MQTT_PROXY_TLS" != "true" ] || _broker="$_broker, TLS"
       fi
       log "Bluetooth transport: mqtt-proxy ($_broker, device ${MQTT_PROXY_DEVICE_ID:-esp32-ble-proxy})"
       ;;
@@ -897,6 +973,7 @@ YAML
     password: "$(yaml_escape "$GARMIN_PASSWORD")"
     token_dir: /data/garmin-tokens
     weight_only: $GARMIN_WEIGHT_ONLY
+    skip_metabolic_age: $GARMIN_SKIP_METABOLIC_AGE
     upload_timeout_sec: $GARMIN_UPLOAD_TIMEOUT
 YAML
     fi
@@ -1131,6 +1208,14 @@ fi
 # exiting soon after it starts, and drops back to 5 s after a run of 10 minutes
 # or more.
 #
+# An exit with code 0 that nobody asked for is not a failure: it is a single run
+# (`runtime.continuous_mode: false` in a custom config) that finished its sync.
+# It ends the add-on instead of starting another run, so an automation can start
+# the add-on once a day and find it stopped afterwards. Continuous mode never
+# gets there: every exit it makes on its own (scan watchdog, proxy liveness) is
+# non-zero, and a stop is handled below. A single run that found nothing exits 1
+# and is retried like any other failure.
+#
 # Stopping the add-on is different. The Supervisor sends SIGTERM, which tini
 # (PID 1 here, or the child of Docker's own init) passes to this script only, so
 # the trap below passes it on to the app, waits for the app's own shutdown and
@@ -1188,6 +1273,11 @@ while :; do
   if [ "$STOPPING" = "true" ]; then
     log "Add-on stopping: BLE Scale Sync exited with code $APP_RC, not restarting."
     exit "$APP_RC"
+  fi
+  # Exit 0 on its own: a single run that finished its sync (see above).
+  if [ "$APP_RC" -eq 0 ]; then
+    log "BLE Scale Sync finished (exit code 0); not restarting. Start the add-on again for the next run."
+    exit 0
   fi
 
   RAN=$(($(date +%s) - STARTED))

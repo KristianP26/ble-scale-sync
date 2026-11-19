@@ -65,7 +65,7 @@ describe('collectUnknownKeys', () => {
           device_id: 'esp32-ble-proxy',
           topic_prefix: 'ble-proxy',
         },
-        ha_bluetooth: { url: 'ws://supervisor/core/websocket', token: '${SUPERVISOR_TOKEN}' },
+        ha_bluetooth: { url: 'ws://supervisor/core/websocket' },
       },
       scale: { weight_unit: 'kg', height_unit: 'cm', display_unit: 'weight_unit' },
       unknown_user: 'nearest',

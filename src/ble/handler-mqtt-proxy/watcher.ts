@@ -10,6 +10,7 @@ import {
 import { resolveAdapter } from '../../scales/resolve.js';
 import {
   BoundedMap,
+  BoundedSet,
   evaluateAdvertisement,
   GraceTimers,
   DedupWindow,
@@ -43,7 +44,20 @@ import {
   type MqttBleDevice,
 } from './gatt.js';
 import { registerScaleMac, publishConfig } from './display.js';
-import { type ScanResultEntry, toBleDeviceInfo } from './scan.js';
+import { toBleDeviceInfo } from './scan.js';
+import {
+  parseConnectedPayload,
+  parseScanResults,
+  type ConnectedChar,
+  type ScanResultEntry,
+} from './payloads.js';
+import {
+  guardedListener,
+  isRetained,
+  peerText,
+  reportPeerFault,
+  warnThrottled,
+} from '../peer-input.js';
 
 const DEDUP_WINDOW_MS = 30_000;
 
@@ -109,14 +123,17 @@ export class ReadingWatcher implements Watcher {
   });
   private _client: MqttClient | null = null;
   private _lifecycleHandlers: LifecycleHandler[] = [];
-  private _messageHandler: ((topic: string, payload: Buffer) => void) | null = null;
+  private _messageHandler:
+    ((topic: string, payload: Buffer, packet?: { retain?: boolean }) => void) | null = null;
+  /** The last status text logged and when, so a replayed `online` is not a line every time. */
+  private lastStatus: { text: string; at: number } | null = null;
   private _subscribedTopics: string[] = [];
   /** Set at start and on every scan-results message; the liveness signal (#281). */
   private lastAdvertAt: number | null = null;
   /** Per-MAC count of consecutive scan deferrals with no autonomous connect (#231). */
-  private deferCounts = new Map<string, number>();
+  private deferCounts = new BoundedMap<string, number>(64, 'lru');
   /** Addresses already told at info level that their GATT session was refused (#422). */
-  private readonly refusedGattLogged = new Set<string>();
+  private readonly refusedGattLogged = new BoundedSet<string>(256);
 
   constructor(
     config: MqttProxyConfig,
@@ -140,6 +157,7 @@ export class ReadingWatcher implements Watcher {
     // a stale entry would otherwise be removed twice by the next stop().
     this._lifecycleHandlers = [];
     this._subscribedTopics = [];
+    this.lastStatus = null;
     // The liveness clock starts at connect, not at the epoch, so a proxy that
     // has simply not spoken yet is not read as one that has stopped.
     this.lastAdvertAt = Date.now();
@@ -221,177 +239,234 @@ export class ReadingWatcher implements Watcher {
     }
 
     // Message handler: store reference for cleanup
-    this._messageHandler = (topic: string, payload: Buffer) => {
-      if (topic === t.status) {
-        bleLog.info(`ESP32 status: ${payload.toString()}`);
-        return;
-      }
-
-      // Handle autonomous GATT connect from ESP32 (#201).
-      // The ESP32 publishes the same `connected` payload with an extra
-      // `autonomous: true` flag when it auto-connects to a known scale MAC.
-      if (topic === t.connected) {
-        bleLog.debug(`Connected payload received (${payload.length} bytes)`);
-        try {
-          const data = JSON.parse(payload.toString());
-          if (!data.autonomous || !data.address) {
-            bleLog.debug(
-              'Connected payload is not an autonomous connect, ignoring (host-initiated response)',
-            );
-          }
-          if (data.autonomous && data.address) {
-            // The ESP32 fired its autonomous connect, so stop counting
-            // deferrals for this MAC. This keeps the host fallback from racing
-            // a working autonomous path (#231).
-            this.deferCounts.delete(data.address);
-            bleLog.info(
-              `Received autonomous connect from ESP32 for ${data.address} (${data.chars?.length ?? 0} chars)`,
-            );
-            const sinceReading = this.postReading.sinceReading(data.address);
-            this.handleAutonomousConnect(data).catch((err) =>
-              this.reportGattFailure('Autonomous GATT reading', data.address, err, sinceReading),
-            );
-          }
-        } catch {
-          bleLog.debug('Connected payload was not JSON, ignoring');
+    this._messageHandler = guardedListener(
+      'the ESP32 proxy',
+      'message',
+      (topic: string, payload: Buffer, packet?: { retain?: boolean }) => {
+        if (topic === t.status) {
+          this.logStatus(peerText(payload, 64));
+          return;
         }
-        return;
-      }
 
-      if (topic !== t.scanResults) return;
+        // Only the firmware's `status` is ever retained. A retained copy of any
+        // other topic is a stored message replayed after a subscribe: it is not
+        // what the proxy is doing now and must not start a reading or a connect.
+        if (isRetained(packet)) {
+          bleLog.debug(`Ignoring a retained message on ${topic}`);
+          return;
+        }
 
-      try {
-        const results: ScanResultEntry[] = JSON.parse(payload.toString());
-        // Stamped before the targetMac filter and only for a non-empty batch:
-        // the proxy is proven alive by hearing ANY device, and the scale itself
-        // only advertises while somebody is standing on it (#281).
+        // Handle autonomous GATT connect from ESP32 (#201).
+        // The ESP32 publishes the same `connected` payload with an extra
+        // `autonomous: true` flag when it auto-connects to a known scale MAC.
+        if (topic === t.connected) {
+          this.handleConnectedMessage(payload);
+          return;
+        }
+
+        if (topic !== t.scanResults) return;
+
+        const parsed = parseScanResults(payload);
+        if (!parsed.ok) {
+          reportPeerFault('the ESP32 proxy', 'scan batch', parsed.why);
+          return;
+        }
+        if (parsed.dropped > 0) {
+          reportPeerFault(
+            'the ESP32 proxy',
+            'scan entry',
+            `${parsed.dropped} of ${parsed.total} entries dropped`,
+          );
+        }
+        const results = parsed.entries;
+        // Stamped before the targetMac filter and only for a batch with at least
+        // one valid entry: the proxy is proven alive by hearing ANY device, and
+        // the scale itself only advertises while somebody is standing on it
+        // (#281). Garbage that parses as an empty batch does not count.
         if (results.length > 0) this.lastAdvertAt = Date.now();
         const candidates = this.targetMac
           ? results.filter((e) => e.address.toLowerCase() === this.targetMac!.toLowerCase())
           : results;
 
         for (const entry of candidates) {
-          this.lastScanEntry.set(entry.address.toLowerCase(), entry);
-          const info = toBleDeviceInfo(entry);
-          logAdvert(entry.address, info);
-          const adapter = resolveAdapter(info, this.adapters);
-          if (!adapter) continue;
-
-          const decision = evaluateAdvertisement(adapter, info);
-
-          // A known scale read from its advertisements is passive from its
-          // first frame, not only from its first complete reading. Seeded from
-          // ble.scale_mac without the flag, the ESP32 auto-connects to it on
-          // sight and pauses its scan for the attempt; a broadcast-only scale
-          // that refuses connections then never delivers the complete reading
-          // that used to be the only thing marking it passive. Limited to known
-          // MACs, the only ones the ESP32 connects to, so a neighbour's scale is
-          // not added to the ESP32's list before it produces a reading.
-          //
-          // Only on an advert that shows the scale is this adapter's. Before
-          // discovery Mi Scale 2 claims anything advertising 0x181B, and a
-          // standard BCS scale is read only through the connect that follows
-          // (see handleGattReading). Its bare advert decides 'gatt', and a 'wait'
-          // there only means some service data is present, so an adapter with a
-          // GATT path of its own counts only a frame it parsed.
-          const ownBroadcast =
-            decision.kind === 'complete' ||
-            decision.kind === 'partial' ||
-            (decision.kind === 'wait' && !adapter.charNotifyUuid);
-          if (
-            ownBroadcast &&
-            hasDiscoveredMac(entry.address) &&
-            readsFromAdvertisement(adapter) &&
-            !isPassiveMac(entry.address)
-          ) {
-            registerScaleMac(this.config, entry.address, adapter).catch(() => {});
-          }
-
-          if (decision.kind === 'complete') {
-            // Got the full reading; cancel any pending grace timer for this addr.
-            this.grace.cancel(entry.address);
-
-            // registerScaleMac is gated on the emit actually happening: on a
-            // duplicate advertisement it would otherwise publish to the ESP32
-            // on every repeat. It now runs just after the queue push rather
-            // than just before it; both are fire-and-forget, and the ESP32 does
-            // not care which order two independent publishes leave in.
-            const emitted = emitDeduped(
-              this.dedup,
-              this.queue,
-              entry.address,
-              { reading: decision.reading, adapter },
-              decision.reading.weight,
+          // One entry that fails must not take the rest of the batch with it.
+          try {
+            this.handleScanEntry(entry);
+          } catch (err) {
+            // The entry parsed, so a throw here is a defect on our side, not bad peer data.
+            warnThrottled(
+              'peer-throw|the ESP32 proxy|scan entry',
+              `Failed to handle a scan entry from the ESP32 proxy: ${peerText(errMsg(err))}`,
             );
-            if (emitted) registerScaleMac(this.config, entry.address, adapter).catch(() => {});
-            continue; // Either way, do not block other candidates in this batch
           }
-
-          // Partial frame for a passive adapter: hold for an impedance frame.
-          if (decision.kind === 'partial') {
-            this.grace.hold(entry.address, { reading: decision.reading, adapter });
-            continue;
-          }
-
-          // Device still carries broadcast data this adapter parses — a usable
-          // reading just hasn't arrived yet. Keep waiting for a stable frame.
-          if (decision.kind === 'wait') continue;
-
-          // No broadcast source for this device. GATT-connect if the adapter
-          // has a GATT path (#201: dual-mode adapters like QN Scale must reach
-          // this even though they declare parseBroadcast).
-          if (decision.kind === 'none') continue; // no charNotifyUuid
-
-          // Already seen over GATT and refused as an advertisement-read scale.
-          // Every later advert without service data would otherwise connect it
-          // again, only to be dropped after discovery (#422). Both conditions:
-          // a reload that forces a GATT adapter onto the MAC must still connect.
-          if (readsFromAdvertisement(adapter) && isPassiveMac(entry.address)) {
-            bleLog.debug(
-              `Skipping GATT for ${entry.address}: ${adapter.name} is read from its advertisements`,
-            );
-            continue;
-          }
-
-          // When auto_connect is enabled (default), the ESP32 connects
-          // autonomously and publishes a `connected` payload handled by
-          // handleAutonomousConnect(). Defer the host-initiated GATT path so
-          // both sides do not try to connect simultaneously and time out
-          // (#201), but fall back to it after a few deferrals so a never-firing
-          // autonomous path cannot deadlock the scale (#231).
-          if (this.config.auto_connect !== false) {
-            // The ESP32 connects autonomously when it sees a known scale MAC.
-            // But if it never fires (its known-scale set was never seeded, or
-            // the autonomous connect keeps failing), deferring forever
-            // deadlocks a GATT-only scale (#231). After a few deferrals with no
-            // autonomous `connected` event, fall back to host-initiated GATT.
-            const deferred = (this.deferCounts.get(entry.address) ?? 0) + 1;
-            this.deferCounts.set(entry.address, deferred);
-            if (deferred < ReadingWatcher.AUTO_CONNECT_FALLBACK_DEFERS) {
-              bleLog.debug(
-                `Skipping host-initiated GATT for ${entry.address}: auto_connect enabled, ` +
-                  `waiting for autonomous connect (defer ${deferred}/${ReadingWatcher.AUTO_CONNECT_FALLBACK_DEFERS})`,
-              );
-              continue;
-            }
-            bleLog.warn(
-              `No autonomous connect from ESP32 for ${entry.address} after ${deferred} scans; ` +
-                `falling back to host-initiated GATT (#231)`,
-            );
-            // fall through to the host-initiated GATT path below
-          }
-
-          const sinceReading = this.postReading.sinceReading(entry.address);
-          this.handleGattReading(entry, adapter).catch((err) =>
-            this.reportGattFailure('GATT reading', entry.address, err, sinceReading),
-          );
         }
         // No match this scan, keep listening
-      } catch (err) {
-        bleLog.warn(`Failed to parse scan results: ${err instanceof Error ? err.message : err}`);
-      }
-    };
+      },
+    );
     client.on('message', this._messageHandler);
+  }
+
+  /**
+   * Log the proxy's status as info when it changes or a minute has passed; a
+   * retained `online` replayed after every resubscribe would otherwise be a
+   * line each time, while a real online/offline flap stays visible.
+   */
+  private logStatus(text: string): void {
+    const now = Date.now();
+    const last = this.lastStatus;
+    if (last && last.text === text && now - last.at < 60_000) {
+      bleLog.debug(`ESP32 status: ${text}`);
+      return;
+    }
+    this.lastStatus = { text, at: now };
+    bleLog.info(`ESP32 status: ${text}`);
+  }
+
+  /** A `connected` message: only an autonomous connect starts anything here. */
+  private handleConnectedMessage(payload: Buffer): void {
+    bleLog.debug(`Connected payload received (${payload.length} bytes)`);
+    const parsed = parseConnectedPayload(payload);
+    if (!parsed.ok) {
+      reportPeerFault('the ESP32 proxy', 'connected payload', parsed.why);
+      return;
+    }
+    const data = parsed.value;
+    if (!data.autonomous || !data.address) {
+      bleLog.debug(
+        'Connected payload is not an autonomous connect, ignoring (host-initiated response)',
+      );
+      return;
+    }
+    const address = data.address;
+    // The ESP32 fired its autonomous connect, so stop counting deferrals for
+    // this MAC. This keeps the host fallback from racing a working autonomous
+    // path (#231).
+    this.deferCounts.delete(address);
+    bleLog.info(
+      `Received autonomous connect from ESP32 for ${address} (${data.chars.length} chars)`,
+    );
+    const sinceReading = this.postReading.sinceReading(address);
+    this.handleAutonomousConnect({ address, chars: data.chars }).catch((err) =>
+      this.reportGattFailure('Autonomous GATT reading', address, err, sinceReading),
+    );
+  }
+
+  /** One validated scan entry: match it, classify it, queue a reading or open a GATT session. */
+  private handleScanEntry(entry: ScanResultEntry): void {
+    this.lastScanEntry.set(entry.address.toLowerCase(), entry);
+    const info = toBleDeviceInfo(entry);
+    logAdvert(entry.address, info);
+    const adapter = resolveAdapter(info, this.adapters);
+    if (!adapter) return;
+
+    const decision = evaluateAdvertisement(adapter, info);
+
+    // A known scale read from its advertisements is passive from its
+    // first frame, not only from its first complete reading. Seeded from
+    // ble.scale_mac without the flag, the ESP32 auto-connects to it on
+    // sight and pauses its scan for the attempt; a broadcast-only scale
+    // that refuses connections then never delivers the complete reading
+    // that used to be the only thing marking it passive. Limited to known
+    // MACs, the only ones the ESP32 connects to, so a neighbour's scale is
+    // not added to the ESP32's list before it produces a reading.
+    //
+    // Only on an advert that shows the scale is this adapter's. Before
+    // discovery Mi Scale 2 claims anything advertising 0x181B, and a
+    // standard BCS scale is read only through the connect that follows
+    // (see handleGattReading). Its bare advert decides 'gatt', and a 'wait'
+    // there only means some service data is present, so an adapter with a
+    // GATT path of its own counts only a frame it parsed.
+    const ownBroadcast =
+      decision.kind === 'complete' ||
+      decision.kind === 'partial' ||
+      (decision.kind === 'wait' && !adapter.charNotifyUuid);
+    if (
+      ownBroadcast &&
+      hasDiscoveredMac(entry.address) &&
+      readsFromAdvertisement(adapter) &&
+      !isPassiveMac(entry.address)
+    ) {
+      registerScaleMac(this.config, entry.address, adapter).catch(() => {});
+    }
+
+    if (decision.kind === 'complete') {
+      // Got the full reading; cancel any pending grace timer for this addr.
+      this.grace.cancel(entry.address);
+
+      // registerScaleMac is gated on the emit actually happening: on a
+      // duplicate advertisement it would otherwise publish to the ESP32
+      // on every repeat. It now runs just after the queue push rather
+      // than just before it; both are fire-and-forget, and the ESP32 does
+      // not care which order two independent publishes leave in.
+      const emitted = emitDeduped(
+        this.dedup,
+        this.queue,
+        entry.address,
+        { reading: decision.reading, adapter },
+        decision.reading.weight,
+      );
+      if (emitted) registerScaleMac(this.config, entry.address, adapter).catch(() => {});
+      return; // Either way, do not block other candidates in this batch
+    }
+
+    // Partial frame for a passive adapter: hold for an impedance frame.
+    if (decision.kind === 'partial') {
+      this.grace.hold(entry.address, { reading: decision.reading, adapter });
+      return;
+    }
+
+    // Device still carries broadcast data this adapter parses — a usable
+    // reading just hasn't arrived yet. Keep waiting for a stable frame.
+    if (decision.kind === 'wait') return;
+
+    // No broadcast source for this device. GATT-connect if the adapter
+    // has a GATT path (#201: dual-mode adapters like QN Scale must reach
+    // this even though they declare parseBroadcast).
+    if (decision.kind === 'none') return; // no charNotifyUuid
+
+    // Already seen over GATT and refused as an advertisement-read scale.
+    // Every later advert without service data would otherwise connect it
+    // again, only to be dropped after discovery (#422). Both conditions:
+    // a reload that forces a GATT adapter onto the MAC must still connect.
+    if (readsFromAdvertisement(adapter) && isPassiveMac(entry.address)) {
+      bleLog.debug(
+        `Skipping GATT for ${entry.address}: ${adapter.name} is read from its advertisements`,
+      );
+      return;
+    }
+
+    // When auto_connect is enabled (default), the ESP32 connects
+    // autonomously and publishes a `connected` payload handled by
+    // handleAutonomousConnect(). Defer the host-initiated GATT path so
+    // both sides do not try to connect simultaneously and time out
+    // (#201), but fall back to it after a few deferrals so a never-firing
+    // autonomous path cannot deadlock the scale (#231).
+    if (this.config.auto_connect !== false) {
+      // The ESP32 connects autonomously when it sees a known scale MAC.
+      // But if it never fires (its known-scale set was never seeded, or
+      // the autonomous connect keeps failing), deferring forever
+      // deadlocks a GATT-only scale (#231). After a few deferrals with no
+      // autonomous `connected` event, fall back to host-initiated GATT.
+      const deferred = (this.deferCounts.get(entry.address) ?? 0) + 1;
+      this.deferCounts.set(entry.address, deferred);
+      if (deferred < ReadingWatcher.AUTO_CONNECT_FALLBACK_DEFERS) {
+        bleLog.debug(
+          `Skipping host-initiated GATT for ${entry.address}: auto_connect enabled, ` +
+            `waiting for autonomous connect (defer ${deferred}/${ReadingWatcher.AUTO_CONNECT_FALLBACK_DEFERS})`,
+        );
+        return;
+      }
+      bleLog.warn(
+        `No autonomous connect from ESP32 for ${entry.address} after ${deferred} scans; ` +
+          `falling back to host-initiated GATT (#231)`,
+      );
+      // fall through to the host-initiated GATT path below
+    }
+
+    const sinceReading = this.postReading.sinceReading(entry.address);
+    this.handleGattReading(entry, adapter).catch((err) =>
+      this.reportGattFailure('GATT reading', entry.address, err, sinceReading),
+    );
   }
 
   /**
@@ -678,7 +753,7 @@ export class ReadingWatcher implements Watcher {
    */
   private async handleAutonomousConnect(data: {
     address: string;
-    chars: Array<{ uuid: string; properties: string[] }>;
+    chars: ConnectedChar[];
   }): Promise<void> {
     if (this.gattSlot) {
       // Never skip an autonomous connect. The ESP32 holds exactly one BLE

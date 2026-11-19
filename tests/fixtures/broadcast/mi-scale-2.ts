@@ -6,7 +6,9 @@ import { MI2_422_STEP_OFF, MI2_LIGHT_STABLE, MI2_WEIGH_IN } from '../../helpers/
  * Xiaomi Mi Scale 2 (MIBCS / MIBFS): read from its 0x181B service data
  * (preferPassive), with a GATT path the transports no longer open for it
  * (#422). The only real frames are the two "load removed" adverts and the
- * GATT unlock echoes from #422 (no MAC in any of them). The `derived` traces of
+ * GATT unlock echoes from #422 (no MAC in any of them); the stable frame of
+ * #537 is verbatim from an issue log whose weight line does not match it, so
+ * it is not a capture either (tests/helpers/mi-scale-2-537.ts). The `derived` traces of
  * #526 clear bits of [1] in those two (tests/helpers/mi-scale-2-422.ts): bit 7
  * of the 1.60 kg step-off gives a stable light frame, bits 7 and 1 of the idle
  * frame a stable 97.80 kg weigh-in without impedance. Everything else is

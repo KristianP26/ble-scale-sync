@@ -252,6 +252,7 @@ describe('replay anchor file (D067)', () => {
     ['a non-numeric weight', { dad: { weight: '80', time: '2026-10-19T07:00:00.000Z' } }],
     ['a zero weight', { dad: { weight: 0, time: '2026-10-19T07:00:00.000Z' } }],
     ['a negative weight', { dad: { weight: -80, time: '2026-10-19T07:00:00.000Z' } }],
+    ['an absurd weight', { dad: { weight: 1e134, time: '2026-10-19T07:00:00.000Z' } }],
     ['an unreadable time', { dad: { weight: 80, time: 'yesterday-ish' } }],
     ['no time', { dad: { weight: 80 } }],
   ])('restores nothing from %s', (_label, content) => {

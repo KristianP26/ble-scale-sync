@@ -180,6 +180,12 @@ describe('WgerExporter', () => {
     expect(calls('POST', '/weightentry/')[0][0]).toBe(`${BASE}/weightentry/`);
   });
 
+  it.each(['wger.example.com', ''])('names the option when base_url %j is not a URL', (baseUrl) => {
+    expect(() => new WgerExporter({ ...config, baseUrl })).toThrow(
+      'Wger base_url is not a valid URL (include https://)',
+    );
+  });
+
   it('fails the export when the weight POST fails', async () => {
     mockFetch.mockImplementation((url: string) =>
       Promise.resolve(
@@ -299,5 +305,192 @@ describe('WgerExporter', () => {
       expect(result.success).toBe(false);
       expect(result.error).toBe('ECONNREFUSED');
     });
+  });
+});
+
+describe('redirects', () => {
+  const redirect = (status: number, location = 'https://other.example/x') =>
+    new Response(null, { status, headers: { location } });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    routeHappy();
+  });
+
+  it('asks for every request not to follow a redirect', async () => {
+    await new WgerExporter(config).export(sample);
+    expect(mockFetch.mock.calls.length).toBeGreaterThan(3);
+    for (const [, init] of mockFetch.mock.calls) {
+      expect(init.redirect).toBe('manual');
+    }
+  });
+
+  it('reports a redirect on the profile read and does not repeat it', async () => {
+    mockFetch.mockResolvedValue(redirect(308));
+    const result = await new WgerExporter(config).export(sample);
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('HTTP 308: redirected to https://other.example');
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports a redirect on the weight entry and sends nothing to the target', async () => {
+    mockFetch.mockImplementation((url: string) =>
+      Promise.resolve(url.endsWith('/weightentry/') ? redirect(307) : res({ weight_unit: 'kg' })),
+    );
+    const result = await new WgerExporter(config).export(sample);
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('HTTP 307: redirected to https://other.example');
+    expect(calls('POST', '/weightentry/')).toHaveLength(1);
+  });
+
+  it('keeps the weight and skips the measurements when the category list redirects', async () => {
+    mockFetch.mockImplementation((url: string, init?: { method?: string }) => {
+      const method = init?.method ?? 'GET';
+      if (url.endsWith('/measurement-category/') && method === 'GET') {
+        return Promise.resolve(redirect(301));
+      }
+      if (url.endsWith('/weightentry/')) return Promise.resolve(res({ id: 1 }, { status: 201 }));
+      return Promise.resolve(res({ weight_unit: 'kg' }));
+    });
+    const result = await new WgerExporter(config).export(sample);
+    expect(result.success).toBe(true);
+    expect(calls('POST', '/measurement/')).toHaveLength(0);
+    expect(calls('POST', '/measurement-category/')).toHaveLength(0);
+  });
+
+  it('reports a redirect on the health check', async () => {
+    mockFetch.mockResolvedValue(redirect(302));
+    const result = await new WgerExporter(config).healthcheck();
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('HTTP 302: redirected to https://other.example');
+  });
+});
+
+// The next-page link comes from the response body and every request carries
+// the API token.
+describe('category pagination origin', () => {
+  const PAGE2 = `${BASE}/measurement-category/?limit=2&offset=2`;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  function routePaged(next: unknown) {
+    mockFetch.mockImplementation((url: string, init?: { method?: string }) => {
+      const method = init?.method ?? 'GET';
+      if (url.includes('/measurement-category/') && method === 'GET') {
+        const second = url.includes('offset=2');
+        return Promise.resolve(
+          res(
+            second
+              ? {
+                  count: 4,
+                  next: null,
+                  results: [
+                    { id: uuid(3), name: 'Muscle Mass', unit: 'kg' },
+                    { id: uuid(4), name: 'Bone Mass', unit: 'kg' },
+                  ],
+                }
+              : {
+                  count: 4,
+                  next,
+                  results: [
+                    { id: uuid(1), name: 'Body Fat', unit: '%' },
+                    { id: uuid(2), name: 'Body Water', unit: '%' },
+                  ],
+                },
+          ),
+        );
+      }
+      if (url.endsWith('/measurement-category/') && method === 'POST') {
+        return Promise.resolve(res({ id: uuid(99) }, { status: 201 }));
+      }
+      if (url.endsWith('/measurement/') || url.endsWith('/weightentry/')) {
+        return Promise.resolve(res({ id: 1 }, { status: 201 }));
+      }
+      return Promise.resolve(res({ weight_unit: 'kg' }));
+    });
+  }
+
+  it('follows a next link on the configured origin with the token and adds no category twice', async () => {
+    routePaged(PAGE2);
+    const result = await new WgerExporter(config).export(sample);
+    expect(result.success).toBe(true);
+    const pages = calls('GET', 'offset=2');
+    expect(pages).toHaveLength(1);
+    expect(pages[0][1].headers.Authorization).toBe('Token tok-1');
+    expect(calls('POST', '/measurement-category/')).toHaveLength(0);
+  });
+
+  it('follows a relative next link', async () => {
+    routePaged('/api/v2/measurement-category/?limit=2&offset=2');
+    await new WgerExporter(config).export(sample);
+    expect(calls('GET', 'offset=2')).toHaveLength(1);
+  });
+
+  it('accepts an explicit default port on the same origin', async () => {
+    routePaged('https://wger.example:443/api/v2/measurement-category/?limit=2&offset=2');
+    await new WgerExporter(config).export(sample);
+    expect(calls('GET', 'offset=2')).toHaveLength(1);
+  });
+
+  it.each([
+    ['another host', 'https://other.example/api/v2/measurement-category/?offset=2'],
+    ['a scheme downgrade', 'http://wger.example/api/v2/measurement-category/?offset=2'],
+    ['another port', 'https://wger.example:8443/api/v2/measurement-category/?offset=2'],
+  ])('never sends the token to %s', async (_name, next) => {
+    routePaged(next);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const result = await new WgerExporter(config).export(sample);
+
+      expect(result.success).toBe(true); // the weight is already stored
+      expect(calls('POST', '/weightentry/')).toHaveLength(1);
+      for (const [url] of mockFetch.mock.calls) {
+        expect(String(url).startsWith('https://wger.example/')).toBe(true);
+      }
+      expect(calls('POST', '/measurement-category/')).toHaveLength(0);
+      expect(calls('POST', '/measurement/')).toHaveLength(0);
+      expect(warn.mock.calls.join(' ')).toContain(
+        'Wger measurements skipped: Wger returned a next-page link to',
+      );
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('refuses a next link that is not a string', async () => {
+    routePaged(12345);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      await new WgerExporter(config).export(sample);
+      expect(warn.mock.calls.join(' ')).toContain('invalid next-page link');
+      expect(calls('POST', '/measurement-category/')).toHaveLength(0);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('keeps working behind a path prefix', async () => {
+    mockFetch.mockImplementation((url: string, init?: { method?: string }) => {
+      const method = init?.method ?? 'GET';
+      if (url.includes('/measurement-category/') && method === 'GET') {
+        const second = url.includes('offset=2');
+        return Promise.resolve(
+          res({
+            count: 2,
+            next: second ? null : 'https://wger.example/wger/api/v2/measurement-category/?offset=2',
+            results: [],
+          }),
+        );
+      }
+      return Promise.resolve(res({ id: 1, weight_unit: 'kg' }, { status: 201 }));
+    });
+    const result = await new WgerExporter({
+      ...config,
+      baseUrl: 'https://wger.example/wger/',
+    }).export(sample);
+    expect(result.success).toBe(true);
+    expect(calls('GET', 'offset=2')).toHaveLength(1);
   });
 });

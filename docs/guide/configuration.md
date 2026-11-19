@@ -131,6 +131,8 @@ out_of_range: skip
 | -------------- | ------- | ----------- |
 | `out_of_range` | `warn`  | What happens to a reading outside the `weight_range` of the user it goes to. `warn` logs and exports it; `skip` logs it and stops before the exporters and the `last_known_weight` update. `skip` suits a household with several users. See [Multi-user](/multi-user). |
 
+Independent of this setting, a reading that is not a number or lies outside 0.5-700 kg is dropped and logged; it is never exported and never changes `last_known_weight`.
+
 ### Users
 
 At least one user is required.
@@ -246,7 +248,7 @@ kill -HUP NODE_PID                     # any other node process
 
 ### Secret references
 
-Any value can be a `${ENV_VAR}` reference, taken from the environment or from the `.env` next to `config.yaml`. Loading fails if a referenced variable is not set. A reference that is the whole value also works for numbers and booleans (`port: ${MQTT_PORT}`). Write `$${...}` for a literal `${...}`. Variables set in the real environment win over `.env`.
+Any value can be a `${ENV_VAR}` reference, taken from the environment or from the `.env` next to `config.yaml`. Loading fails if a referenced variable is not set. A reference that is the whole value also works for numbers and booleans (`port: ${MQTT_PORT}`). Write `$${...}` for a literal `${...}`. Variables set in the real environment win over `.env`. `SUPERVISOR_TOKEN` and `HASSIO_TOKEN`, the credentials the Home Assistant Supervisor gives the add-on, cannot be referenced; loading fails with an error.
 
 ```yaml
 global_exporters:

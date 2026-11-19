@@ -19,6 +19,7 @@ vi.mock('@2colors/esphome-native-api', () => ({ Client: MockClient }));
 
 import { createEsphomeClient } from '../../../src/ble/handler-esphome-proxy/client.js';
 import { bleLog } from '../../../src/ble/types.js';
+import { _resetPeerInput } from '../../../src/ble/peer-input.js';
 
 const config = {
   host: '192.168.1.50',
@@ -28,6 +29,8 @@ const config = {
 
 describe('createEsphomeClient', () => {
   beforeEach(() => {
+    // The error log is throttled per proxy; each test starts with a fresh window.
+    _resetPeerInput();
     vi.clearAllMocks();
   });
 
@@ -41,6 +44,33 @@ describe('createEsphomeClient', () => {
     expect(() =>
       client.emit('error', new Error('Failed find or parsed message type for Id: 137')),
     ).not.toThrow();
+  });
+
+  it('logs repeated library errors as one warning a minute', async () => {
+    const warnSpy = vi.spyOn(bleLog, 'warn').mockImplementation(() => {});
+    vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+    const client = (await createEsphomeClient(config)) as unknown as EventEmitter;
+
+    for (let i = 0; i < 50; i++) client.emit('error', new Error('bad frame'));
+
+    expect(warnSpy.mock.calls.filter((c) => String(c[0]).includes('bad frame'))).toHaveLength(1);
+    warnSpy.mockRestore();
+  });
+
+  it('warns at once when the error changes inside the minute', async () => {
+    const warnSpy = vi.spyOn(bleLog, 'warn').mockImplementation(() => {});
+    vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+    const client = (await createEsphomeClient(config)) as unknown as EventEmitter;
+
+    client.emit('error', new Error('connect ETIMEDOUT'));
+    client.emit('error', new Error('connect ETIMEDOUT'));
+    client.emit('error', new Error('Invalid password'));
+
+    expect(warnSpy.mock.calls.filter((c) => String(c[0]).includes('ETIMEDOUT'))).toHaveLength(1);
+    expect(
+      warnSpy.mock.calls.filter((c) => String(c[0]).includes('Invalid password')),
+    ).toHaveLength(1);
+    warnSpy.mockRestore();
   });
 
   it('logs the library error via bleLog.warn with the proxy endpoint', async () => {

@@ -32,10 +32,10 @@ The Arboleaf CS10K is the exception: its `20B` frame names the extended dialect,
 If the scale-info frame is lost, which can happen on a proxy transport, the log shows this line instead:
 
 ```text
-QN: fallback: no 0x12 received, running handshake with proto=0xff
+QN: fallback: no 0x12 received, running handshake with proto=0xff (no byte remembered for this scale)
 ```
 
-Its `proto` value is the byte ble-scale-sync used (`qn_protocol_byte`, or 255), not one from the scale.
+Its `proto` value is the byte ble-scale-sync used for the handshake, and the text in parentheses says where it came from: `ble.qn_protocol_byte`, the last scale-info frame a classic scale sent since the app started, or neither. Without either, the handshake runs on 255 and the time sync on 0. If the weigh-in then times out, see [A QN weigh-in without a scale-info frame times out](/troubleshooting#qn-no-scale-info-frame).
 
 ## Setup
 

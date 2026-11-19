@@ -108,6 +108,9 @@ export const RESTART_REQUIRED_KEYS = [
   // restart-required as the connection fields above (#407).
   'ble.mqtt_proxy.embedded_broker_port',
   'ble.mqtt_proxy.embedded_broker_bind',
+  // The listener is built from these files once at startup.
+  'ble.mqtt_proxy.embedded_broker_tls_cert',
+  'ble.mqtt_proxy.embedded_broker_tls_key',
   // The watcher keeps the value it was built with until a restart.
   'ble.mqtt_proxy.auto_connect',
   'ble.esphome_proxy.host',

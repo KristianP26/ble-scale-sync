@@ -3,13 +3,16 @@
 
 Usage:
     BROKER=<host> [MQTT_PORT=1883] [MQTT_USER=... MQTT_PASSWORD=...] \\
-    [BASE=ble-proxy/esp32-ble-proxy] python3 firmware/tools/capture_screenshot.py [output.png]
+    [BASE=ble-proxy/esp32-ble-proxy] [WAIT_SECONDS=45] \\
+    python3 firmware/tools/capture_screenshot.py [output.png]
 
 Triggers a screenshot, receives RGB565 data over MQTT, converts to PNG.
 Waits patiently for chunks that arrive between BLE scan WiFi drops.
-The ESP32 refuses the request while a BLE connection is in progress.
+The ESP32 refuses the request while a BLE connection is in progress, and ignores
+it unless its config.json sets "screenshot": true (off by default).
 """
 
+import json
 import os
 import sys
 import struct
@@ -25,6 +28,11 @@ MQTT_USER = os.environ.get("MQTT_USER")
 MQTT_PASSWORD = os.environ.get("MQTT_PASSWORD")
 BASE = os.environ.get("BASE", "ble-proxy/esp32-ble-proxy")
 OUTPUT = sys.argv[1] if len(sys.argv) > 1 else "/tmp/screenshot.png"
+# Seconds to wait for the first answer or the missing chunks, per attempt.
+try:
+    WAIT_SECONDS = int(os.environ.get("WAIT_SECONDS", "45"))
+except ValueError:
+    sys.exit(f"WAIT_SECONDS must be a number, got {os.environ.get('WAIT_SECONDS')!r}")
 
 W, H = 480, 480
 EXPECTED_SIZE = W * H * 2  # RGB565
@@ -43,10 +51,23 @@ def main():
     CHUNK_SIZE = 4096
     n_chunks = (EXPECTED_SIZE + CHUNK_SIZE - 1) // CHUNK_SIZE  # 113
     chunks = {}
+    answered = False
 
     def on_message(client, userdata, msg):
+        nonlocal answered
         t = msg.topic
-        if t.startswith(f"{BASE}/screenshot/"):
+        if t == f"{BASE}/error":
+            # A refusal (a BLE connection in progress, or one that started
+            # mid-transfer) is an answer: wait and ask again, do not give up.
+            try:
+                body = json.loads(msg.payload)
+            except ValueError:
+                return
+            if isinstance(body, dict) and body.get("op") == "screenshot":
+                answered = True
+                print(f"  ESP32: {str(body.get('message', ''))[:200]}")
+        elif t.startswith(f"{BASE}/screenshot/"):
+            answered = True  # info, a chunk or done: the firmware is answering
             try:
                 idx = int(t.split("/")[-1])
                 chunks[idx] = msg.payload
@@ -59,13 +80,14 @@ def main():
         client.username_pw_set(MQTT_USER, MQTT_PASSWORD)
     client.connect(BROKER, port)
     client.subscribe(f"{BASE}/screenshot/#", qos=1)
+    client.subscribe(f"{BASE}/error", qos=0)
     client.loop_start()
 
     for attempt in range(1, 4):
         client.publish(f"{BASE}/screenshot", "", qos=1)
         print(f"Screenshot triggered (attempt {attempt}), waiting for {n_chunks} chunks...")
 
-        timeout = time.time() + 45
+        timeout = time.time() + WAIT_SECONDS
         last_count = 0
         while time.time() < timeout:
             time.sleep(1)
@@ -77,6 +99,14 @@ def main():
                 break
         if len(chunks) >= n_chunks:
             break
+        if not answered:
+            client.loop_stop()
+            client.disconnect()
+            sys.exit(
+                f"No answer within {WAIT_SECONDS} s. The ESP32 ignores screenshot requests unless its "
+                'config.json sets "screenshot": true (upload it with ./flash.sh --app-only), '
+                "and it refuses one while a BLE connection is in progress."
+            )
         missing = [i for i in range(n_chunks) if i not in chunks]
         print(f"  Missing {len(missing)} chunks, retrying...")
 

@@ -11,7 +11,10 @@ import { isHistoricalReading } from '../../interfaces/reading-time.js';
 import { resolveAdapter } from '../../scales/resolve.js';
 import {
   BoundedMap,
+  BoundedSet,
   evaluateAdvertisement,
+  identifiedAsAdvertisementRead,
+  readsFromAdvertisement,
   GraceTimers,
   DedupWindow,
   ManufacturerDataCache,
@@ -72,6 +75,15 @@ export class ReadingWatcher implements Watcher {
   private pool: EsphomeProxyPool | null = null;
   private unsub: (() => void) | null = null;
   private gattInFlight = new Set<string>();
+  /**
+   * Addresses whose GATT session was refused after discovery because the
+   * re-resolved adapter is read from its advertisements (#537). Remembered so
+   * the next advertisement of a scale the pre-connect check could not identify
+   * does not open another session.
+   */
+  private readonly refusedGatt = new BoundedSet<string>(256);
+  /** Addresses already told, at info, that their scale is not read over GATT. */
+  private readonly advertReadTold = new BoundedSet<string>(256);
   /** Set at start and on every advertisement; the proxy liveness signal (#281). */
   private lastAdvertAt: number | null = null;
 
@@ -193,6 +205,8 @@ export class ReadingWatcher implements Watcher {
     this.targetMac = config.targetMac?.toLowerCase();
     if (config.profile) this.profile = config.profile;
     this.scaleAuth = config.scaleAuth;
+    // The adapter list may have changed, so a refusal no longer holds.
+    this.refusedGatt.clear();
   }
 
   private handleAd(rawInfo: BleDeviceInfo, address: string): void {
@@ -225,8 +239,31 @@ export class ReadingWatcher implements Watcher {
     // Broadcast yielded nothing usable. If the adapter has a GATT path, connect
     // on demand through the proxy pool. (decision is 'gatt' or 'none'.)
     if (decision.kind === 'gatt') {
+      // An adapter read from its advertisements is not connected (#537). Its
+      // "load removed" frame parses to nothing, and the named scan response can
+      // arrive without service data, so both land here although the weigh-in
+      // is broadcast.
+      if (
+        (readsFromAdvertisement(adapter) && this.refusedGatt.has(addrLc)) ||
+        identifiedAsAdvertisementRead(adapter, info, this.adapters)
+      ) {
+        this.tellAdvertisementRead(adapter, address, addrLc);
+        return;
+      }
       this.readViaGatt(adapter, info, address, addrLc);
     }
+  }
+
+  /** Info once per address, debug after: the scale advertises on every cycle. */
+  private tellAdvertisementRead(adapter: ScaleAdapter, address: string, addrLc: string): void {
+    // Not `Matched:`, which emitDeduped uses to mark a reading.
+    const line = `${adapter.name} (${address}): read from its advertisements, not over GATT`;
+    if (this.advertReadTold.has(addrLc)) {
+      bleLog.debug(line);
+      return;
+    }
+    this.advertReadTold.add(addrLc);
+    bleLog.info(line);
   }
 
   private pushDeduped(
@@ -276,6 +313,25 @@ export class ReadingWatcher implements Watcher {
           advertisedPick: adapter,
           address,
         })!;
+        // Discovery can show a scale the advertisement could not identify (a
+        // nameless one on the bare 0x181B service) to be read from its
+        // advertisements. Its GATT path answers the unlock forever without a
+        // weight (#422, #537), so the session ends here, as on mqtt-proxy.
+        if (readsFromAdvertisement(gattAdapter)) {
+          // An empty discovery proves nothing: Mi would only win on its bare
+          // 0x181B claim, so the address is not remembered.
+          if (characteristicUuids.length > 0) this.refusedGatt.add(addrLc);
+          const refused =
+            `Connect to ${gattAdapter.name} (${address}) ignored: this scale is read from ` +
+            'its advertisements, not over GATT. Disconnecting.';
+          if (this.advertReadTold.has(addrLc)) {
+            bleLog.debug(refused);
+          } else {
+            this.advertReadTold.add(addrLc);
+            bleLog.info(refused);
+          }
+          return;
+        }
         // Per session, not once at startup: the processor moves the weight
         // anchor after every export and QN/R-MSC04 write it to the scale (#331).
         const sessionProfile: UserProfile = currentProfile(this.profile) ?? {

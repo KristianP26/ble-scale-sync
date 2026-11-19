@@ -121,6 +121,36 @@ The scale accepted the connection, but no complete reading arrived before the se
 3. For a Renpho R-MSC04 or an ES-CS20M on service 0x1A10, see [Renpho scales](/guide/scales/renpho).
 4. If the reading is wrong rather than missing, make a [raw capture](#capturing-every-frame-for-a-scale-that-is-not-decoded-correctly).
 
+### A QN weigh-in without a scale-info frame times out {#qn-no-scale-info-frame}
+
+The log shows `QN: fallback: no 0x12 received` and the session ends without a weight. The scale sent no scale-info frame, so the handshake likely ran on a byte it does not accept. On the classic dialect, the app reuses the byte of that scale's last scale-info frame until it restarts, so the first weigh-in after a start is the one that needs the option.
+
+1. Set `ble.qn_protocol_byte` to the `proto` value of a `QN: scale info` line from an earlier weigh-in. If the log has none, try the values in [QN scales](/guide/scales/qn#options).
+2. Weigh in again. The fallback line ends with `(ble.qn_protocol_byte)` and the weight arrives.
+
+### `not a plausible body weight`
+
+The log shows `Dropping a reading of ... kg from ...: not a plausible body weight (0.5-700 kg)` or `Dropping N stored record(s) from ...: not a plausible body weight (0.5-700 kg)`. The frame decoded to a value that is not a body weight, so it is not exported and does not change `last_known_weight`. The scale likely did not send that weight, or the scale model is decoded wrongly.
+
+1. Weigh in again. A single dropped frame is not a problem, and the next good weigh-in exports as usual.
+2. If it repeats, make a [raw capture](#capturing-every-frame-for-a-scale-that-is-not-decoded-correctly) and [report an issue](#report-an-issue) with the scale model.
+
+### `Ignored a malformed ... from the ESP32 proxy`
+
+The log shows `Ignored a malformed scan batch from the ESP32 proxy: ...` or a similar line with another message name. The server dropped a message under `topic_prefix` that is not what the firmware publishes. Only the first one each minute is a warning.
+
+1. Check that no other client publishes under the `topic_prefix` of this proxy.
+2. If the board runs firmware from another release than the server, [flash it again](/guide/esp32-proxy#flashing-the-firmware) from the same release.
+
+A line `Failed to handle a ... from the ESP32 proxy: ...` is a different case: the message was well formed and handling it failed. [Report an issue](#report-an-issue) with the line, a `DEBUG=true` log and the scale model.
+
+### `TLS handshake from ... failed` {#embedded-broker-tls-handshake}
+
+The embedded broker serves TLS on its port, and a client did not complete the handshake. The log shows `TLS handshake from <ip> failed (<code>)`. Only the first one each minute is a warning.
+
+- `ERR_SSL_WRONG_VERSION_NUMBER`: the client speaks plain MQTT. Set `"mqtt_tls": true` in the ESP32 `config.json`, or point the client at a plain broker.
+- `ECONNRESET` or an `ERR_SSL_*ALERT*` code: the client closed the connection during the handshake because it does not trust the certificate, the name differs from `mqtt_tls_hostname`, or the date is wrong. Check `mqtt_ca_file`, `mqtt_tls_hostname` and the certificate dates, see [Encrypt the ESP32 connection](/guide/esp32-proxy#embedded-broker-tls).
+
 ## Pairing
 
 ### Beurer or Sanitas pairing problems
@@ -212,6 +242,10 @@ A frozen event loop also stops the [watchdog](#the-app-exits-after-repeated-scan
 - `Garmin rejected the saved login token (HTTP 401)`: Garmin refused the stored token, and the upload is not retried. Run `ble-scale-sync setup-garmin` (`npm run setup-garmin` from a clone) to log in again.
 - `Garmin upload needs Python 3.12 or newer`: install Python 3.12 or newer on the host.
 - Login fails from a server: Garmin can block cloud and VPN addresses. Log in from another network and copy the token directory, see [Garmin Connect](/exporters#garmin). In the Home Assistant add-on, see [the MFA workaround](/guide/home-assistant-addon#mfa-workaround).
+
+### An export fails with `redirected to ..., which is not followed` {#export-redirected}
+
+The server answers the export with a 301, 307 or 308 redirect, most often from `http://` to `https://`, and the exporter does not follow it. Run `curl -sI <your url>`, copy the `location` value into `url` or `base_url`, and restart. The next export logs its success line, for example `Webhook delivered (HTTP 200).` A 302 or 303 answer to a reading is not an error: the export counts as delivered and the log says `answered HTTP 302, counted as delivered`. See [Exporters](/exporters).
 
 ### MQTT connection hangs or fails
 

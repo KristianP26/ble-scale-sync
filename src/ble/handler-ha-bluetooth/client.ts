@@ -3,6 +3,15 @@ import type { HaBluetoothConfig } from '../../config/schema.js';
 import { bleLog, errMsg } from '../types.js';
 import { toBleDeviceInfo, type HaAdvertisement } from './advert.js';
 import { BoundedSet } from '../advertisement.js';
+import { haAccessToken } from './supervisor.js';
+import {
+  HA_MAX_FRAME_BYTES,
+  guardedListener,
+  isPlainObject,
+  parsePeerObject,
+  peerText,
+  reportPeerFault,
+} from '../peer-input.js';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -165,6 +174,8 @@ export class HaBluetoothClient {
   private subscribedOnce = false;
   /** Addresses already reported by noteUndatable. */
   private readonly undatableLogged = new BoundedSet<string>(UNDATABLE_LOG_MAX);
+  /** Resolved at each connect; never logged. */
+  private token = '';
 
   constructor(
     private readonly config: HaBluetoothConfig,
@@ -212,6 +223,16 @@ export class HaBluetoothClient {
 
   private connectOnce(): Promise<void> {
     const wsUrl = toWebSocketUrl(this.config.url);
+    const token = haAccessToken(this.config);
+    if (!token) {
+      return Promise.reject(
+        new HaBluetoothPermanentError(
+          'ble.ha_bluetooth.token is not set. Only the add-on URL ws://supervisor/core/websocket ' +
+            'works without it, and then SUPERVISOR_TOKEN must be in the environment.',
+        ),
+      );
+    }
+    this.token = token;
     return new Promise<void>((resolve, reject) => {
       let settled = false;
       const settle = (err?: Error): void => {
@@ -241,9 +262,13 @@ export class HaBluetoothClient {
         opened = true;
         bleLog.debug(`Home Assistant websocket open: ${wsUrl}`);
       });
-      ws.addEventListener('message', (ev) => {
-        this.handleMessage(ev.data, settle);
-      });
+      // Guarded: an exception in a WebSocket listener ends the process.
+      ws.addEventListener(
+        'message',
+        guardedListener('Home Assistant', 'frame', (ev: { data: unknown }) => {
+          this.handleMessage(ev.data, settle);
+        }),
+      );
       ws.addEventListener('error', (ev) => {
         const detail =
           typeof ev === 'object' && ev !== null && 'message' in ev
@@ -283,20 +308,22 @@ export class HaBluetoothClient {
   }
 
   private handleMessage(data: unknown, settle: (err?: Error) => void): void {
-    let msg: HaMessage;
-    try {
-      msg = JSON.parse(typeof data === 'string' ? data : String(data)) as HaMessage;
-    } catch {
-      bleLog.debug('Home Assistant sent a non-JSON frame; ignoring');
+    const parsed = parsePeerObject(
+      typeof data === 'string' ? data : String(data),
+      HA_MAX_FRAME_BYTES,
+    );
+    if (!parsed.ok) {
+      reportPeerFault('Home Assistant', 'frame', parsed.why);
       return;
     }
+    const msg = parsed.value as HaMessage;
     switch (msg.type) {
       case 'auth_required':
-        if (msg.ha_version) this.version = msg.ha_version;
-        this.send({ type: 'auth', access_token: this.config.token });
+        this.noteVersion(msg);
+        this.send({ type: 'auth', access_token: this.token });
         return;
       case 'auth_ok': {
-        if (msg.ha_version) this.version = msg.ha_version;
+        this.noteVersion(msg);
         const id = this.nextId++;
         this.subscriptionId = id;
         this.send({ id, type: 'bluetooth/subscribe_advertisements' });
@@ -306,7 +333,7 @@ export class HaBluetoothClient {
         this.stopped = true; // never retry a bad credential
         settle(
           new HaBluetoothPermanentError(
-            `Home Assistant rejected the access token: ${msg.message ?? 'auth_invalid'}`,
+            `Home Assistant rejected the access token: ${peerText(msg.message ?? 'auth_invalid', 200)}`,
           ),
         );
         this.dropSocket();
@@ -348,7 +375,11 @@ export class HaBluetoothClient {
         return;
       case 'event': {
         if (msg.id !== this.subscriptionId) return;
-        const ads = msg.event?.add ?? [];
+        const add = msg.event?.add;
+        if (add !== undefined && !Array.isArray(add)) {
+          reportPeerFault('Home Assistant', 'event', 'event.add is not an array');
+        }
+        const ads: HaAdvertisement[] = Array.isArray(add) ? add : [];
         // Classified by position, not content: HA always sends the snapshot
         // first, even when it is empty, and a one-entry snapshot looks just like
         // a live event. A misclassified event loses nothing, because both paths
@@ -369,6 +400,13 @@ export class HaBluetoothClient {
     }
   }
 
+  /** The HA version is shown in a log line, so it is kept as short escaped text. */
+  private noteVersion(msg: HaMessage): void {
+    if (typeof msg.ha_version === 'string' && msg.ha_version) {
+      this.version = peerText(msg.ha_version, 32);
+    }
+  }
+
   private resetLiveStaleRun(): void {
     this.liveStaleRun = 0;
     this.liveStaleSince = 0;
@@ -376,9 +414,10 @@ export class HaBluetoothClient {
   }
 
   private accepts(ad: HaAdvertisement): boolean {
-    if (!ad || typeof ad.address !== 'string') return false;
-    if (this.config.source && ad.source?.toLowerCase() !== this.config.source.toLowerCase()) {
-      return false;
+    if (!isPlainObject(ad) || typeof ad.address !== 'string') return false;
+    if (this.config.source) {
+      if (typeof ad.source !== 'string') return false;
+      if (ad.source.toLowerCase() !== this.config.source.toLowerCase()) return false;
     }
     return true;
   }
@@ -574,8 +613,9 @@ export class HaBluetoothClient {
 }
 
 function describeSubscribeError(msg: HaMessage): string {
-  const code = msg.error?.code ?? 'unknown';
-  const detail = msg.error?.message ?? '';
+  const rawCode = msg.error?.code;
+  const code = rawCode === undefined || rawCode === null ? 'unknown' : peerText(rawCode, 40);
+  const detail = peerText(msg.error?.message ?? '', 200);
   if (code === 'unauthorized') {
     return 'Home Assistant refused bluetooth/subscribe_advertisements: the token must belong to an administrator user';
   }

@@ -15,6 +15,7 @@ const WRITE = normalizeUuid('2a9c');
 // returns a session whose notify char delivers one complete weight frame.
 const closeSpy = vi.fn(async () => {});
 const fireDisconnectSpy = vi.fn();
+const connectSpy = vi.fn();
 // When set, connectGatt hands back a session that never notifies and whose
 // device never reports a disconnect - an ESP32 that dropped off Wi-Fi mid-read.
 let hangSession = false;
@@ -49,6 +50,7 @@ vi.mock('../../../src/ble/handler-esphome-proxy/pool.js', () => {
       return () => {};
     }
     async connectGatt(_mac: string) {
+      connectSpy(_mac);
       if (scriptedSession) {
         const disconnectCbs: Array<() => void> = [];
         const scripted: BleChar = {
@@ -131,6 +133,8 @@ vi.mock('../../../src/ble/handler-esphome-proxy/pool.js', () => {
 });
 
 import { scanAndReadRaw, scanDevices } from '../../../src/ble/handler-esphome-proxy/scan.js';
+import { adapters as registry } from '../../../src/scales/index.js';
+import { MI2_537_REMOVED, MI2_537_WEIGH_IN } from '../../helpers/mi-scale-2-537.js';
 
 const profile: UserProfile = { height: 175, age: 30, gender: 'male', isAthlete: false };
 
@@ -350,6 +354,56 @@ describe('scanAndReadRaw manufacturer data handoff (#461)', () => {
       expect(matched.every((info) => info.manufacturerData === undefined)).toBe(true);
     } finally {
       startAdverts = null;
+    }
+  });
+});
+
+// #537: the single-shot scan has the same split as the watcher. The scale's
+// "load removed" frame has the service data and no name, and the scan response
+// that names it has no service data, so the named event looked like a device
+// with nothing to broadcast and was connected over GATT. The frames are
+// verbatim from the issue's log, whose weight was likely edited.
+describe('scanAndReadRaw advertisement-read scales (#537)', () => {
+  const BCS = normalizeUuid('181b');
+  const MAC = 'AA:BB:CC:DD:EE:72';
+  const frame = (hexFrame: string): BleDeviceInfo => ({
+    localName: '',
+    serviceUuids: [BCS],
+    serviceData: [{ uuid: BCS, data: Buffer.from(hexFrame, 'hex') }],
+  });
+
+  it('reads the weigh-in and never connects for the named scan response', async () => {
+    connectSpy.mockClear();
+    const debug = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+    // Hypothesis: the scan response arrives as its own named event with no
+    // service data, as ESPHome does for QN (#331). Not seen in a log of this scale.
+    startAdverts = [
+      [frame(MI2_537_REMOVED), MAC],
+      [{ localName: 'MIBFS', serviceUuids: [BCS] }, MAC],
+      [frame(MI2_537_WEIGH_IN), MAC],
+    ];
+    try {
+      const result = await scanAndReadRaw({
+        adapters: [...registry],
+        profile,
+        esphomeProxy: {
+          host: 'p1',
+          port: 6053,
+          client_info: 'x',
+          additional_proxies: [],
+        } as never,
+      });
+      expect(result.adapter.name).toBe('Xiaomi Mi Scale 2');
+      expect(result.reading).toEqual({ weight: 74.25, impedance: 444 });
+      expect(connectSpy).not.toHaveBeenCalled();
+      expect(
+        debug.mock.calls
+          .map((c) => String(c[0]))
+          .filter((l) => l.includes('read from its advertisements, not over GATT')),
+      ).toHaveLength(1);
+    } finally {
+      startAdverts = null;
+      debug.mockRestore();
     }
   });
 });

@@ -27,13 +27,15 @@ In custom config mode an update replaces the image and leaves `/share/ble-scale-
 
 An update re-creates the container, which drops the files the app keeps next to a single-file `config.yaml` mount, the export retry queue included. See [Run](/guide/getting-started#_2-run).
 
+The compose files in the repository name the release they were published with, so `docker compose pull` and Watchtower find nothing newer. To update by hand, change the tag and run `docker compose up -d`. For the timer or Watchtower below, set the tag to `latest` for the newest release, or to `X.Y` for the patch releases of one minor version ([Pinning a version](#pinning-a-version)).
+
 ### Systemd timer
 
-A timer that pulls the image and restarts the stack needs no extra container. Create `/etc/systemd/system/ble-scale-sync-update.service`, with `WorkingDirectory` set to the directory of your `docker-compose.yml`:
+A timer that pulls the image and restarts the stack needs no extra container. It brings an update only when the image tag is `latest` or `X.Y`. Create `/etc/systemd/system/ble-scale-sync-update.service`, with `WorkingDirectory` set to the directory of your `docker-compose.yml`:
 
 ```ini
 [Unit]
-Description=Pull latest ble-scale-sync image and restart the stack
+Description=Pull the ble-scale-sync image named in docker-compose.yml and restart the stack
 After=docker.service
 
 [Service]
@@ -68,7 +70,7 @@ systemctl list-timers ble-scale-sync-update
 
 ### Watchtower {#watchtower-with-label-opt-in}
 
-[Watchtower](https://github.com/containrrr/watchtower) restarts a container when a newer image is pushed. The upstream project was archived in December 2025 and gets no more updates. If you run it anyway, opt in only this container with a label and add the sidecar next to your existing service:
+[Watchtower](https://github.com/containrrr/watchtower) restarts a container when a newer image is pushed. The upstream project was archived in December 2025 and gets no more updates. If you run it anyway, set the image tag to `latest` or `X.Y`, because Watchtower never moves an exact tag. Opt in only this container with a label and add the sidecar next to your existing service:
 
 ```yaml
 services:
@@ -184,9 +186,9 @@ The timer runs every Sunday at 04:30 local time, up to 30 minutes later. If the 
 
 ## Pinning a version
 
-To upgrade only by hand, pin a release instead of `latest`.
+To upgrade only by hand, keep a release tag (the compose files already use one) and do not switch to `latest`.
 
-Docker: image tags are the version without the `v`. `X.Y.Z` pins one release, `X.Y` follows its patch releases.
+Docker: image tags are the version without the `v`. `X.Y.Z` pins one release, `X.Y` follows its patch releases. The repository's compose files carry an `X.Y.Z` tag; edit it to move to another release.
 
 ```yaml
 image: ghcr.io/kristianp26/ble-scale-sync:X.Y.Z

@@ -49,8 +49,14 @@ homeassistant_api: true
 # `want`, not `need`: MQTT is optional, a Garmin-only install has no broker.
 services:
   - mqtt:want
+# share holds the custom config. addon_config is this add-on's own folder
+# (/addon_configs/<slug> on the host, /config in the container); the embedded
+# ESP32 proxy broker reads its TLS certificate and key from there
+# (mqtt_proxy_embedded_tls), read-only. Not ssl, which holds the Home Assistant
+# keys, and not /share, which every add-on with share access and Samba can read.
 map:
   - share:rw
+  - addon_config:ro
 options:
   scale_mac: ''
   ble_transport: local
@@ -80,6 +86,9 @@ options:
   mqtt_proxy_embedded_broker_port: 1883
   mqtt_proxy_username: ''
   mqtt_proxy_password: ''
+  mqtt_proxy_embedded_tls: false
+  mqtt_proxy_embedded_tls_certfile: broker.pem
+  mqtt_proxy_embedded_tls_keyfile: broker.key
   proxy_liveness_timeout_min: 30
   weight_unit: kg
   height_unit: cm
@@ -105,6 +114,7 @@ options:
   garmin_email: ''
   garmin_password: ''
   garmin_weight_only: false
+  garmin_skip_metabolic_age: false
   garmin_upload_timeout_sec: 180
   scan_cooldown: 30
   idle_rescan_delay: 5
@@ -143,6 +153,9 @@ schema:
   mqtt_proxy_embedded_broker_port: port?
   mqtt_proxy_username: str?
   mqtt_proxy_password: password?
+  mqtt_proxy_embedded_tls: bool?
+  mqtt_proxy_embedded_tls_certfile: str?
+  mqtt_proxy_embedded_tls_keyfile: str?
   proxy_liveness_timeout_min: int(0,1440)?
   weight_unit: list(kg|lbs)
   height_unit: list(cm|in)
@@ -168,6 +181,7 @@ schema:
   garmin_email: str?
   garmin_password: password?
   garmin_weight_only: bool?
+  garmin_skip_metabolic_age: bool?
   garmin_upload_timeout_sec: int(10,900)?
   scan_cooldown: int(5,3600)
   idle_rescan_delay: int(0,3600)?

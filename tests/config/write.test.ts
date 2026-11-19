@@ -206,6 +206,15 @@ describe('writeLastKnownWeight', () => {
     expect(content).toBe(YAML_TWO_USERS);
   });
 
+  it.each([1e134, Number.NaN, Infinity, 0, 0.4, 700.5])(
+    'refuses to write %s, which is not a plausible body weight',
+    (weight) => {
+      const path = tempFile('config.yaml', YAML_TWO_USERS);
+      writeLastKnownWeight(path, 'alice', weight);
+      expect(readFileSync(path, 'utf8')).toBe(YAML_TWO_USERS);
+    },
+  );
+
   it('warns and skips if no users array', () => {
     const noUsers = 'version: 1\n';
     const path = tempFile('config.yaml', noUsers);
@@ -234,6 +243,26 @@ describe('updateLastKnownWeight', () => {
     expect(content).toContain('64');
     expect(content).not.toContain('last_known_weight: 60');
     expect(content).not.toContain('last_known_weight: 62');
+  });
+
+  it('does not schedule a write or log success for an implausible weight', async () => {
+    vi.useFakeTimers();
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const path = tempFile('config.yaml', YAML_TWO_USERS);
+
+    updateLastKnownWeight(path, 'alice', 1e134, null);
+    await vi.advanceTimersByTimeAsync(6000);
+
+    expect(readFileSync(path, 'utf8')).toBe(YAML_TWO_USERS);
+    expect(logSpy.mock.calls.some((c) => String(c[0]).includes('Updated last_known_weight'))).toBe(
+      false,
+    );
+    expect(
+      warnSpy.mock.calls.some((c) => String(c[0]).includes('Not writing last_known_weight')),
+    ).toBe(true);
+    logSpy.mockRestore();
+    warnSpy.mockRestore();
   });
 
   it('skips update when change is less than 0.5 kg', () => {

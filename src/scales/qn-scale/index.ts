@@ -92,6 +92,7 @@ import * as va19 from './dialects/va19.js';
 import { scaleCompositionPayload, type ScaleCompositionPin } from './own-composition.js';
 import { QnLedger } from './stored-ledger.js';
 import { QnSession } from './session.js';
+import { UnitMap } from '../device-state.js';
 
 const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
@@ -266,6 +267,21 @@ export class QnScaleAdapter
   /** What a later session's stored records and result blocks are compared with. */
   readonly ledger = new QnLedger();
 
+  /**
+   * The protocol byte each classic scale's last valid 0x12 gave, by address (#501).
+   *
+   * Some classic units send the 0x12 on the first connection and answer later
+   * connections of the same run with idle 0x14 frames, so a session without
+   * one has to open on a byte it did not hear this time. The byte of the same
+   * scale's last 0x12 is the best one there is: the only input is a frame the
+   * scale sent, and a session that hears nothing never writes here, so silence
+   * cannot move it (unlike a guess flipped on a timeout). Only the classic
+   * dialect writes it: the other dialects have no such log, so they keep
+   * their own defaults. Kept for the process, not across restarts, and not per
+   * session: it has to outlive onSessionStart.
+   */
+  private readonly protoByUnit = new UnitMap<number>();
+
   /** This session's state; replaced whole in onSessionStart. The dialect handlers use it too. */
   s = new QnSession();
 
@@ -424,14 +440,25 @@ export class QnScaleAdapter
    * `this.ctx` stays in onConnected: it is the one thing that does not exist
    * until then.
    */
-  onSessionStart(): void {
+  onSessionStart(deviceAddress?: string): void {
     this.sessionGeneration += 1;
     this.s.dispose();
+    // Transports already hand over an uppercase address without separators;
+    // the replay harness's fake one has colons, so the key is normalised here
+    // rather than trusted. No address (a caller that predates the argument)
+    // means no unit: nothing is read or remembered for it.
+    const unit = deviceAddress?.replace(/[:-]/g, '').toUpperCase() || null;
     this.s = new QnSession(
-      this.opts.protocolByte ?? 0x00,
+      this.opts.protocolByte ?? (unit !== null ? this.protoByUnit.get(unit) : undefined) ?? 0x00,
       this.ledger.mark,
       Math.floor(Date.now() / 1000) - SCALE_EPOCH_OFFSET,
+      unit,
     );
+  }
+
+  /** The byte this scale's last valid 0x12 gave in this run, if any. */
+  private rememberedProto(): number | undefined {
+    return this.s.unit !== null ? this.protoByUnit.get(this.s.unit) : undefined;
   }
 
   /**
@@ -482,6 +509,9 @@ export class QnScaleAdapter
       // override is unset: seenProtocolType can be seeded by a 0x12 that races
       // the AE02 subscribe on native BLE, and this fixed frame must not depend on
       // that timing. The override, when set, is applied before onConnected runs.
+      // It deliberately ignores the remembered byte too (protoByUnit): that
+      // is not hardware-checked on this path, and changing it needs a test on
+      // the reporter's scale.
       const config = buildConfig(this.opts.protocolByte ?? 0x00, this.unitFlag());
       const unlocks = [[0x13, 0x09, 0x00, 0x01, 0x01, 0x02], config];
       for (const cmd of unlocks) {
@@ -510,10 +540,17 @@ export class QnScaleAdapter
     const gen = this.sessionGeneration;
 
     if (!this.s.configSent) {
-      this.s.seenProtocolType = this.opts.protocolByte ?? 0xff;
+      const remembered = this.rememberedProto();
+      this.s.seenProtocolType = this.opts.protocolByte ?? remembered ?? 0xff;
+      const origin =
+        this.opts.protocolByte !== null
+          ? '(ble.qn_protocol_byte)'
+          : remembered !== undefined
+            ? "(from this scale's last scale-info frame)"
+            : '(no byte remembered for this scale)';
       bleLog.debug(
         `QN: fallback: no 0x12 received, running handshake with ` +
-          `proto=0x${this.s.seenProtocolType.toString(16).padStart(2, '0')}`,
+          `proto=0x${this.s.seenProtocolType.toString(16).padStart(2, '0')} ${origin}`,
       );
       // handleScaleInfo sends AE01 init + 0x13 config
       await this.handleScaleInfo();
@@ -806,9 +843,18 @@ export class QnScaleAdapter
     //
     // The choice cannot be corrected at runtime: a scale on the wrong byte
     // acknowledges everything and stays silent, which is exactly what a
-    // scale nobody is standing on does.
+    // scale nobody is standing on does. A classic scale's own byte is kept per
+    // address, so a later session of the same run that gets no 0x12 opens on it
+    // instead of on a guess (protoByUnit, #501).
     const byLength = this.s.kind === 'va18' ? LEGACY_PROTO_TYPE : data[2];
     this.s.seenProtocolType = this.opts.protocolByte ?? byLength;
+    // Remember the byte this 0x12 carried, not what the option forced. Classic
+    // only, so that is data[2]; the other dialects keep their defaults. Only
+    // a frame that closes under the checksum counts: a corrupted [2] would
+    // otherwise open every later session on a wrong byte.
+    if (this.s.kind === 'classic' && this.s.unit !== null && hasValidSumChecksum(data)) {
+      this.protoByUnit.put(this.s.unit, data[2]);
+    }
     // Bit 0 on every dialect, as the vendor's published SDK reads it.
     // openScale's whole-byte `[10] === 1` read the 17-byte classic frames
     // ([10] 0x03) as /10, and the long frame was set to /10 whatever its

@@ -1,7 +1,9 @@
 /**
  * State the broadcast adapters keep across advertisements (A-08). They have no
  * session, so it lives for the process or per unit, and one copy here keeps
- * the adapters' copies from drifting apart (D052-D054 de-duplication).
+ * the adapters' copies from drifting apart (D052-D054 de-duplication). UnitMap
+ * is also the per-address memory of a session adapter whose scale does not
+ * repeat itself (QN's protocol byte).
  */
 
 /**
@@ -34,7 +36,7 @@ export class LogKey {
 /** Units tracked at once, oldest out. A household has one; this is a leak bound. */
 const MAX_UNITS = 8;
 
-/** Per-unit state of a broadcast scale, at most MAX_UNITS units. */
+/** Per-unit state of a scale, keyed by address, at most MAX_UNITS units. */
 export class UnitMap<T> extends Map<string, T> {
   /** Store `value` as the newest entry; a new unit drops the oldest one when full. */
   put(key: string, value: T): T {

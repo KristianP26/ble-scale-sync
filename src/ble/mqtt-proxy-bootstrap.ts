@@ -1,5 +1,6 @@
 import type { MqttProxyConfig } from '../config/schema.js';
 import { startEmbeddedBroker, type EmbeddedBrokerHandle } from './embedded-broker.js';
+import { brokerTlsFilesOf } from './embedded-broker-tls.js';
 
 export interface MqttProxyBootstrapResult {
   /** Effective config with `broker_url` guaranteed to be set. */
@@ -13,11 +14,13 @@ export interface MqttProxyBootstrapResult {
  *
  * If `broker_url` is already configured, this is a no-op and the same config
  * is returned. Otherwise an embedded aedes broker is started on the configured
- * port and the returned config's `broker_url` points at the loopback listener.
+ * port and the returned config's `broker_url` points at the loopback listener
+ * (with `embedded_broker_tls_cert` and `_key` set, a plaintext loopback listener
+ * next to the TLS one on the configured port).
  *
  * Note on credentials: `username` and `password` are forwarded verbatim. A
- * username without a password is rejected for a non-loopback bind, by the
- * config schema and again by startEmbeddedBroker.
+ * non-loopback bind needs both, which the config schema requires and
+ * startEmbeddedBroker enforces again for any other caller.
  *
  * The caller owns the embedded broker handle and must call `close()` during
  * shutdown.
@@ -35,6 +38,8 @@ export async function bootstrapMqttProxy(
     username: mqttProxy.username,
     password: mqttProxy.password,
     topicPrefix: mqttProxy.topic_prefix,
+    deviceId: mqttProxy.device_id,
+    tls: brokerTlsFilesOf(mqttProxy) ?? undefined,
   });
 
   return {

@@ -1,6 +1,7 @@
 import { createRequire } from 'node:module';
 import type { EsphomeProxyConfig } from '../../config/schema.js';
 import { bleLog, errMsg } from '../types.js';
+import { warnThrottled } from '../peer-input.js';
 
 const nodeRequire = createRequire(import.meta.url);
 
@@ -148,8 +149,74 @@ function patchUnknownMessageHandling(): void {
   }
 }
 
+// ─── Plaintext buffer cap (ADR D108) ─────────────────────────────────────────
+
+/**
+ * The most a plaintext (no `encryption_key`) frame helper may hold unparsed. A
+ * legitimate API message is far smaller. The library appends every chunk to a
+ * buffer and waits for the length the frame header declared, which a peer can
+ * set to 2 GiB; without a cap the buffer grows until memory runs out, and a
+ * stream that desyncs never clears it. Noise frames are bounded by their own
+ * 16-bit length, so only the plaintext helper needs this.
+ */
+export const MAX_PLAINTEXT_BUFFER_BYTES = 1024 * 1024;
+
+/** Set before the attempt so a failing patch is not retried on every reconnect. */
+let capPatchAttempted = false;
+
+const CAP_PATCHED = Symbol.for('ble-scale-sync.esphome.plaintext.onData.capped');
+
+type PlaintextHelper = {
+  buffer?: Buffer;
+  socket?: { destroyed?: boolean };
+  emit: (event: string, err: Error) => void;
+  destroy: () => void;
+};
+
+/**
+ * Wrap `PlaintextFrameHelper.prototype.onData` so a buffer that would pass
+ * MAX_PLAINTEXT_BUFFER_BYTES ends the connection instead: an `error` event (the
+ * permanent listener below logs it) and `destroy()`, after which the library
+ * reconnects on its own interval. Same D012 contract as the unknown-message
+ * patch: the internals it reads are checked first, a marker makes a second call
+ * a no-op, and a library that no longer has them is left alone with a warning.
+ */
+function patchPlaintextBufferCap(): void {
+  if (capPatchAttempted) return;
+  capPatchAttempted = true;
+  try {
+    const Plaintext = nodeRequire('@2colors/esphome-native-api/lib/utils/plaintextFrameHelper.js');
+    const original: unknown = Plaintext?.prototype?.onData;
+    if (typeof original !== 'function' || typeof Plaintext?.prototype?.destroy !== 'function') {
+      bleLog.warn(
+        'ESPHome plaintext buffer cap skipped: library internals changed ' +
+          '(PlaintextFrameHelper onData or destroy not in the expected shape).',
+      );
+      return;
+    }
+    if ((original as { [CAP_PATCHED]?: boolean })[CAP_PATCHED]) return;
+    const capped = function (this: PlaintextHelper, data: Buffer): unknown {
+      // Already closed for exceeding the cap: late chunks are dropped, one error is enough.
+      if (this.socket?.destroyed) return undefined;
+      if ((this.buffer?.length ?? 0) + data.length > MAX_PLAINTEXT_BUFFER_BYTES) {
+        this.emit(
+          'error',
+          new Error(`ESPHome frame buffer passed ${MAX_PLAINTEXT_BUFFER_BYTES} bytes, closing`),
+        );
+        this.destroy();
+        return undefined;
+      }
+      return (original as (this: PlaintextHelper, d: Buffer) => unknown).call(this, data);
+    };
+    Object.defineProperty(capped, CAP_PATCHED, { value: true });
+    Plaintext.prototype.onData = capped;
+  } catch (e: unknown) {
+    bleLog.warn(`ESPHome plaintext buffer cap failed, using library default: ${errMsg(e)}`);
+  }
+}
+
 /** Exposed for the regression test that guards the patched library internals. */
-export const _internals = { patchUnknownMessageHandling };
+export const _internals = { patchUnknownMessageHandling, patchPlaintextBufferCap };
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -229,6 +296,7 @@ export interface EsphomeConnection {
 export async function createEsphomeClient(config: EsphomeProxyConfig): Promise<EsphomeClient> {
   // Must run before the Client (and its FrameHelper) is constructed. #252
   patchUnknownMessageHandling();
+  patchPlaintextBufferCap();
 
   const mod = (await import('@2colors/esphome-native-api')) as unknown as {
     Client: new (options: Record<string, unknown>) => EsphomeClient;
@@ -261,8 +329,16 @@ export async function createEsphomeClient(config: EsphomeProxyConfig): Promise<E
   // ESPHome release added but this library version cannot parse, #210)
   // becomes an uncaught exception that kills the process. Log it instead and
   // let the library's `reconnect: true` handle recovery.
+  // Throttled: a peer that keeps sending bad frames reconnects every 30 s and
+  // would otherwise be a warning each time. A different error is warned at once
+  // (the variant), so a new reason is not hidden behind the first one.
   client.on('error', (err) => {
-    bleLog.warn(`ESPHome proxy ${config.host}:${config.port} error: ${errMsg(err)}`);
+    const message = errMsg(err);
+    warnThrottled(
+      `esphome-error|${config.host}:${config.port}`,
+      `ESPHome proxy ${config.host}:${config.port} error: ${message}`,
+      { variant: message },
+    );
   });
 
   // Lifecycle logging (#303). Without it a dead transport and a quiet house are

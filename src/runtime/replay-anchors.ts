@@ -5,6 +5,7 @@ import { atomicWrite } from '../config/write.js';
 import type { UserConfig } from '../config/schema.js';
 import { createLogger } from '../logger.js';
 import { errMsg } from '../utils/error.js';
+import { isPlausibleWeight } from '../interfaces/reading-weight.js';
 
 const log = createLogger('Sync');
 
@@ -107,12 +108,7 @@ function readAnchors(path: string): AnchorRead {
     const weight = e && typeof e === 'object' ? e.weight : undefined;
     const time =
       e && typeof e === 'object' && typeof e.time === 'string' ? Date.parse(e.time) : NaN;
-    if (
-      typeof weight !== 'number' ||
-      !Number.isFinite(weight) ||
-      weight <= 0 ||
-      !usableTime(time)
-    ) {
+    if (typeof weight !== 'number' || !isPlausibleWeight(weight) || !usableTime(time)) {
       log.debug(`${REPLAY_ANCHORS_FILENAME}: ignoring the unusable entry for '${slug}'.`);
       continue;
     }

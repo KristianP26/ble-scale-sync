@@ -202,6 +202,21 @@ describe('IntervalsExporter', () => {
       expect(wellnessCalls()[0][0]).toBe(`${ATHLETE_URL}/wellness/${toLocalDate(at)}`);
     });
 
+    it('does not follow a redirect of the profile lookup', async () => {
+      mockFetch.mockImplementation(async (url: string) =>
+        url === ATHLETE_URL
+          ? new Response(null, { status: 307, headers: { location: 'https://other.example/x' } })
+          : { ok: true, status: 200 },
+      );
+      const exporter = new IntervalsExporter(defaultConfig);
+      await exporter.export(samplePayload, { timestamp: at });
+
+      const lookup = mockFetch.mock.calls.filter(([url]) => url === ATHLETE_URL);
+      expect(lookup).toHaveLength(1);
+      expect(lookup[0][1].redirect).toBe('manual');
+      expect(wellnessCalls()[0][0]).toBe(`${ATHLETE_URL}/wellness/${toLocalDate(at)}`);
+    });
+
     it('falls back to the host day when the profile cannot be read', async () => {
       mockFetch.mockImplementation(async (url: string) =>
         url === ATHLETE_URL ? { ok: false, status: 500 } : { ok: true, status: 200 },

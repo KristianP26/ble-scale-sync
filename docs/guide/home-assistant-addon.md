@@ -64,6 +64,7 @@ The add-on writes `/data/config.yaml` from these options on every start, so a ch
 | `mqtt_proxy_broker`               | `shared`          | `shared` uses the MQTT options below, `embedded` a broker in the add-on        |
 | `mqtt_proxy_device_id`, `mqtt_proxy_topic_prefix` | `esp32-ble-proxy`, `ble-proxy` | `ble.mqtt_proxy`, [ESP32 proxy](/guide/esp32-proxy#home-assistant-add-on) |
 | `mqtt_proxy_embedded_broker_port`, `mqtt_proxy_username`, `mqtt_proxy_password` | `1883`, empty, empty | Embedded broker only; username and password are required there |
+| `mqtt_proxy_embedded_tls`, `mqtt_proxy_embedded_tls_certfile`, `mqtt_proxy_embedded_tls_keyfile` | `false`, `broker.pem`, `broker.key` | Embedded broker only: TLS from two files in the add-on's own config folder (`/addon_configs/<slug>/` on the host, read-only for the add-on), see [ESP32 proxy](/guide/esp32-proxy#embedded-broker-tls) |
 | `proxy_liveness_timeout_min`      | `30`              | `ble.proxy_liveness_timeout_min`, proxy transports only                        |
 
 ### Units and user {#user-profile}
@@ -93,6 +94,7 @@ Calculations use kg and cm whatever the units are, and MQTT sends masses in kg. 
 | `garmin_enabled`                  | `false`                  | Adds the `garmin` exporter, [Garmin Connect](#garmin-connect)                    |
 | `garmin_email`, `garmin_password` | empty                    | `email`, `password`                                                              |
 | `garmin_weight_only`              | `false`                  | `weight_only`, [Garmin](/exporters#garmin)                                       |
+| `garmin_skip_metabolic_age`       | `false`                  | `skip_metabolic_age`, [Skip metabolic age](/exporters#skip-metabolic-age)        |
 | `garmin_upload_timeout_sec`       | `180`                    | `upload_timeout_sec`, [Garmin](/exporters#garmin)                                |
 
 With `mqtt_auto` on, the add-on reads the broker address and login from the Supervisor and logs `MQTT auto-detected: mqtt://core-mosquitto:1883`. If the Mosquitto add-on is missing or the Supervisor refuses, the log gives the HTTP status and the add-on falls back to the manual MQTT options.
@@ -134,15 +136,15 @@ The options cover one user, MQTT and Garmin Connect. For several users, another 
 - The other options are ignored, the transport options included: the file's `ble.handler` decides. The log warns about a `ble` or transport option you left set. Two exceptions: `proxy_liveness_timeout_min` is applied on top of the file unless the file sets `ble.proxy_liveness_timeout_min`, and `ble_adapter` with `reset_bluetooth` controls the adapter reset at startup.
 - The add-on does not sign in to Garmin. Import a token as in [Sign in to Garmin with MFA](#mfa-workaround); it lands in `/data/garmin-tokens`, where every `garmin` exporter without its own `token_dir` looks. Only that default directory is imported, so give further Garmin accounts a `token_dir` you can write to, such as `/share/ble-scale-sync/garmin-tokens/<name>`.
 - A `strava` exporter without its own `token_dir` keeps its tokens in `/data/strava-tokens`, which survives restarts and updates.
+- A `${SUPERVISOR_TOKEN}` or `${HASSIO_TOKEN}` reference stops the add-on with an `ERROR` line that names the setting, because the add-on's Supervisor token is never passed on through the file.
 - In this mode the adapter reset at startup runs only when `ble_adapter` is set. Turn off `reset_bluetooth` if your file uses a proxy.
-- For Home Assistant Bluetooth, the add-on's own Supervisor access works without a long-lived token. Write the URL in full, because `http://supervisor/core` alone does not reach the websocket:
+- For Home Assistant Bluetooth, the add-on's own Supervisor access works without a long-lived token. Write the URL in full, because `http://supervisor/core` alone does not reach the websocket, and leave out `token`:
 
 ```yaml
 ble:
   handler: ha-bluetooth
   ha_bluetooth:
     url: ws://supervisor/core/websocket
-    token: '${SUPERVISOR_TOKEN}'
 ```
 
 ::: warning Files in /share are readable by other add-ons
@@ -160,6 +162,24 @@ When you report back, paste the `Version` line from the top of the log; on a dev
 ## Restarts and stored data {#persistence}
 
 If the app exits on its own, for example after repeated Bluetooth failures, the add-on starts it again after a short, growing delay. The Supervisor's Watchdog switch is not needed.
+
+An exit with code 0 is the exception. With `runtime.continuous_mode: false` in a [custom config](#custom-config-mode) the app does a single run, and when it succeeds the add-on stops instead of starting another run. With **Watchdog** on, the Supervisor starts it again, so turn **Watchdog** off for this. A single run that finds nothing exits with code 1 and is retried with the growing delay. The default add-on options always run in continuous mode and are not affected.
+
+To sync once a day, turn **Start on boot** and **Watchdog** off, set `continuous_mode: false` in the custom config, and start the add-on from an automation:
+
+```yaml
+alias: Scale daily sync
+triggers:
+  - trigger: time
+    at: '07:30:00'
+actions:
+  - action: hassio.addon_start
+    data:
+      addon: xxxxxxxx_ble-scale-sync # slug from the add-on's URL
+mode: single
+```
+
+If nobody has weighed in, the run exits with code 1 and the add-on keeps retrying until a weigh-in arrives. To end it, add a final `hassio.addon_stop` step, after a delay or after a `wait_for_trigger` on your weight sensor.
 
 | Path                                   | Content                                                                                                  |
 | -------------------------------------- | -------------------------------------------------------------------------------------------------------- |
@@ -184,4 +204,4 @@ If the app exits on its own, for example after repeated Bluetooth failures, the 
 - The add-on exits with `DBusError` and `AccessDenied`: reinstall the add-on so the Supervisor applies its manifest; see [Docker issues](/troubleshooting#docker-issues).
 - A Beurer scale asks to pair again or shows a code over and over: [Beurer scales](/guide/scales/beurer).
 - Discovery stops after hours: [BlueZ stuck state](/troubleshooting#ble-discovery-stops-working-after-hours-bluez-stuck-state).
-- The add-on stops with `ERROR:` about a transport: fix the option the line names. The add-on's Documentation tab lists each message.
+- The add-on stops with `ERROR:` about a transport or about the Supervisor token: fix the option the line names. The add-on's Documentation tab lists each message.

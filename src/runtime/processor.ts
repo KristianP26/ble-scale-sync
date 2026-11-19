@@ -31,6 +31,11 @@ import {
   measurementTime,
 } from '../interfaces/reading-time.js';
 import {
+  PLAUSIBLE_WEIGHT_MAX_KG,
+  PLAUSIBLE_WEIGHT_MIN_KG,
+  isPlausibleWeight,
+} from '../interfaces/reading-weight.js';
+import {
   IMPEDANCE_MAX_OHM,
   IMPEDANCE_MIN_OHM,
   isPlausibleImpedance,
@@ -89,6 +94,44 @@ function classifyFrames(raw: RawReading, receivedAt: Date): Frame[] {
       stamped: !!ts && !Number.isNaN(ts.getTime()) && ts.getTime() <= receivedAt.getTime(),
     };
   });
+}
+
+/**
+ * Drop every frame whose weight is not a body weight (ADR D108), before
+ * anything looks at it: no matching, display, dedup, export, queue entry or
+ * `last_known_weight` write sees it. The band is wide on purpose (0.5-700 kg);
+ * it catches a mis-scaled or corrupt value, not a wrong person.
+ *
+ * A live frame gets its own warning and the error beep, the cue for the person
+ * on the scale. Stored records are summed up in one line per cycle: a scale
+ * that replays hundreds of corrupt records would otherwise flood the log.
+ */
+function keepPlausibleFrames(ctx: AppContext, raw: RawReading, frames: Frame[]): Frame[] {
+  const kept: Frame[] = [];
+  const droppedStored: Frame[] = [];
+  let droppedLive = false;
+  const band = `${PLAUSIBLE_WEIGHT_MIN_KG}-${PLAUSIBLE_WEIGHT_MAX_KG} kg`;
+  for (const frame of frames) {
+    if (isPlausibleWeight(frame.reading.weight)) {
+      kept.push(frame);
+    } else if (frame.historical) {
+      droppedStored.push(frame);
+    } else {
+      droppedLive = true;
+      log.warn(
+        `Dropping a reading of ${String(frame.reading.weight)} kg from ${raw.adapter.name}: ` +
+          `not a plausible body weight (${band}). It is not exported or remembered.`,
+      );
+    }
+  }
+  if (droppedStored.length > 0) {
+    log.warn(
+      `Dropping ${droppedStored.length} stored record(s) from ${raw.adapter.name}: ` +
+        `not a plausible body weight (${band}). First: ${String(droppedStored[0].reading.weight)} kg.`,
+    );
+  }
+  if (droppedLive) ctx.display?.beep(600, 150, 3);
+  return kept;
 }
 
 /** Combine the user prefix and `[historic <ISO>]` (stored records only) into the log tag. */
@@ -217,7 +260,8 @@ export async function processReading(
 ): Promise<boolean> {
   // The one moment "now" is taken for this cycle (D027): what is history and
   // what time a stampless reading gets are both decided against it.
-  const frames = classifyFrames(raw, new Date());
+  const frames = keepPlausibleFrames(ctx, raw, classifyFrames(raw, new Date()));
+  if (frames.length === 0) return true;
   const stored = frames.filter((f) => f.historical);
   const live = frames.filter((f) => !f.historical);
   if (ctx.config.users.length > 1) {

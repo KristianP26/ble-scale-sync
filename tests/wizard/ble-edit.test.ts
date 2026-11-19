@@ -118,6 +118,69 @@ describe('BLE section starts from the current config', () => {
     expect((await promptMqttProxy(open.ctx)).embedded_broker_bind).toBe('127.0.0.1');
   });
 
+  describe('embedded broker TLS keys', () => {
+    const tls = {
+      device_id: 'esp-1',
+      topic_prefix: 'bp',
+      username: 'u',
+      password: '${MQTT_PW}',
+      embedded_broker_port: 8883,
+      embedded_broker_bind: '0.0.0.0',
+      embedded_broker_tls_cert: '/certs/broker.pem',
+      embedded_broker_tls_key: '/certs/broker.key',
+    };
+
+    it('keeps the certificate and key on Enter, since the confirm defaults to yes', async () => {
+      const { ctx } = ctxWith({}, []);
+
+      expect(await promptMqttProxy(ctx, structuredClone(tls) as never)).toEqual(tls);
+    });
+
+    it('drops them when TLS is declined', async () => {
+      const { ctx } = ctxWith({}, [[/^Encrypt the ESP32 connection with TLS/, false]]);
+
+      const result = await promptMqttProxy(ctx, structuredClone(tls) as never);
+
+      expect(result).not.toHaveProperty('embedded_broker_tls_cert');
+      expect(result).not.toHaveProperty('embedded_broker_tls_key');
+    });
+
+    it('drops them when the broker becomes an external one', async () => {
+      const { ctx } = ctxWith({}, [
+        [/^MQTT broker:/, 'external'],
+        [/^MQTT broker URL:/, 'mqtts://broker.lan:8883'],
+      ]);
+
+      const result = await promptMqttProxy(ctx, structuredClone(tls) as never);
+
+      expect(result.broker_url).toBe('mqtts://broker.lan:8883');
+      expect(result).not.toHaveProperty('embedded_broker_tls_cert');
+      expect(result).not.toHaveProperty('embedded_broker_tls_key');
+    });
+
+    it('drops them when auth is declined and the bind falls back to loopback', async () => {
+      const { ctx } = ctxWith({}, [[/^Require username\/password/, false]]);
+
+      const result = await promptMqttProxy(ctx, structuredClone(tls) as never);
+
+      expect(result.embedded_broker_bind).toBe('127.0.0.1');
+      expect(result).not.toHaveProperty('embedded_broker_tls_cert');
+    });
+
+    it('refuses a relative path', async () => {
+      const { ctx, rejected } = ctxWith({}, [
+        [/^TLS certificate file/, 'certs/broker.pem'],
+        [/^TLS private key file/, '~/broker.key'],
+      ]);
+
+      await promptMqttProxy(ctx, structuredClone(tls) as never);
+
+      expect(rejected).toHaveLength(1);
+      expect(rejected[0]).toContain('certs/broker.pem');
+      expect(rejected[0]).toContain('Must be an absolute path or start with ~/');
+    });
+  });
+
   it('keeps an ESPHome proxy with its key, additional proxies and advertisement_timeout', async () => {
     const current = {
       host: 'p1.local',

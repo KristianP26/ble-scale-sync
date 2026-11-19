@@ -75,6 +75,49 @@ describe('resolveEnvReferences', () => {
       exporters: [{ type: 'mqtt', password: 'hello' }],
     });
   });
+
+  describe('Supervisor credentials', () => {
+    const SENTINEL = 'sentinel-credential-value';
+
+    it.each(['${SUPERVISOR_TOKEN}', 'x${HASSIO_TOKEN}y', '${supervisor_token}', '${Hassio_Token}'])(
+      'refuses %s even when the variable is set',
+      (text) => {
+        vi.stubEnv('SUPERVISOR_TOKEN', SENTINEL);
+        vi.stubEnv('HASSIO_TOKEN', SENTINEL);
+        vi.stubEnv('supervisor_token', SENTINEL);
+        expect(() => resolveEnvReferences(text)).toThrow(/cannot be referenced in config\.yaml/);
+      },
+    );
+
+    it('names the variable and the config path, never the value', () => {
+      vi.stubEnv('HASSIO_TOKEN', SENTINEL);
+      const config = {
+        global_exporters: [{ type: 'webhook', headers: { 'X-Api-Key': '${HASSIO_TOKEN}' } }],
+      };
+      let message = '';
+      try {
+        resolveEnvReferences(config);
+      } catch (e) {
+        message = (e as Error).message;
+      }
+      expect(message).toContain("'HASSIO_TOKEN'");
+      expect(message).toContain('(at global_exporters[0].headers.X-Api-Key)');
+      expect(message).not.toContain(SENTINEL);
+    });
+
+    it('leaves out the path for a bare string', () => {
+      expect(() => resolveEnvReferences('${SUPERVISOR_TOKEN}')).toThrow(
+        /^Environment variable 'SUPERVISOR_TOKEN' cannot be referenced in config\.yaml: /,
+      );
+    });
+
+    it('keeps $${...} literal and every other name working', () => {
+      vi.stubEnv('SUPERVISOR_TOKEN', SENTINEL);
+      vi.stubEnv('HA_TOKEN', 'ok');
+      expect(resolveEnvReferences('a$${SUPERVISOR_TOKEN}b')).toBe('a${SUPERVISOR_TOKEN}b');
+      expect(resolveEnvReferences('${HA_TOKEN}')).toBe('ok');
+    });
+  });
 });
 
 // --- detectConfigSource ---
@@ -137,6 +180,37 @@ runtime:
   afterEach(() => {
     vi.unstubAllEnvs();
     vi.restoreAllMocks();
+  });
+
+  describe('Supervisor token references', () => {
+    const withHeader = (valueLine: string): string =>
+      VALID_YAML.replace(
+        'global_exporters:\n  - type: garmin',
+        'global_exporters:\n  - type: webhook\n    url: http://example.test/hook\n' +
+          `    headers:\n      X-Api-Key: ${valueLine}`,
+      );
+
+    it.each([
+      ['a plain reference', withHeader("'${SUPERVISOR_TOKEN}'")],
+      ['a double-quoted escape of the dollar sign', withHeader('"\\x24{SUPERVISOR_TOKEN}"')],
+      [
+        'a YAML alias',
+        withHeader('*ref').replace('version: 1\n', "version: 1\nunused: &ref '${HASSIO_TOKEN}'\n"),
+      ],
+    ])('are refused when written as %s', (_name, yaml) => {
+      vi.stubEnv('SUPERVISOR_TOKEN', 'sentinel-credential-value');
+      vi.stubEnv('HASSIO_TOKEN', 'sentinel-credential-value');
+      vi.spyOn(fs, 'readFileSync').mockReturnValue(yaml);
+      vi.spyOn(fs, 'existsSync').mockImplementation((p) => !String(p).endsWith('.env'));
+      let message = '';
+      try {
+        loadYamlConfig('/test/config.yaml');
+      } catch (e) {
+        message = (e as Error).message;
+      }
+      expect(message).toMatch(/cannot be referenced in config\.yaml/);
+      expect(message).not.toContain('sentinel-credential-value');
+    });
   });
 
   it('parses valid YAML config', () => {

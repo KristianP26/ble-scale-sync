@@ -8,6 +8,7 @@ import {
 } from '../../../src/ble/handler-ha-bluetooth/index.js';
 import type { HaAdvertisement } from '../../../src/ble/handler-ha-bluetooth/index.js';
 import { bleLog } from '../../../src/ble/types.js';
+import { _resetPeerInput } from '../../../src/ble/peer-input.js';
 
 /**
  * Scripted stand-in for the global WebSocket: records what the client sends and
@@ -601,6 +602,89 @@ describe('HaBluetoothClient', () => {
     expect(good).toHaveBeenCalledTimes(1);
   });
 
+  describe('a frame that is not the expected shape', () => {
+    beforeEach(() => {
+      _resetPeerInput();
+      vi.spyOn(bleLog, 'warn').mockImplementation(() => {});
+      vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+    });
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    async function subscribed(): Promise<{ id: number; cb: ReturnType<typeof vi.fn> }> {
+      const started = client.start();
+      const id = handshake(sockets[0]);
+      await started;
+      const cb = vi.fn();
+      client.onAdvertisement(cb);
+      return { id, cb };
+    }
+
+    it.each([
+      ['null', null],
+      ['an array', []],
+      ['a number', 5],
+      ['a string', 'x'],
+    ])('ignores a frame that is %s', async (_label, frame) => {
+      const { id, cb } = await subscribed();
+      expect(() => sockets[0].serverSays(frame)).not.toThrow();
+      sockets[0].serverSays({ id, type: 'event', event: { add: [advert()] } });
+      expect(cb).toHaveBeenCalledTimes(1);
+    });
+
+    it.each([
+      ['a number', 5],
+      ['an empty object', {}],
+      ['a string', 'abc'],
+      ['null', null],
+    ])('survives event.add that is %s, snapshot and live alike', async (_label, add) => {
+      const { id, cb } = await subscribed();
+      expect(() => sockets[0].serverSays({ id, type: 'event', event: { add } })).not.toThrow();
+      expect(() => sockets[0].serverSays({ id, type: 'event', event: { add } })).not.toThrow();
+      sockets[0].serverSays({ id, type: 'event', event: { add: [advert()] } });
+      expect(cb).toHaveBeenCalledTimes(1);
+    });
+
+    it('skips an entry of add that is not an object', async () => {
+      const { id, cb } = await subscribed();
+      sockets[0].serverSays({ id, type: 'event', event: { add: [null, 5, 'x', advert()] } });
+      expect(cb).toHaveBeenCalledTimes(1);
+    });
+
+    it('survives a source that is not a string when a source filter is set', async () => {
+      const filtered = new HaBluetoothClient(
+        { ...CONFIG, source: '9C:13:9E:34:82:08' },
+        { wsFactory: () => sockets[sockets.push(new FakeWs()) - 1] },
+      );
+      const started = filtered.start();
+      const id = handshake(sockets[0]);
+      await started;
+      const cb = vi.fn();
+      filtered.onAdvertisement(cb);
+      expect(() =>
+        sockets[0].serverSays({
+          id,
+          type: 'event',
+          event: { add: [advert({ source: 5 as unknown as string })] },
+        }),
+      ).not.toThrow();
+      expect(cb).not.toHaveBeenCalled();
+      await filtered.stop();
+    });
+
+    it('logs a bad frame as a warning once a minute', async () => {
+      await subscribed();
+      sockets[0].serverSays('x');
+      sockets[0].serverSays(null);
+      const warn = vi.mocked(bleLog.warn);
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(String(warn.mock.calls[0][0])).toMatch(
+        /^Ignored a malformed frame from Home Assistant/,
+      );
+    });
+  });
+
   it('keeps reconnecting when HA restarts before its Bluetooth integration is loaded (B-05)', async () => {
     const error = vi.spyOn(bleLog, 'error').mockImplementation(() => {});
     vi.spyOn(bleLog, 'warn').mockImplementation(() => {});
@@ -739,5 +823,79 @@ describe('HaBluetoothClient', () => {
     sockets[0].serverCloses(1006);
     await vi.advanceTimersByTimeAsync(2_000);
     expect(sockets).toHaveLength(2);
+  });
+});
+
+describe('HaBluetoothClient token source', () => {
+  const SV = { url: 'ws://supervisor/core/websocket' };
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.useRealTimers();
+  });
+
+  function make(config: { url: string; token?: string }) {
+    const sockets: FakeWs[] = [];
+    const client = new HaBluetoothClient(config, {
+      wsFactory: () => {
+        const ws = new FakeWs();
+        sockets.push(ws);
+        return ws;
+      },
+    });
+    return { client, sockets };
+  }
+
+  it('logs in to the Supervisor proxy with SUPERVISOR_TOKEN when the config has none', async () => {
+    vi.useFakeTimers();
+    vi.stubEnv('SUPERVISOR_TOKEN', 'sv-token');
+    const { client, sockets } = make(SV);
+    const started = client.start();
+    sockets[0].open();
+    sockets[0].serverSays({ type: 'auth_required' });
+    expect(sockets[0].lastSent()).toEqual({ type: 'auth', access_token: 'sv-token' });
+    sockets[0].serverSays({ type: 'auth_ok' });
+    sockets[0].serverSays({
+      id: sockets[0].lastSent().id,
+      type: 'result',
+      success: true,
+      result: null,
+    });
+    await expect(started).resolves.toBeUndefined();
+    await client.stop();
+  });
+
+  it('never takes SUPERVISOR_TOKEN to any other URL: no socket, permanent error', async () => {
+    vi.stubEnv('SUPERVISOR_TOKEN', 'sv-token');
+    const { client, sockets } = make({ url: 'ws://ha.example:8123/api/websocket' });
+    await expect(client.start()).rejects.toBeInstanceOf(HaBluetoothPermanentError);
+    await expect(client.start()).rejects.toThrow(/ble\.ha_bluetooth\.token is not set/);
+    expect(sockets).toEqual([]);
+  });
+
+  it('keeps using the configured token for the Supervisor URL', async () => {
+    vi.useFakeTimers();
+    vi.stubEnv('SUPERVISOR_TOKEN', 'sv-token');
+    const { client, sockets } = make({ ...SV, token: 'own' });
+    const started = client.start();
+    sockets[0].open();
+    sockets[0].serverSays({ type: 'auth_required' });
+    expect(sockets[0].lastSent()).toEqual({ type: 'auth', access_token: 'own' });
+    sockets[0].serverSays({ type: 'auth_invalid', message: 'x' });
+    await expect(started).rejects.toBeInstanceOf(HaBluetoothPermanentError);
+    await client.stop();
+  });
+
+  it('keeps using the configured token for another URL, whatever the environment holds', async () => {
+    vi.useFakeTimers();
+    vi.stubEnv('SUPERVISOR_TOKEN', 'sv-token');
+    const { client, sockets } = make({ url: 'ws://ha.example:8123/api/websocket', token: 'own' });
+    const started = client.start();
+    sockets[0].open();
+    sockets[0].serverSays({ type: 'auth_required' });
+    expect(sockets[0].lastSent()).toEqual({ type: 'auth', access_token: 'own' });
+    sockets[0].serverSays({ type: 'auth_invalid', message: 'x' });
+    await expect(started).rejects.toBeInstanceOf(HaBluetoothPermanentError);
+    await client.stop();
   });
 });

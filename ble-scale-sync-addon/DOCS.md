@@ -28,7 +28,7 @@ With the `ha-bluetooth` transport, **Settings** > **Devices & services** > **Blu
 
 - `ha-bluetooth` needs no other option and no access token. An ESPHome node used this way is adopted in Home Assistant.
 - `esphome-proxy` needs **ESPHome proxy host** and, for a device with API encryption, **ESPHome API encryption key**. The node must not be adopted in Home Assistant.
-- `mqtt-proxy` uses the broker of the MQTT options (`shared`) or one inside this app (`embedded`, with its own port, username and password). Give the ESP32 the same broker address, device ID and topic prefix in its `config.json`.
+- `mqtt-proxy` uses the broker of the MQTT options (`shared`) or one inside this app (`embedded`, with its own port, username and password, and TLS from files in the add-on's config folder). Give the ESP32 the same broker address, device ID and topic prefix in its `config.json`.
 
 With any transport but `local`, the options that steer this host's adapter and the scan delays are not used, and the adapter reset at startup is skipped.
 
@@ -54,6 +54,8 @@ For several users, other exporters or transport settings the tab does not have, 
 
 When BLE Scale Sync cannot recover inside the running process, for example after repeated Bluetooth failures or when a Bluetooth proxy stays silent, it exits and the app starts it again, without the Supervisor's Watchdog switch. The log shows `BLE Scale Sync exited with code N after Ns; restart #M in Ns.` The wait starts at 5 seconds and doubles while BLE Scale Sync keeps exiting shortly after starting, up to 5 minutes; a run of 10 minutes resets it. The reason is in the lines above each restart.
 
+A single run (`runtime.continuous_mode: false` in a custom config) that ends with exit code 0 stops the add-on with `BLE Scale Sync finished (exit code 0); not restarting.` See [Restarts and stored data](https://blescalesync.dev/guide/home-assistant-addon#persistence).
+
 ## Errors at startup
 
 A transport that cannot run stops the app with `ERROR:` and the reason, followed by `Not falling back to the built-in Bluetooth adapter`. Fix the option it names, or set **Bluetooth transport** back to `local`:
@@ -63,12 +65,15 @@ A transport that cannot run stops the app with `ERROR:` and the reason, followed
 - `no MQTT broker is available`: start the Mosquitto broker app with **Auto-detect MQTT broker** on, set **MQTT broker URL**, or set **ESP32 proxy broker** to `embedded`.
 - `needs an mqtt_broker_url that starts with mqtt:// or mqtts://`: the ESP32 proxy cannot share a `ws://` broker; enter the `mqtt://` address or use `embedded`.
 - `needs mqtt_proxy_username and mqtt_proxy_password`: fill in both.
+- `does not name a readable file in the add-on config folder`: put the certificate and key in the add-on's folder under `addon_configs` and enter their file names, or turn **Embedded broker TLS** off.
+- `takes a file name in the add-on config folder, not a path`: enter the file name only.
 - `cannot contain + or #`: use the same plain device ID and topic prefix as the ESP32's `config.json`.
 - `the Supervisor gave this add-on no SUPERVISOR_TOKEN`: open an issue with the log.
 
 Other startup errors:
 
 - `custom_config is enabled but /share/ble-scale-sync/config.yaml does not exist`: create the file or turn off **Use custom config.yaml**.
+- `reads the Supervisor token through a ${...} reference`: delete the reference from your custom config. For `ha-bluetooth`, use `url: ws://supervisor/core/websocket` and no `token`.
 - `DBusError` with `AccessDenied` and `An AppArmor policy prevents this sender`: uninstall and reinstall the app so the Supervisor applies its manifest.
 
 ## More help

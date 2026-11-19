@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdtempSync, writeFileSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { hasOpenssl, makeBrokerCert } from '../helpers/broker-cert.js';
 
 /**
  * `validate` is a CLI with top-level side effects (parseArgs, process.exit), so
@@ -163,5 +164,61 @@ describe('validate prints a schema error once', () => {
 
     expect(status).toBe(1);
     expect(out.split('Configuration error in config.yaml').length - 1).toBe(1);
+  });
+}, 60_000);
+
+/**
+ * The TLS files of the embedded broker are read by `start`, which refuses to
+ * start on a bad one and never falls back to plain MQTT, so `validate` has to
+ * report the same problem.
+ */
+describe('validate checks the embedded broker TLS files', () => {
+  function configWithMqttProxy(handler: string, tls: { cert: string; key: string }): string {
+    const path = configWith(
+      ['    exporters:', '      - type: file', "        file_path: './out.csv'"].join('\n'),
+    );
+    writeFileSync(
+      path,
+      [
+        'ble:',
+        `  handler: ${handler}`,
+        '  mqtt_proxy:',
+        '    username: u',
+        '    password: p',
+        `    embedded_broker_tls_cert: ${tls.cert}`,
+        `    embedded_broker_tls_key: ${tls.key}`,
+        readFileSync(path, 'utf8'),
+      ].join('\n'),
+    );
+    return path;
+  }
+
+  const missing = { cert: '/nonexistent/broker.pem', key: '/nonexistent/broker.key' };
+
+  it('rejects a missing certificate when the mqtt-proxy handler starts the broker', () => {
+    const { status, out } = runValidate(configWithMqttProxy('mqtt-proxy', missing));
+
+    expect(out).not.toContain('Config valid');
+    expect(out).toContain('Config invalid');
+    expect(out).toContain('TLS certificate file not found: /nonexistent/broker.pem');
+    expect(status).toBe(1);
+  });
+
+  it('ignores the TLS files of a config that does not use the mqtt-proxy handler', () => {
+    const { status, out } = runValidate(configWithMqttProxy('auto', missing));
+
+    expect(out).toContain('Config valid');
+    expect(status).toBe(0);
+  });
+
+  it.skipIf(!hasOpenssl())('accepts a certificate and key that match', () => {
+    const certDir = mkdtempSync(join(tmpdir(), 'bss-validate-cert-'));
+    dirs.push(certDir);
+    const { cert, key } = makeBrokerCert(certDir);
+
+    const { status, out } = runValidate(configWithMqttProxy('mqtt-proxy', { cert, key }));
+
+    expect(out).toContain('Config valid');
+    expect(status).toBe(0);
   });
 }, 60_000);

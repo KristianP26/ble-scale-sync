@@ -77,6 +77,7 @@ describe('Exporter healthchecks', () => {
       expect(result.success).toBe(true);
       expect(mockFetch).toHaveBeenCalledWith('https://example.com/hook', {
         method: 'HEAD',
+        redirect: 'manual',
         signal: expect.any(AbortSignal),
       });
     });
@@ -116,6 +117,7 @@ describe('Exporter healthchecks', () => {
       // that v3 (which answers 401 without it) reports healthy too.
       expect(mockFetch).toHaveBeenCalledWith('http://localhost:8086/health', {
         headers: { Authorization: 'Token my-token' },
+        redirect: 'manual',
         signal: expect.any(AbortSignal),
       });
     });
@@ -152,6 +154,7 @@ describe('Exporter healthchecks', () => {
       const result = await exporter.healthcheck();
       expect(result.success).toBe(true);
       expect(mockFetch).toHaveBeenCalledWith('https://ntfy.sh/v1/health', {
+        redirect: 'manual',
         signal: expect.any(AbortSignal),
       });
     });
@@ -162,6 +165,7 @@ describe('Exporter healthchecks', () => {
       const result = await exporter.healthcheck();
       expect(result.success).toBe(true);
       expect(mockFetch).toHaveBeenCalledWith('https://ntfy.sh/v1/health', {
+        redirect: 'manual',
         signal: expect.any(AbortSignal),
       });
     });

@@ -11,6 +11,7 @@ import {
 import { parseDocument } from 'yaml';
 import { createLogger } from '../logger.js';
 import { errMsg } from '../utils/error.js';
+import { isPlausibleWeight } from '../interfaces/reading-weight.js';
 
 const log = createLogger('ConfigWrite');
 
@@ -191,6 +192,12 @@ export function _resetSuppressWindow(): void {
  * and write back atomically. Preserves comments via `parseDocument()`.
  */
 export function writeLastKnownWeight(configPath: string, userSlug: string, weight: number): void {
+  if (!isPlausibleWeight(weight)) {
+    log.warn(
+      `Not writing last_known_weight ${String(weight)} for ${userSlug}: not a plausible body weight.`,
+    );
+    return;
+  }
   const raw = readFileSync(configPath, 'utf8');
   const doc = parseDocument(raw);
 
@@ -244,6 +251,12 @@ export function updateLastKnownWeight(
   weight: number,
   currentWeight: number | null,
 ): void {
+  if (!isPlausibleWeight(weight)) {
+    log.warn(
+      `Not writing last_known_weight ${String(weight)} for ${userSlug}: not a plausible body weight.`,
+    );
+    return;
+  }
   // Skip if change is insignificant (< 0.5 kg)
   if (currentWeight !== null && Math.abs(weight - currentWeight) < 0.5) {
     log.debug(`Skipping weight update for ${userSlug}: change < 0.5 kg`);

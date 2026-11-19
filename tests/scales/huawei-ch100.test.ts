@@ -23,6 +23,7 @@ import { resolveAdapter } from '../../src/scales/resolve.js';
 import { selectSessionAdapter } from '../../src/ble/session/runner.js';
 import { uuid16 } from '../../src/scales/body-comp-helpers.js';
 import { bleLog } from '../../src/ble/types.js';
+import { CH100_PADDED_NAME } from '../helpers/huawei-ch100.js';
 import { replaySession } from '../helpers/replay/session.js';
 import type { Trace, TraceStep } from '../helpers/replay/trace.js';
 import {
@@ -238,6 +239,26 @@ describe('Huawei CH100/AH100 matching', () => {
   it('a named CH100 with 0x181B resolves here, not to Mi Scale 2', () => {
     const info = { localName: 'CH100', serviceUuids: [uuid16(0x181b)] };
     expect(resolveAdapter(info, adapters)?.name).toBe('Huawei CH100/AH100');
+  });
+
+  // #503: the name field of a CH100 came as 'CH100' + 15 spaces, which sent it
+  // to Standard GATT while the same unit's other advertisements resolved here.
+  it.each([
+    ['padded with spaces', CH100_PADDED_NAME],
+    ['padded with NUL', 'CH100\0\0\0\0'],
+    ['padded with mixed whitespace', 'AH100 \0\t '],
+  ])('a name %s still resolves here, with and without 0x181B', (_label, localName) => {
+    expect(resolveAdapter({ localName, serviceUuids: [] }, adapters)?.name).toBe(
+      'Huawei CH100/AH100',
+    );
+    expect(resolveAdapter({ localName, serviceUuids: [uuid16(0x181b)] }, adapters)?.name).toBe(
+      'Huawei CH100/AH100',
+    );
+  });
+
+  it('does not claim a name with leading padding, or a longer name that is padded', () => {
+    expect(a.matches({ localName: ' CH100', serviceUuids: [] })).toBe(false);
+    expect(a.matches({ localName: 'CH100S' + ' '.repeat(14), serviceUuids: [] })).toBe(false);
   });
 
   it('the mqtt-proxy notify-char fallback does not hand a nameless BF950 (FAA2) to it', () => {

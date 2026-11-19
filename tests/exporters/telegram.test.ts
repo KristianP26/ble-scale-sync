@@ -243,7 +243,7 @@ describe('TelegramExporter', () => {
       expect(result.success).toBe(true);
       expect(mockFetch).toHaveBeenCalledWith(
         'https://api.telegram.org/bot123456:ABC-DEF/getChat?chat_id=987654321',
-        { signal: expect.any(AbortSignal) },
+        { redirect: 'manual', signal: expect.any(AbortSignal) },
       );
     });
 

@@ -146,8 +146,9 @@ configuration:
   mqtt_proxy_embedded_broker_port:
     name: Embedded broker port
     description: >-
-      Embedded broker only. If Mosquitto already uses 1883, pick another port
-      and set the same mqtt_port in the ESP32's config.json.
+      Embedded broker only. The Mosquitto add-on holds 1883, 1884, 8883 and
+      8884 on the host, so pick another port such as 18883 and set the same
+      mqtt_port in the ESP32's config.json.
   mqtt_proxy_username:
     name: Embedded broker username
     description: >-
@@ -156,6 +157,22 @@ configuration:
     name: Embedded broker password
     description: >-
       Embedded broker only, and required there. The ESP32 logs in with it.
+  mqtt_proxy_embedded_tls:
+    name: Embedded broker TLS
+    description: >-
+      Embedded broker only. Serves TLS with the files named below, and the ESP32
+      then needs mqtt_tls in its config.json.
+  mqtt_proxy_embedded_tls_certfile:
+    name: Embedded broker certificate file
+    description: >-
+      Name of a PEM file in the add-on's own config folder (addon_configs). For
+      the ESP32 put a certificate that is valid from 1960 (recipe in the ESP32
+      proxy guide) there.
+  mqtt_proxy_embedded_tls_keyfile:
+    name: Embedded broker key file
+    description: >-
+      Name of the matching PEM private key in the same folder, without a
+      passphrase.
   proxy_liveness_timeout_min:
     name: Proxy silence before restart (minutes)
     description: >-
@@ -261,6 +278,11 @@ configuration:
     description: >-
       Send only the weight to Garmin Connect. Other exporters still receive
       the full body composition.
+  garmin_skip_metabolic_age:
+    name: Skip metabolic age
+    description: >-
+      Upload every metric except metabolic age. Garmin's own Fitness Age is
+      not affected, and other exporters still receive the metabolic age.
   scan_cooldown:
     name: Scan cooldown (seconds)
     description: >-
