@@ -276,6 +276,8 @@ A GATT scale is connected by the ESP32 itself the moment it sees a known scale's
 
 The ESP32 forwards the notifications of each characteristic in the order they arrive. If publishing to MQTT stalls, it holds up to 16 notifications per characteristic, then drops the oldest and prints `Notify ...: queue full, ...` on the serial console.
 
+Commands from the server wait in a queue of at most 32 commands and 4 KB of payload. A command beyond that is dropped, and the serial console prints `Command queue limit reached ...` and, once the queue is empty again, `Command queue drained, ...`.
+
 The firmware ends a GATT session and resumes scanning when the link is down, when the server has not engaged within 20 s, or after 3 minutes. It prints `GATT session guard: ...` on the serial console.
 
 The ESP32 ignores a retained message on every topic except `config`, so a retained command is not replayed after each reconnect. A message it cannot handle is dropped with `MQTT message dropped: ...` on the serial console, and the connection to the broker stays up.

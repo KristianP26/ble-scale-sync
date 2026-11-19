@@ -127,8 +127,20 @@ _ending_session = False
 # Set True after on_connect finishes re-subscribing (avoids race with isconnected)
 _subs_ready = False
 
-# Pending commands set by the sync callback, processed in the async main loop
+# Pending commands set by the sync callback, processed in the async main loop.
+# The loop takes one command at a time and one can hold it for seconds (a host
+# connect up to HOST_CONNECT_BUDGET_MS, a subscribe about 3 s, a GATT write or
+# read 1 s, a beep 3 s) while the broker keeps delivering. The largest burst a
+# real host is estimated to send is about 16 commands (3 subscribes, 8 handshake
+# writes, a disconnect, a beep, 2 display messages), so 32 is twice that. An
+# entry is estimated at 150 B plus its payload, on a heap of about 85 KB (board
+# without PSRAM); none of these numbers is measured on a board. The byte budget
+# stops a flood of large payloads from eating the heap.
 _pending = []
+MAX_PENDING_COMMANDS = 32
+MAX_PENDING_BYTES = 4096
+# Commands refused since main() last reported: on_message counts, main() prints.
+_pending_dropped = 0
 
 # Scale MAC detection for instant beep
 _scale_macs = set()
@@ -173,6 +185,31 @@ mqtt_config["will"] = (topic("status"), "offline", True, 1)
 mqtt_config["keepalive"] = 60
 mqtt_config["clean"] = True
 mqtt_config["queue_len"] = 0  # callback mode
+
+
+def _pending_bytes():
+    n = 0
+    for _t, m in _pending:
+        n += len(m)
+    return n
+
+
+def _queue_command(t, msg):
+    """Queue one host command, or refuse and count it when the queue is full.
+
+    The newest command is the one refused. What is queued keeps its order, so a
+    handshake is cut at its end and never in the middle, and the marker that
+    reports a lost link (appended to _pending directly, not through here) is
+    never displaced. main() reports the count.
+    """
+    global _pending_dropped
+    if len(_pending) < MAX_PENDING_COMMANDS and _pending_bytes() + len(msg) <= MAX_PENDING_BYTES:
+        _pending.append((t, msg))
+        return True
+    if not _pending_dropped:
+        print(f"Command queue limit reached ({len(_pending)} commands, {_pending_bytes()} bytes held), dropping new commands")
+    _pending_dropped += 1
+    return False
 
 
 def on_message(topic_bytes, msg, retained):
@@ -223,11 +260,17 @@ def _handle_message(topic_bytes, msg, retained):
     # repeats on every reconnect, so it would run again after each reboot.
     if retained:
         return
-    # Any host command counts as engagement with the current GATT session (#296).
+    # Our own read answer, echoed back by the read/# subscription; the loop
+    # skips it anyway, so it need not take a slot.
+    if t.startswith(topic("read/")) and t.endswith("/response"):
+        return
+    if not _queue_command(t, msg):
+        return
+    # Any accepted host command counts as engagement with the current GATT
+    # session (#296); a refused one is not the host talking.
     _last_host_activity = time.ticks_ms()
     if _gatt_session_armed:
         _host_engaged = True
-    _pending.append((t, msg))
 
 
 async def on_connect(client_ref):
@@ -1041,6 +1084,7 @@ async def _connect_with_retry():
 # ─── Main loop ────────────────────────────────────────────────────────────────
 
 async def main():
+    global _pending_dropped
     print(f"Board: {board.BOARD_NAME}")
     if board.HAS_DISPLAY:
         ui.init()
@@ -1110,6 +1154,13 @@ async def main():
                 sys.print_exception(e)
                 op, address, uuid = _error_context(t, msg)
                 await publish_error(describe_exc(e), op, address, uuid)
+
+        # Reported once the queue has emptied, so a flood prints two lines, not
+        # one per refused command. Nothing is published: an error message per
+        # refused command would only add to the flood.
+        if _pending_dropped:
+            dropped, _pending_dropped = _pending_dropped, 0
+            print(f"Command queue drained, {dropped} command(s) were dropped")
 
         await asyncio.sleep_ms(50)
         gc_counter += 1
