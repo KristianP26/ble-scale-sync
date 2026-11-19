@@ -614,6 +614,66 @@ describe('startEmbeddedBroker password check', () => {
   });
 });
 
+/**
+ * Whether the broker drops a client that publishes to / subscribes to `topic`:
+ * aedes closes the connection of a client the ACL turns down.
+ */
+async function aclRefuses(
+  url: string,
+  action: 'publish' | 'subscribe',
+  topic: string,
+): Promise<boolean> {
+  const client = await connectAsync(url, {
+    clientId: `acl-${action}-${Math.random().toString(16).slice(2)}`,
+    reconnectPeriod: 0,
+  });
+  try {
+    const closed = closesWithin(client, 400);
+    const call =
+      action === 'publish' ? client.publishAsync(topic, 'x') : client.subscribeAsync(topic);
+    void call.catch(() => {});
+    return await closed;
+  } finally {
+    await client.endAsync(true);
+  }
+}
+
+describe('startEmbeddedBroker topic ACL', () => {
+  // `topic_prefix: ''` is accepted by the schema. The ACL used to be installed
+  // only for a truthy prefix, so an empty one left every topic open.
+  it('keeps the ACL on for an empty topic_prefix', async () => {
+    const broker = await startEmbeddedBroker({ port: 0, bindHost: '127.0.0.1', topicPrefix: '' });
+    try {
+      expect(await aclRefuses(broker.url, 'publish', 'rogue')).toBe(true);
+      expect(await aclRefuses(broker.url, 'publish', 'rogue/topic')).toBe(true);
+      expect(await aclRefuses(broker.url, 'publish', '/esp/status')).toBe(false);
+      expect(await aclRefuses(broker.url, 'subscribe', '#')).toBe(true);
+      expect(await aclRefuses(broker.url, 'subscribe', '+/x')).toBe(true);
+      expect(await aclRefuses(broker.url, 'subscribe', '/esp/#')).toBe(false);
+    } finally {
+      await broker.close();
+    }
+  });
+
+  it('keeps the exact prefix boundary for a non-empty topic_prefix', async () => {
+    const broker = await startEmbeddedBroker({
+      port: 0,
+      bindHost: '127.0.0.1',
+      topicPrefix: 'ble-proxy',
+    });
+    try {
+      expect(await aclRefuses(broker.url, 'publish', 'ble-proxy')).toBe(false);
+      expect(await aclRefuses(broker.url, 'publish', 'ble-proxy/esp/status')).toBe(false);
+      expect(await aclRefuses(broker.url, 'subscribe', 'ble-proxy/+/status')).toBe(false);
+      expect(await aclRefuses(broker.url, 'publish', 'ble-proxy2/x')).toBe(true);
+      expect(await aclRefuses(broker.url, 'publish', 'ble-proxy-x/y')).toBe(true);
+      expect(await aclRefuses(broker.url, 'subscribe', '+/x')).toBe(true);
+    } finally {
+      await broker.close();
+    }
+  });
+});
+
 describe('startEmbeddedBroker keep alive limit', () => {
   const connectWith = (url: string, keepalive: number, clientId: string): Promise<MqttClient> =>
     connectAsync(url, { clientId, keepalive, reconnectPeriod: 0, connectTimeout: 2000 });

@@ -195,11 +195,16 @@ export async function startEmbeddedBroker(
   // general pub/sub bus. Internal broker-originated publishes (client === null)
   // are always allowed so $SYS stats and similar housekeeping still work.
   const topicPrefix = opts.topicPrefix;
-  if (topicPrefix) {
+  // An empty prefix is a prefix too (the schema accepts `topic_prefix: ''`):
+  // only topics that start with '/' are allowed then. Testing truthiness here
+  // switched the whole ACL off for it.
+  if (topicPrefix !== undefined) {
     const isAllowed = (topicOrFilter: string, isFilter: boolean): boolean => {
       // For subscribe filters, strip trailing wildcards to get the literal portion.
       const literal = isFilter ? literalPrefix(topicOrFilter) : topicOrFilter;
-      return literal === topicPrefix || literal.startsWith(`${topicPrefix}/`);
+      return (
+        (topicPrefix !== '' && literal === topicPrefix) || literal.startsWith(`${topicPrefix}/`)
+      );
     };
 
     aedes.authorizePublish = (client, packet, callback) => {
@@ -333,7 +338,7 @@ export async function startEmbeddedBroker(
   log.info(
     `Embedded MQTT broker listening on ${bindHost}:${actualPort}` +
       (authEnabled ? ' (authentication enabled)' : '') +
-      (topicPrefix ? ` [ACL: ${topicPrefix}/*]` : ''),
+      (topicPrefix !== undefined ? ` [ACL: ${topicPrefix}/*]` : ''),
   );
 
   let closed = false;
