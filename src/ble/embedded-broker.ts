@@ -16,6 +16,13 @@ const warnThrottled = (key: string, text: string): void => warnThrottledTo(key, 
 const AUTH_BAD_USER_PASS = 4;
 
 /**
+ * Return code aedes puts on the CONNACK, and on the error it emits as
+ * `connectionError`, when the keep alive is 0 or over `keepaliveLimit`. MQTT
+ * 3.1.1 does not define it, so mqtt.js reports "Connection refused: undefined".
+ */
+const CONNACK_KEEPALIVE_REFUSED = 6;
+
+/**
  * What the broker bounds on its own, because aedes does not (ADR D112). Fixed
  * constants, not config keys: the shipped clients stay far below them (a scan
  * result of 500 devices is under 600 KiB). `EmbeddedBrokerOptions.limits`
@@ -34,6 +41,12 @@ export interface EmbeddedBrokerLimits {
    * ESP32 (15 s is a judgement call, not measured on hardware).
    */
   connectTimeoutMs: number;
+  /**
+   * Largest CONNECT keep alive in seconds; 0 (no keep alive) is refused too, so
+   * a half-open socket cannot hold a slot for ever. The ESP32 firmware and the
+   * app's own clients use 60.
+   */
+  maxKeepaliveSec: number;
 }
 
 export const EMBEDDED_BROKER_LIMITS: Readonly<EmbeddedBrokerLimits> = {
@@ -41,6 +54,7 @@ export const EMBEDDED_BROKER_LIMITS: Readonly<EmbeddedBrokerLimits> = {
   maxPacketBytes: 1_048_576,
   maxConnections: 32,
   connectTimeoutMs: 15_000,
+  maxKeepaliveSec: 300,
 };
 
 export interface EmbeddedBrokerOptions {
@@ -136,6 +150,7 @@ export async function startEmbeddedBroker(
     id: opts.brokerId ?? 'ble-scale-sync-embedded',
     drainTimeout,
     connectTimeout: limits.connectTimeoutMs,
+    keepaliveLimit: limits.maxKeepaliveSec,
   });
 
   if (authEnabled) {
@@ -198,19 +213,31 @@ export async function startEmbeddedBroker(
   aedes.on('clientError', (client, err) => {
     log.debug(`Client error ${client.id}: ${errMsg(err)}`);
   });
-  // A socket that never completed CONNECT has no client id yet.
-  aedes.on('connectionError', (_client, err) => {
+  // A socket that never completed CONNECT has no client id yet. aedes destroys
+  // the socket before it emits, so `client.conn.remoteAddress` is already
+  // undefined here: the address is remembered when the socket is accepted.
+  aedes.on('connectionError', (client, err) => {
+    if ((err as Error & { errorCode?: number }).errorCode === CONNACK_KEEPALIVE_REFUSED) {
+      warnThrottled(
+        'broker-keepalive',
+        `Refused a connection from ${peerOf(client.conn)}: its keep alive is 0 or over ${limits.maxKeepaliveSec} seconds.`,
+      );
+      return;
+    }
     log.debug(`Connection error: ${errMsg(err)}`);
   });
 
   const sockets = new Set<Socket>();
+  const peers = new WeakMap<object, string>();
+  const peerOf = (conn: object): string => peers.get(conn) ?? 'unknown address';
   const server: Server = createServer((socket) => {
     sockets.add(socket);
     socket.on('close', () => sockets.delete(socket));
+    const peer = displayAddress(socket.remoteAddress);
+    peers.set(socket, peer);
     aedes.handle(socket);
     // After handle(): the guard is a 'data' tap and needs aedes' 'readable'
     // listener in place first (see mqtt-frame-guard.ts).
-    const peer = displayAddress(socket.remoteAddress);
     attachMqttFrameGuard(
       socket,
       { firstPacketMax: limits.maxFirstPacketBytes, packetMax: limits.maxPacketBytes },

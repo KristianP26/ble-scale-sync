@@ -13,6 +13,12 @@ import { connect as netConnect, type Socket } from 'node:net';
 import { connectAsync, type MqttClient } from 'mqtt';
 import { startEmbeddedBroker } from '../../src/ble/embedded-broker.js';
 import { _resetPeerInput } from '../../src/ble/peer-input.js';
+import {
+  createMqttClient,
+  getOrCreatePersistentClient,
+  _resetProxyState,
+} from '../../src/ble/handler-mqtt-proxy/client.js';
+import type { MqttProxyConfig } from '../../src/config/schema.js';
 
 let warnSpy: MockInstance<typeof console.warn>;
 
@@ -491,6 +497,74 @@ describe('startEmbeddedBroker connection limits', () => {
       }
       expect(warnSpy).not.toHaveBeenCalledWith(expect.stringContaining('Refused a connection'));
     } finally {
+      await broker.close();
+    }
+  });
+});
+
+describe('startEmbeddedBroker keep alive limit', () => {
+  const connectWith = (url: string, keepalive: number, clientId: string): Promise<MqttClient> =>
+    connectAsync(url, { clientId, keepalive, reconnectPeriod: 0, connectTimeout: 2000 });
+
+  it('connects clients with a keep alive of 60 and 300 seconds', async () => {
+    const broker = await startEmbeddedBroker({ port: 0, bindHost: '127.0.0.1' });
+    try {
+      for (const keepalive of [60, 300]) {
+        const client = await connectWith(broker.url, keepalive, `ka-${keepalive}`);
+        expect(client.connected).toBe(true);
+        await client.endAsync(true);
+      }
+    } finally {
+      await broker.close();
+    }
+  });
+
+  it('refuses a keep alive over 300 seconds and a keep alive of 0', async () => {
+    const broker = await startEmbeddedBroker({ port: 0, bindHost: '127.0.0.1' });
+    try {
+      await expect(connectWith(broker.url, 3600, 'ka-3600')).rejects.toThrow();
+      await expect(connectWith(broker.url, 301, 'ka-301')).rejects.toThrow();
+      await expect(connectWith(broker.url, 0, 'ka-0')).rejects.toThrow();
+    } finally {
+      await broker.close();
+    }
+  });
+
+  it('logs the refusal with the address, once a minute', async () => {
+    const broker = await startEmbeddedBroker({ port: 0, bindHost: '127.0.0.1' });
+    try {
+      await expect(connectWith(broker.url, 3600, 'ka-log-1')).rejects.toThrow();
+      await expect(connectWith(broker.url, 0, 'ka-log-2')).rejects.toThrow();
+      const lines = warnSpy.mock.calls.filter((c) => String(c[0]).includes('Refused a connection'));
+      expect(lines).toHaveLength(1);
+      expect(String(lines[0][0])).toContain(
+        'Refused a connection from 127.0.0.1: its keep alive is 0 or over 300 seconds.',
+      );
+    } finally {
+      await broker.close();
+    }
+  });
+
+  // The app's own clients keep the mqtt.js default keep alive (60 s), so the
+  // limit never locks the app out of its own broker.
+  it('connects the app own clients', async () => {
+    const broker = await startEmbeddedBroker({ port: 0, bindHost: '127.0.0.1' });
+    const config = {
+      device_id: 'esp32-ble-proxy',
+      topic_prefix: 'ble-proxy',
+      embedded_broker_port: 0,
+      embedded_broker_bind: '127.0.0.1',
+      broker_url: broker.url,
+    } as MqttProxyConfig;
+    try {
+      const ephemeral = await createMqttClient(config);
+      expect(ephemeral.connected).toBe(true);
+      await ephemeral.endAsync(true);
+      const persistent = await getOrCreatePersistentClient(config);
+      expect(persistent.connected).toBe(true);
+      await persistent.endAsync(true);
+    } finally {
+      _resetProxyState();
       await broker.close();
     }
   });
