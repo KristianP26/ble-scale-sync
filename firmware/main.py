@@ -828,6 +828,46 @@ async def scan_loop():
         await _batch_scan_loop()
 
 
+# ─── Display payloads ────────────────────────────────────────────────────────
+
+# Text and rows the 480 px screen can show. A longer name or list would only be
+# clipped, and an unbounded one is memory the LVGL label allocates on the heap.
+MAX_DISPLAY_TEXT = 40
+MAX_DISPLAY_ROWS = 16
+
+
+def _display_payload(msg):
+    d = json.loads(msg)
+    if not isinstance(d, dict):
+        raise ValueError("display payload must be a JSON object")
+    return d
+
+
+def _display_text(v):
+    # "#" opens a colour tag in the recolored result list.
+    return v.replace("#", "")[:MAX_DISPLAY_TEXT] if isinstance(v, str) else ""
+
+
+def _display_weight(v):
+    # bool is an int subclass.
+    # `not (0 <= v <= 1000)` and not two comparisons: a NaN fails both of those.
+    if type(v) is bool or not isinstance(v, (int, float)) or not (0 <= v <= 1000):
+        raise ValueError("weight must be a number from 0 to 1000")
+    return v
+
+
+def _display_export(e):
+    if not isinstance(e, dict):
+        return {"name": "", "ok": False}
+    return {"name": _display_text(e.get("name")), "ok": e.get("ok") is True}
+
+
+def _display_rows(rows, make):
+    if not isinstance(rows, list):
+        return []
+    return [make(r) for r in rows[:MAX_DISPLAY_ROWS]]
+
+
 # ─── Command handlers ─────────────────────────────────────────────────────────
 
 def make_publish_fn(u):
@@ -1132,22 +1172,22 @@ async def main():
                             beep()
                 elif t == topic("display/reading"):
                     if board.HAS_DISPLAY:
-                        d = json.loads(msg)
+                        d = _display_payload(msg)
                         ui.on_reading(
-                            d.get("slug", ""),
-                            d.get("name", ""),
-                            d.get("weight", 0),
+                            _display_text(d.get("slug", "")),
+                            _display_text(d.get("name", "")),
+                            _display_weight(d.get("weight", 0)),
                             d.get("impedance"),
-                            d.get("exporters", []),
+                            _display_rows(d.get("exporters", []), _display_text),
                         )
                 elif t == topic("display/result"):
                     if board.HAS_DISPLAY:
-                        d = json.loads(msg)
+                        d = _display_payload(msg)
                         ui.on_result(
-                            d.get("slug", ""),
-                            d.get("name", ""),
-                            d.get("weight", 0),
-                            d.get("exports", []),
+                            _display_text(d.get("slug", "")),
+                            _display_text(d.get("name", "")),
+                            _display_weight(d.get("weight", 0)),
+                            _display_rows(d.get("exports", []), _display_export),
                         )
                 elif t == topic("screenshot"):
                     if SCREENSHOT_ENABLED:

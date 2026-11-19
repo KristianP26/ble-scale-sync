@@ -298,8 +298,8 @@ All topics start with `{topic_prefix}/{device_id}/` (default `ble-proxy/esp32-bl
 | `scan/results` | ESP32 -> Server | JSON array of discovered devices |
 | `config` | Server -> ESP32 | Retained JSON: `scales` (MACs), `users`, `passive` (MACs read from advertisements, never connected), `autoConnect` (`false` disables the autonomous connect), `lazy_notify` (`true`: enable a notification only on `subscribe/{uuid}`) |
 | `beep` | Server -> ESP32 | Empty, or JSON with `freq` (20 to 4000 Hz), `duration` (1 to 500 ms), `repeat` (1 to 3); values outside are clamped |
-| `display/reading` | Server -> ESP32 | JSON with user slug, name, weight, impedance and exporter list |
-| `display/result` | Server -> ESP32 | JSON with user slug, name, weight and per-exporter results |
+| `display/reading` | Server -> ESP32 | JSON with user slug, name, weight (0 to 1000), impedance and exporter list. Text is cut to 40 characters without `#`, lists to 16 rows. A bad payload is answered on `error` |
+| `display/result` | Server -> ESP32 | JSON with user slug, name, weight and per-exporter results, cut like `display/reading` |
 | `connect` | Server -> ESP32 | JSON with `address` and `addr_type` |
 | `connected` | ESP32 -> Server | JSON with `address`, the discovered `chars` (uuid and properties), and `autonomous: true` when the ESP32 connected on its own |
 | `disconnect` | Server -> ESP32 | Any payload |
