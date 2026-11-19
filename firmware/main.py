@@ -176,7 +176,28 @@ mqtt_config["queue_len"] = 0  # callback mode
 
 
 def on_message(topic_bytes, msg, retained):
-    """Sync callback — queue the command for async processing."""
+    """Sync callback for every subscribed topic. Never raises.
+
+    mqtt_as calls this inside its reader task and catches only OSError around
+    it. Any other exception ends that task without a word, the link then looks
+    alive until the keepalive check reconnects it (derived from the mqtt_as
+    ping interval, not measured on a board), so one message that made this
+    raise cut the ESP32 off from the broker.
+    """
+    try:
+        _handle_message(topic_bytes, msg, retained)
+    except Exception as e:
+        # A MemoryError here usually means the heap is full of what was just
+        # refused: collect first, and let nothing in the report itself escape.
+        gc.collect()
+        try:
+            print(f"MQTT message dropped: {describe_exc(e)}")
+        except Exception:
+            pass
+
+
+def _handle_message(topic_bytes, msg, retained):
+    """Apply a config message, or queue any other one for the main loop."""
     global _scale_macs, _auto_connect, _lazy_notify, _last_host_activity, _host_engaged
     global _passive_macs
     t = topic_bytes.decode() if isinstance(topic_bytes, (bytes, bytearray)) else topic_bytes

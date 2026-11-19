@@ -278,6 +278,8 @@ The ESP32 forwards the notifications of each characteristic in the order they ar
 
 The firmware ends a GATT session and resumes scanning when the link is down, when the server has not engaged within 20 s, or after 3 minutes. It prints `GATT session guard: ...` on the serial console.
 
+A message the ESP32 cannot handle is dropped with `MQTT message dropped: ...` on the serial console, and the connection to the broker stays up.
+
 The server ignores retained copies of every topic except `status`, and drops messages that are not what the firmware sends: invalid JSON, the wrong shape, or an address that is not a MAC. It logs the first such message each minute.
 
 ## MQTT topics
