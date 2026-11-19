@@ -253,6 +253,17 @@ if [ "$CUSTOM_CONFIG" = "true" ]; then
     log "ERROR: Failed to copy custom config from $CUSTOM_PATH"
     exit 1
   fi
+  # The add-on guide used to show `token: '${SUPERVISOR_TOKEN}'` for ha-bluetooth.
+  # The app reads that token itself for the Supervisor URL, so drop exactly that
+  # line from the working copy (never from the file in /share) before the check
+  # below would refuse it. A token line next to any other URL stays and is refused.
+  _dsrc=0
+  node "$ADDON_CONFIG" drop-supervisor-token "$FRESH" 2>/dev/null || _dsrc=$?
+  case "$_dsrc" in
+    0) log "NOTE: ble.ha_bluetooth.token in $CUSTOM_PATH is the Supervisor token reference. The app reads that token itself for this URL, so the line is ignored. Delete it from the file." ;;
+    7 | 8) ;;
+    *) log "WARNING: could not check $CUSTOM_PATH for the old Supervisor token line; if the add-on stops on a token reference, delete the token line." ;;
+  esac
   # The app never expands ${SUPERVISOR_TOKEN} or ${HASSIO_TOKEN}: whatever such
   # a value feeds would receive this add-on's Supervisor access. Stop here
   # instead of starting an app that exits at once and letting the restart loop

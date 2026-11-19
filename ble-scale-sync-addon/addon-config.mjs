@@ -20,6 +20,14 @@
  *     starting an app that exits at once. Exit 0 none, 6 at least one, 7 the
  *     file is not valid YAML (the app reports that itself).
  *
+ *   drop-supervisor-token <file>
+ *     Delete `ble.ha_bluetooth.token` when it is exactly ${SUPERVISOR_TOKEN}
+ *     and `ble.ha_bluetooth.url` is the Supervisor's websocket proxy: the app
+ *     reads that token itself for this URL. The rest of the file keeps its
+ *     values, but not its exact text: line folding and a comment attached to
+ *     the key can change. Exit 0 the line was removed, 7 the file is not valid
+ *     YAML, 8 nothing to remove (the file is not written in either case).
+ *
  * The edits go through the `yaml` package the app itself reads config.yaml
  * with (YAML 1.2), loaded from the image's own node_modules. They used to run
  * through PyYAML, which is YAML 1.1: a load and dump of the whole document
@@ -106,6 +114,60 @@ function proxyLiveness(path, raw) {
   return 0;
 }
 
+/** Mirrors SUPERVISOR_WS_PATHS and isSupervisorUrl in src/ble/handler-ha-bluetooth/supervisor.ts. */
+const SUPERVISOR_WS_PATHS = ['/core/websocket', '/core/api/websocket'];
+
+function isSupervisorUrl(raw) {
+  try {
+    const u = new URL(raw);
+    return (
+      (u.protocol === 'ws:' || u.protocol === 'http:') &&
+      u.hostname === 'supervisor' &&
+      u.port === '' &&
+      SUPERVISOR_WS_PATHS.includes(u.pathname) &&
+      u.username === '' &&
+      u.password === '' &&
+      u.search === '' &&
+      u.hash === ''
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The one legacy shape that is dropped instead of refused: the Supervisor URL
+ * with the token line the add-on guide used to show.
+ */
+function dropSupervisorToken(path) {
+  const { doc } = load(path);
+  if (doc.errors.length > 0) return 7;
+  try {
+    doc.toJS();
+  } catch {
+    return 7;
+  }
+  const ble = isMap(doc.contents) ? doc.contents.get('ble', true) : undefined;
+  const ha = isMap(ble) ? ble.get('ha_bluetooth', true) : undefined;
+  if (!isMap(ha)) return 8;
+  const token = ha.get('token', true);
+  const url = ha.get('url', true);
+  if (!isScalar(token) || token.value !== '${SUPERVISOR_TOKEN}') return 8;
+  if (!isScalar(url) || typeof url.value !== 'string' || !isSupervisorUrl(url.value)) return 8;
+  ha.delete('token');
+  let text;
+  try {
+    // lineWidth 0: the default folds a scalar longer than 80 columns into a continuation.
+    text = doc.toString({ lineWidth: 0 });
+  } catch {
+    // An alias elsewhere in the file points at the deleted token: leave the file alone
+    // and let check-env-refs refuse it with its own message.
+    return 8;
+  }
+  writeFileSync(path, text);
+  return 0;
+}
+
 /** Mirrors BLOCKED_ENV_REFS and the reference syntax of src/config/env-refs.ts. */
 const BLOCKED_ENV_REFS = ['SUPERVISOR_TOKEN', 'HASSIO_TOKEN'];
 const ENV_REF_REGEX = /\$(\$?)\{([^}]+)}/g;
@@ -158,11 +220,14 @@ if (command === 'merge-weights' && args.length === 2) {
   code = proxyLiveness(args[0], args[1]);
 } else if (command === 'check-env-refs' && args.length === 1) {
   code = checkEnvRefs(args[0]);
+} else if (command === 'drop-supervisor-token' && args.length === 1) {
+  code = dropSupervisorToken(args[0]);
 } else {
   console.error(
     'Usage: addon-config.mjs merge-weights <fresh> <persistent>\n' +
       '       addon-config.mjs proxy-liveness <file> <minutes>\n' +
-      '       addon-config.mjs check-env-refs <file>',
+      '       addon-config.mjs check-env-refs <file>\n' +
+      '       addon-config.mjs drop-supervisor-token <file>',
   );
   code = 2;
 }

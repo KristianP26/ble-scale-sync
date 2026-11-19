@@ -16,6 +16,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { parse } from 'yaml';
 import { BLOCKED_ENV_REFS, resolveEnvReferences } from '../src/config/env-refs.js';
+import { isSupervisorUrl } from '../src/ble/handler-ha-bluetooth/supervisor.js';
 import { UserSchema } from '../src/config/schema.js';
 import { isValidScaleId } from '../src/ble/scale-id.js';
 
@@ -633,6 +634,148 @@ describe('addon-config.mjs check-env-refs', () => {
 
   it('is run by run.sh on the copy that becomes the config, before the app starts', () => {
     expect(customConfigBranch()).toMatch(/node "\$ADDON_CONFIG" check-env-refs "\$FRESH"/);
+  });
+});
+
+describe('addon-config.mjs drop-supervisor-token', () => {
+  const SUPERVISOR = 'ws://supervisor/core/websocket';
+
+  function legacy(token: string, url = SUPERVISOR): string {
+    return `ble:\n  handler: ha-bluetooth\n  ha_bluetooth:\n    url: ${url}\n    token: ${token}\n    source: AA:BB:CC:DD:EE:FF\n`;
+  }
+
+  function drop(fileContent: string): { status: number | null; after: string; err: string } {
+    return withTempDir((dir) => {
+      const file = join(dir, 'config.yaml');
+      writeFileSync(file, fileContent);
+      const res = spawnSync(process.execPath, [ADDON_CONFIG, 'drop-supervisor-token', file], {
+        encoding: 'utf8',
+      });
+      return { status: res.status, after: readFileSync(file, 'utf8'), err: res.stderr };
+    });
+  }
+
+  const WITHOUT_TOKEN = {
+    ble: {
+      handler: 'ha-bluetooth',
+      ha_bluetooth: { url: SUPERVISOR, source: 'AA:BB:CC:DD:EE:FF' },
+    },
+  };
+
+  it.each(["'${SUPERVISOR_TOKEN}'", '"${SUPERVISOR_TOKEN}"', '${SUPERVISOR_TOKEN}'])(
+    'removes the token line written as %s and keeps every other key',
+    (token) => {
+      const r = drop(legacy(token));
+      expect(r.status).toBe(0);
+      expect(r.err).toBe('');
+      expect(parse(r.after)).toEqual(WITHOUT_TOKEN);
+    },
+  );
+
+  it.each([
+    'ws://supervisor/core/websocket',
+    'ws://supervisor/core/api/websocket',
+    'http://supervisor/core/websocket',
+  ])('accepts the Supervisor URL %s', (url) => {
+    expect(drop(legacy("'${SUPERVISOR_TOKEN}'", url)).status).toBe(0);
+  });
+
+  it.each([
+    ['another URL', legacy("'${SUPERVISOR_TOKEN}'", 'ws://ha.example:8123/api/websocket')],
+    [
+      'a Supervisor look-alike host',
+      legacy("'${SUPERVISOR_TOKEN}'", 'ws://supervisor.evil/core/websocket'),
+    ],
+    ['another port', legacy("'${SUPERVISOR_TOKEN}'", 'ws://supervisor:8123/core/websocket')],
+    ['a token of your own', legacy("'${HA_TOKEN}'")],
+    ['a HASSIO_TOKEN reference', legacy("'${HASSIO_TOKEN}'")],
+    ['a lower-case reference', legacy("'${supervisor_token}'")],
+    ['a reference inside a longer value', legacy("'${SUPERVISOR_TOKEN}x'")],
+    ['a literal $${...}', legacy("'$${SUPERVISOR_TOKEN}'")],
+    ['an alias for the token', `x: &t '\${SUPERVISOR_TOKEN}'\n${legacy('*t')}`],
+    ['no ha_bluetooth block', 'ble:\n  handler: local\n'],
+    ['no token', "ble:\n  ha_bluetooth:\n    url: 'ws://supervisor/core/websocket'\n"],
+    ['ble that is not a map', 'ble: ha-bluetooth\n'],
+    ['an empty file', ''],
+  ])('leaves the file as it is for %s (exit 8)', (_name, file) => {
+    const r = drop(file);
+    expect(r.status).toBe(8);
+    expect(r.after).toBe(file);
+  });
+
+  it('leaves a file that is not valid YAML as it is (exit 7)', () => {
+    for (const file of ['ble: [unclosed\n', 'x: *nope\n', 'k: 1\nk: 2\n']) {
+      const r = drop(file);
+      expect(r, file).toMatchObject({ status: 7, after: file, err: '' });
+    }
+  });
+
+  it('does not change the type of any other value in the file', () => {
+    const block = '  ha_bluetooth:\n    url: ws://supervisor/core/websocket\n';
+    const withLine = TYPE_TRAPS.replace(
+      '  scale_mac: 12:34:56:12:34:56\n',
+      `  scale_mac: 12:34:56:12:34:56\n${block}    token: '\${SUPERVISOR_TOKEN}'\n`,
+    );
+    const r = drop(withLine);
+    expect(r.status).toBe(0);
+    expect(parse(r.after)).toEqual(
+      parse(
+        TYPE_TRAPS.replace(
+          '  scale_mac: 12:34:56:12:34:56\n',
+          `  scale_mac: 12:34:56:12:34:56\n${block}`,
+        ),
+      ),
+    );
+  });
+
+  it('keeps a long password on one line', () => {
+    const password = 'p'.repeat(120);
+    const r = drop(
+      `${legacy("'${SUPERVISOR_TOKEN}'")}global_exporters:\n  - type: mqtt\n    password: "${password}"\n`,
+    );
+    expect(r.status).toBe(0);
+    expect(r.after).toContain(`password: ${JSON.stringify(password)}`);
+  });
+
+  it('is run by run.sh before the check that refuses the reference', () => {
+    const branch = customConfigBranch();
+    const dropAt = branch.indexOf('node "$ADDON_CONFIG" drop-supervisor-token "$FRESH"');
+    const checkAt = branch.indexOf('node "$ADDON_CONFIG" check-env-refs "$FRESH"');
+    expect(dropAt).toBeGreaterThan(-1);
+    expect(checkAt).toBeGreaterThan(dropAt);
+  });
+
+  it('judges a URL like the app does', () => {
+    // Guards drift of the URL test copied into the .mjs.
+    const urls = [
+      'ws://supervisor/core/websocket',
+      'ws://supervisor/core/api/websocket',
+      'http://supervisor/core/websocket',
+      'https://supervisor/core/websocket',
+      'wss://supervisor/core/websocket',
+      'ws://supervisor/core/websocket/',
+      'ws://supervisor/core',
+      'ws://supervisor/homeassistant/websocket',
+      'ws://supervisor:8123/core/websocket',
+      'ws://supervisor./core/websocket',
+      'ws://supervisor.evil.example/core/websocket',
+      'ws://u:p@supervisor/core/websocket',
+      'ws://supervisor/core/websocket?x=1',
+      'ws://supervisor/core/websocket#x',
+      'ws://ha.local:8123/api/websocket',
+      'garbage',
+    ];
+    for (const url of urls) {
+      const dropped = drop(legacy("'${SUPERVISOR_TOKEN}'", JSON.stringify(url))).status === 0;
+      expect(dropped, url).toBe(isSupervisorUrl(url));
+    }
+  }, 30_000);
+
+  it('leaves a file alone when an alias still points at the token line', () => {
+    const file = `${legacy("&t '${SUPERVISOR_TOKEN}'")}other: *t\n`;
+    const res = drop(file);
+    expect(res.status).toBe(8);
+    expect(res.after).toBe(file);
   });
 });
 

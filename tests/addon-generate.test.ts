@@ -1057,7 +1057,7 @@ describe.skipIf(!HARNESS)('run.sh custom_config and the transport options', () =
   function run(
     options: Record<string, unknown>,
     file = 'version: 1\n',
-  ): { status: number | null; stdout: string; freshLeft: boolean } {
+  ): { status: number | null; stdout: string; freshLeft: boolean; fresh: string } {
     const raw = mkdtempSync(join(tmpdir(), 'addon-custom-'));
     const dir = raw.replace(/\\/g, '/');
     try {
@@ -1081,6 +1081,7 @@ describe.skipIf(!HARNESS)('run.sh custom_config and the transport options', () =
         status: res.status,
         stdout: res.stdout.replaceAll(dir, '<tmp>'),
         freshLeft: existsSync(`${dir}/fresh.yaml`),
+        fresh: existsSync(`${dir}/fresh.yaml`) ? readFileSync(`${dir}/fresh.yaml`, 'utf8') : '',
       };
     } finally {
       rmSync(raw, { recursive: true, force: true });
@@ -1144,6 +1145,46 @@ describe.skipIf(!HARNESS)('run.sh custom_config and the transport options', () =
       const r = run(CUSTOM, 'users: [unclosed\n');
       expect(r.status).toBe(0);
       expect(r.stdout).not.toContain('could not check');
+    });
+  });
+
+  describe('the old ha-bluetooth snippet of the add-on guide', () => {
+    const LEGACY = [
+      'ble:',
+      '  handler: ha-bluetooth',
+      '  ha_bluetooth:',
+      '    url: ws://supervisor/core/websocket',
+      "    token: '${SUPERVISOR_TOKEN}'",
+      '    source: AA:BB:CC:DD:EE:FF',
+      '',
+    ].join('\n');
+
+    it('starts, says the line is ignored and leaves it out of the working copy', () => {
+      const r = run(CUSTOM, LEGACY);
+      expect(r.status).toBe(0);
+      expect(r.stdout).toContain(
+        'NOTE: ble.ha_bluetooth.token in <tmp>/custom.yaml is the Supervisor token reference.',
+      );
+      expect(r.stdout).not.toContain('could not check');
+      expect(r.fresh).not.toContain('SUPERVISOR_TOKEN');
+      expect(parse(r.fresh)).toEqual({
+        ble: {
+          handler: 'ha-bluetooth',
+          ha_bluetooth: { url: 'ws://supervisor/core/websocket', source: 'AA:BB:CC:DD:EE:FF' },
+        },
+      });
+    });
+
+    it('is refused when the URL is not the Supervisor one', () => {
+      const r = run(CUSTOM, LEGACY.replace('ws://supervisor/core/websocket', 'ws://ha.example/ws'));
+      expect(r.status).toBe(1);
+      expect(r.stdout).toContain('at: ble.ha_bluetooth.token');
+      expect(r.stdout).not.toContain('NOTE: ble.ha_bluetooth.token');
+    });
+
+    it('says nothing for a file without the line', () => {
+      const r = run(CUSTOM, 'version: 1\n');
+      expect(r.stdout).not.toContain('NOTE: ble.ha_bluetooth.token');
     });
   });
 
