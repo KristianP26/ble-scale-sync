@@ -14,7 +14,10 @@ import { resolve } from 'node:path';
  *
  * Only the root lockfile: worker/ has its own.
  */
-const FLOORS: Record<string, string> = { ws: '8.21.0', tar: '7.5.19' };
+const FLOORS: Record<string, string> = { ws: '8.21.0', tar: '7.5.19', zod: '4.6.6' };
+
+/** Packages the project depends on directly: the range in package.json is the floor. */
+const DIRECT: Record<string, string> = { zod: '^4.6.7' };
 
 interface Lock {
   packages: Record<string, { version?: string }>;
@@ -22,6 +25,7 @@ interface Lock {
 
 const lock = JSON.parse(readFileSync(resolve('package-lock.json'), 'utf8')) as Lock;
 const pkg = JSON.parse(readFileSync(resolve('package.json'), 'utf8')) as {
+  dependencies?: Record<string, string>;
   overrides?: Record<string, string>;
 };
 
@@ -61,8 +65,19 @@ describe('dependency floors', () => {
       }
     });
 
+    if (name in DIRECT) continue;
     it(`package.json keeps ${name} above ${floor} for a regenerated lockfile`, () => {
       expect(pkg.overrides?.[name]).toBe(`^${floor}`);
+    });
+  }
+
+  // `npm i -g` and `npx` resolve by this range, not by the lockfile. A newer range
+  // (a Dependabot bump) is fine; only a range that allows the old copy again is not.
+  for (const [name, range] of Object.entries(DIRECT)) {
+    it(`package.json asks for ${name} ${range} or newer`, () => {
+      const asked = pkg.dependencies?.[name] ?? '';
+      expect(asked, `${name} has no range in package.json`).toMatch(/^[\^~]?\d+\.\d+\.\d+$/);
+      expect(atLeast(asked.replace(/^[\^~]/, ''), range.replace(/^[\^~]/, '')), asked).toBe(true);
     });
   }
 });
