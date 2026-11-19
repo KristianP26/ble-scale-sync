@@ -31,6 +31,14 @@
         {
           "type": "generic",
           "path": "ble-scale-sync-addon/build.yaml"
+        },
+        {
+          "type": "generic",
+          "path": "docker-compose.example.yml"
+        },
+        {
+          "type": "generic",
+          "path": "docker-compose.mqtt-proxy.yml"
         }
       ]
     }

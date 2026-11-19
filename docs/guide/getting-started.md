@@ -89,7 +89,7 @@ Because `config.yaml` is mounted as a single file, the files the app keeps next 
 
 For Docker Compose instead:
 
-1. Copy `docker-compose.example.yml` from the repository to `docker-compose.yml` in this directory.
+1. Copy `docker-compose.example.yml` from the repository to `docker-compose.yml` in this directory. It names the release it was published with; see [Pinning a version](/guide/auto-update#pinning-a-version) to update it.
 2. In a `.env` next to it, set `BLUETOOTH_GID=` to the output of `getent group bluetooth | cut -d: -f3`.
 3. Replace the volume `garmin-tokens:/home/node/.garmin_tokens` with `./garmin-tokens:/app/garmin-tokens`, add `./strava-tokens:/app/strava-tokens`, and set `TZ` to your time zone.
 4. Run `docker compose up -d`.
