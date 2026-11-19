@@ -26,6 +26,7 @@ if board.HAS_DISPLAY:
 # strings (an open network); the rest must be non-empty.
 REQUIRED_CONFIG_KEYS = ("wifi_ssid", "wifi_password", "mqtt_broker", "mqtt_port", "device_id", "topic_prefix")
 _NON_EMPTY_CONFIG_KEYS = ("mqtt_broker", "device_id", "topic_prefix")
+_BOOL_CONFIG_KEYS = ("screenshot",)
 
 
 def config_problems(c):
@@ -46,6 +47,10 @@ def config_problems(c):
     # bool is an int subclass, so it is excluded explicitly.
     if "mqtt_port" not in missing and (type(port) is not int or not 0 < port < 65536):
         problems.append("mqtt_port must be a number from 1 to 65535, without quotes")
+    # A quoted "true" would otherwise read as "off" and nobody would know why.
+    for k in _BOOL_CONFIG_KEYS:
+        if c.get(k) is not None and type(c[k]) is not bool:
+            problems.append(f"{k} must be true or false, without quotes")
     return problems
 
 
@@ -71,6 +76,11 @@ def load_config(path="config.json"):
 
 
 cfg = load_config()
+
+# A screenshot dumps what the panel shows (user names, weights) and holds the
+# main loop for seconds, so it is answered only with "screenshot": true in
+# config.json. A board without a display never subscribes to it.
+SCREENSHOT_ENABLED = bool(board.HAS_DISPLAY) and cfg.get("screenshot") is True
 
 PREFIX = cfg["topic_prefix"]
 DEVICE_ID = cfg["device_id"]
@@ -264,6 +274,9 @@ def _handle_message(topic_bytes, msg, retained):
     # skips it anyway, so it need not take a slot.
     if t.startswith(topic("read/")) and t.endswith("/response"):
         return
+    # Not subscribed when off, so this only catches a message that arrives anyway.
+    if t == topic("screenshot") and not SCREENSHOT_ENABLED:
+        return
     if not _queue_command(t, msg):
         return
     # Any accepted host command counts as engagement with the current GATT
@@ -284,6 +297,7 @@ async def on_connect(client_ref):
     if board.HAS_DISPLAY:
         await client_ref.subscribe(topic("display/reading"), 0)
         await client_ref.subscribe(topic("display/result"), 0)
+    if SCREENSHOT_ENABLED:
         await client_ref.subscribe(topic("screenshot"), 0)
     # Re-subscribe write/read wildcards if a BLE device is connected
     if _char_subscribed:
@@ -1136,7 +1150,7 @@ async def main():
                             d.get("exports", []),
                         )
                 elif t == topic("screenshot"):
-                    if board.HAS_DISPLAY:
+                    if SCREENSHOT_ENABLED:
                         await handle_screenshot()
                 elif t.startswith(topic("subscribe/")):
                     uuid_str = t[len(topic("subscribe/")):]

@@ -10,9 +10,10 @@ Run: python -m unittest discover -s firmware/tests
 """
 
 import json
+import os
 import unittest
 
-from _main_loader import VALID_CONFIG, load_main
+from _main_loader import FIRMWARE_DIR, VALID_CONFIG, load_main
 
 
 def _without(key):
@@ -72,6 +73,27 @@ class ConfigValidationTest(unittest.TestCase):
     def test_empty_wifi_password_is_allowed(self):
         # An open network has no password.
         load_main(_with(wifi_password=""))
+
+    def test_quoted_screenshot_flag_is_refused(self):
+        # "true" in quotes would silently read as off.
+        for value in ("true", "false", 1, 0, []):
+            with self.subTest(value=value):
+                with self.assertRaises(ValueError) as ctx:
+                    load_main(_with(screenshot=value))
+                self.assertIn("screenshot", str(ctx.exception))
+                self.assertIn("true or false", str(ctx.exception))
+
+    def test_screenshot_flag_may_be_a_boolean_or_null(self):
+        for value in (True, False, None):
+            with self.subTest(value=value):
+                load_main(_with(screenshot=value))
+
+    def test_the_shipped_example_is_a_valid_config(self):
+        with open(os.path.join(FIRMWARE_DIR, "config.json.example")) as f:
+            example = json.load(f)
+        main = load_main(VALID_CONFIG)
+        self.assertEqual(main.config_problems(example), [])
+        self.assertIs(example["screenshot"], False)
 
     def test_missing_file_says_so(self):
         with self.assertRaises(OSError) as ctx:

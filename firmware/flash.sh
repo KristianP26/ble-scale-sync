@@ -28,6 +28,9 @@
 # 8883). To verify the broker, put its CA certificate next to config.json and
 # name it in "mqtt_ca_file"; it is uploaded with the app.
 #
+# Screenshots: a board with a display answers a screenshot request
+# (tools/capture_screenshot.py) only with "screenshot": true in config.json.
+#
 # The script auto-detects the serial port. Override with:
 #   PORT=/dev/ttyACM0 ./flash.sh
 #

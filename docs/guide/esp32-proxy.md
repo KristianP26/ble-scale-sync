@@ -70,12 +70,15 @@ Edit `config.json`:
   "mqtt_tls": false,
   "mqtt_ca_file": null,
   "mqtt_tls_hostname": null,
+  "screenshot": false,
   "device_id": "esp32-ble-proxy",
   "topic_prefix": "ble-proxy"
 }
 ```
 
 With `"board": null` the board is detected from the chip. Detection cannot tell a WROOM-32 from an Atom Echo, so on a WROOM-32 set `"board": "esp_wroom_32"` or pass `--board esp_wroom_32` to `flash.sh`. Other values: `atom_echo`, `esp32_s3`, `guition_4848`.
+
+`screenshot` applies to boards with a display. With `true` the ESP32 answers a request from `firmware/tools/capture_screenshot.py` with a dump of the screen; with `false` or no key it ignores the request. The key takes `true` or `false` without quotes. After a change, upload the file with `./flash.sh --app-only`.
 
 ### 3. Flash {#_2-flash}
 
@@ -306,7 +309,7 @@ All topics start with `{topic_prefix}/{device_id}/` (default `ble-proxy/esp32-bl
 | `write/{uuid}` | Server -> ESP32 | Raw bytes to write |
 | `read/{uuid}` | Server -> ESP32 | Empty; triggers a read |
 | `read/{uuid}/response` | ESP32 -> Server | Raw bytes read |
-| `screenshot` | Server -> ESP32 | Display boards: request a framebuffer dump. Refused (an `error` with `op: "screenshot"`) during a BLE connection |
+| `screenshot` | Server -> ESP32 | Display boards with `"screenshot": true`: request a framebuffer dump. Refused (an `error` with `op: "screenshot"`) during a BLE connection |
 | `screenshot/info`, `screenshot/{n}`, `screenshot/done` | ESP32 -> Server | Display size and format, the RGB565 framebuffer in numbered chunks, then the chunk count |
 
 The firmware files are described in [`firmware/`](https://github.com/KristianP26/ble-scale-sync/tree/main/firmware) in the repository.
