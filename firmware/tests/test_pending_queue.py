@@ -6,6 +6,10 @@ until the keepalive check reconnects it (derived from the mqtt_as ping
 interval, not measured on a board). So the callback must never raise, whatever
 a peer sends.
 
+A retained message is a replay the broker repeats at every reconnect. The host
+retains only `config`, so a retained command can only come from another
+publisher, a buggy or misconfigured one.
+
 Run: python -m unittest discover -s firmware/tests
 """
 
@@ -15,6 +19,9 @@ import types
 import unittest
 
 from _main_loader import VALID_CONFIG, load_main
+
+CONFIG_PAYLOAD = b'{"scales": ["AA:BB:CC:DD:EE:FF"]}'
+
 
 def _fake_time():
     return types.SimpleNamespace(ticks_ms=lambda: 1000, ticks_diff=lambda a, b: a - b)
@@ -60,6 +67,16 @@ class CallbackTest(_Base):
             self.main.on_message(b"\xff\xfe\xfd", b"secret", False)
         self.assertIn("MQTT message dropped", out.getvalue())
         self.assertNotIn("secret", out.getvalue())
+
+    def test_a_retained_command_is_not_queued_but_a_live_one_is(self):
+        self.send("connect", b'{"address": "AA:BB:CC:DD:EE:FF"}', retained=True)
+        self.assertEqual(self.main._pending, [])
+        self.send("connect", b'{"address": "AA:BB:CC:DD:EE:FF"}', retained=False)
+        self.assertEqual(len(self.main._pending), 1)
+
+    def test_a_retained_config_still_applies(self):
+        self.send("config", CONFIG_PAYLOAD, retained=True)
+        self.assertEqual(self.main._scale_macs, {"AA:BB:CC:DD:EE:FF"})
 
 
 if __name__ == "__main__":

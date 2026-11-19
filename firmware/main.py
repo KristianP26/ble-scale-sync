@@ -219,6 +219,10 @@ def _handle_message(topic_bytes, msg, retained):
         except Exception as e:
             print(f"Bad config payload: {e}")
         return
+    # The host retains only `config`. A retained command is a replay the broker
+    # repeats on every reconnect, so it would run again after each reboot.
+    if retained:
+        return
     # Any host command counts as engagement with the current GATT session (#296).
     _last_host_activity = time.ticks_ms()
     if _gatt_session_armed:
