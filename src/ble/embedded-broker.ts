@@ -23,6 +23,23 @@ const AUTH_BAD_USER_PASS = 4;
 const CONNACK_KEEPALIVE_REFUSED = 6;
 
 /**
+ * An error the broker raises itself when it turns a client down: a failed login
+ * or a topic the ACL does not allow. The listeners tell these from library
+ * errors by type, never by message text, so rewording a message cannot turn a
+ * warning back into a debug line. `returnCode` is what aedes puts on the CONNACK.
+ */
+class BrokerPolicyError extends Error {
+  constructor(
+    readonly kind: 'login' | 'acl',
+    message: string,
+    readonly returnCode?: number,
+  ) {
+    super(message);
+    this.name = 'BrokerPolicyError';
+  }
+}
+
+/**
  * What the broker bounds on its own, because aedes does not (ADR D112). Fixed
  * constants, not config keys: the shipped clients stay far below them (a scan
  * result of 500 devices is under 600 KiB). `EmbeddedBrokerOptions.limits`
@@ -164,9 +181,11 @@ export async function startEmbeddedBroker(
       if (userOk && passOk) {
         callback(null, true);
       } else {
-        const err = Object.assign(new Error('Bad username or password'), {
-          returnCode: AUTH_BAD_USER_PASS,
-        }) as AuthenticateError;
+        const err = new BrokerPolicyError(
+          'login',
+          'Bad username or password',
+          AUTH_BAD_USER_PASS,
+        ) as AuthenticateError;
         callback(err, false);
       }
     };
@@ -186,10 +205,12 @@ export async function startEmbeddedBroker(
     aedes.authorizePublish = (client, packet, callback) => {
       if (!client) return callback(null); // broker-originated
       if (packet.topic.startsWith('$SYS/')) {
-        return callback(new Error('$SYS/ topics are reserved'));
+        return callback(new BrokerPolicyError('acl', '$SYS/ topics are reserved'));
       }
       if (!isAllowed(packet.topic, false)) {
-        return callback(new Error(`publish rejected: topic outside "${topicPrefix}"`));
+        return callback(
+          new BrokerPolicyError('acl', `publish rejected: topic outside "${topicPrefix}"`),
+        );
       }
       callback(null);
     };
@@ -199,7 +220,10 @@ export async function startEmbeddedBroker(
       // Allow read-only $SYS subscriptions so tools like mqtt-explorer still work.
       if (sub.topic.startsWith('$SYS/')) return callback(null, sub);
       if (!isAllowed(sub.topic, true)) {
-        return callback(new Error(`subscribe rejected: topic outside "${topicPrefix}"`), null);
+        return callback(
+          new BrokerPolicyError('acl', `subscribe rejected: topic outside "${topicPrefix}"`),
+          null,
+        );
       }
       callback(null, sub);
     };
@@ -211,7 +235,21 @@ export async function startEmbeddedBroker(
   aedes.on('clientDisconnect', (client) => {
     log.debug(`Client disconnected: ${client.id}`);
   });
+  // Failed logins and ACL denials are what a LAN client probing the broker
+  // produces, so they are visible at the default log level. The text never
+  // carries what the client sent, only the address and fixed wording.
   aedes.on('clientError', (client, err) => {
+    if (err instanceof BrokerPolicyError) {
+      if (err.kind === 'login') {
+        warnThrottled(
+          'broker-login',
+          `Rejected a login from ${peerOf(client.conn)}: bad username or password.`,
+        );
+      } else {
+        warnThrottled('broker-acl', `Disconnected ${peerOf(client.conn)}: ${err.message}`);
+      }
+      return;
+    }
     log.debug(`Client error ${client.id}: ${errMsg(err)}`);
   });
   // A socket that never completed CONNECT has no client id yet. aedes destroys

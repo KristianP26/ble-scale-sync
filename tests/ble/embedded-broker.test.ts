@@ -502,6 +502,92 @@ describe('startEmbeddedBroker connection limits', () => {
   });
 });
 
+describe('startEmbeddedBroker policy logging', () => {
+  it('logs a failed login once with the address and without the credentials', async () => {
+    const broker = await startEmbeddedBroker({
+      port: 0,
+      bindHost: '127.0.0.1',
+      username: 'real-user',
+      password: 'real-secret',
+    });
+    try {
+      for (let i = 0; i < 3; i++) {
+        await expect(
+          connectAsync(broker.url, {
+            clientId: `bad-login-${i}`,
+            username: 'sent-user',
+            password: 'sent-secret',
+            reconnectPeriod: 0,
+            connectTimeout: 2000,
+          }),
+        ).rejects.toThrow();
+      }
+      const lines = warnSpy.mock.calls.map((c) => String(c[0]));
+      const login = lines.filter((l) => l.includes('Rejected a login'));
+      expect(login).toHaveLength(1);
+      expect(login[0]).toContain('Rejected a login from 127.0.0.1: bad username or password.');
+      for (const secret of ['real-user', 'real-secret', 'sent-user', 'sent-secret']) {
+        expect(lines.join('\n')).not.toContain(secret);
+      }
+    } finally {
+      await broker.close();
+    }
+  });
+
+  it('logs a publish outside the topic prefix', async () => {
+    const broker = await startEmbeddedBroker({
+      port: 0,
+      bindHost: '127.0.0.1',
+      topicPrefix: 'ble-proxy',
+    });
+    try {
+      const client = await connectAsync(broker.url, { clientId: 'acl-log', reconnectPeriod: 0 });
+      try {
+        const closed = closesWithin(client, 1000);
+        void client.publishAsync('rogue/topic', 'x').catch(() => {});
+        expect(await closed).toBe(true);
+        expect(warnSpy).toHaveBeenCalledWith(
+          expect.stringContaining(
+            'Disconnected 127.0.0.1: publish rejected: topic outside "ble-proxy"',
+          ),
+        );
+      } finally {
+        await client.endAsync(true);
+      }
+    } finally {
+      await broker.close();
+    }
+  });
+
+  it('logs a subscribe outside the topic prefix', async () => {
+    const broker = await startEmbeddedBroker({
+      port: 0,
+      bindHost: '127.0.0.1',
+      topicPrefix: 'ble-proxy',
+    });
+    try {
+      const client = await connectAsync(broker.url, {
+        clientId: 'acl-sub-log',
+        reconnectPeriod: 0,
+      });
+      try {
+        const closed = closesWithin(client, 1000);
+        void client.subscribeAsync('#').catch(() => {});
+        expect(await closed).toBe(true);
+        expect(warnSpy).toHaveBeenCalledWith(
+          expect.stringContaining(
+            'Disconnected 127.0.0.1: subscribe rejected: topic outside "ble-proxy"',
+          ),
+        );
+      } finally {
+        await client.endAsync(true);
+      }
+    } finally {
+      await broker.close();
+    }
+  });
+});
+
 describe('startEmbeddedBroker password check', () => {
   // timingSafeEqual on the raw bytes: two passwords that decode to the same
   // text after a lossy UTF-8 conversion must not match.

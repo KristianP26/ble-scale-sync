@@ -168,7 +168,7 @@ ble:
 
 The schema rejects an embedded broker on a non-loopback address without `username` and `password`. If another broker already holds port 1883, startup fails: set `embedded_broker_port` to a free port such as `1884`, and the same `mqtt_port` in `config.json`. Allow the port through the host firewall.
 
-The embedded broker closes a connection whose first packet is over 16 KiB or whose later packet is over 1 MiB (a scan result of 500 devices stays under 600 KiB), keeps at most 32 connections open, and expects the CONNECT packet within 15 seconds. It refuses a keep alive of 0 or over 300 seconds; the ESP32 firmware and the app use 60 seconds. It logs an oversized packet and a refused connection as a warning at most once a minute.
+The embedded broker closes a connection whose first packet is over 16 KiB or whose later packet is over 1 MiB (a scan result of 500 devices stays under 600 KiB), keeps at most 32 connections open, and expects the CONNECT packet within 15 seconds. It refuses a keep alive of 0 or over 300 seconds; the ESP32 firmware and the app use 60 seconds. It logs an oversized packet, a refused connection, a failed login and a publish or subscribe outside `topic_prefix` as a warning, each at most once a minute.
 
 ### Home Assistant add-on
 
