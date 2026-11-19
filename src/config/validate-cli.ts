@@ -5,6 +5,7 @@ import { createExporterFromEntry } from '../exporters/registry.js';
 import { errMsg } from '../utils/error.js';
 import { forcedAdapterProblem } from './forced-adapter.js';
 import { adapters } from '../scales/index.js';
+import { brokerTlsProblem } from '../ble/embedded-broker-tls.js';
 
 const { values } = parseArgs({
   options: {
@@ -61,6 +62,18 @@ try {
   const forced = forcedAdapterProblem(config, adapters);
   if (forced) {
     console.error(`Config invalid: ${forced}`);
+    process.exit(1);
+  }
+
+  // Only when this config starts the embedded broker, the one case that reads
+  // the TLS files: another handler may keep its keys without them being used.
+  // The files are read on this machine, so for container paths the result is
+  // only meaningful inside the container.
+  const mqttProxy = config.ble?.mqtt_proxy;
+  const tlsProblem =
+    config.ble?.handler === 'mqtt-proxy' && mqttProxy ? brokerTlsProblem(mqttProxy) : null;
+  if (tlsProblem) {
+    console.error(`Config invalid: ${tlsProblem}`);
     process.exit(1);
   }
 

@@ -1,9 +1,11 @@
 import { createServer, type Server, type Socket } from 'node:net';
+import { createServer as createTlsServer } from 'node:tls';
 import { timingSafeEqual } from 'node:crypto';
 import type { AuthenticateError } from 'aedes';
 import { createLogger } from '../logger.js';
 import { errMsg } from '../utils/error.js';
 import { isLoopback } from './loopback.js';
+import { loadBrokerTls, type BrokerTlsFiles } from './embedded-broker-tls.js';
 import { attachMqttFrameGuard } from './mqtt-frame-guard.js';
 import { warnThrottled as warnThrottledTo } from './peer-input.js';
 
@@ -64,6 +66,13 @@ export interface EmbeddedBrokerLimits {
    * app's own clients use 60.
    */
   maxKeepaliveSec: number;
+  /** Open connections of the loopback listener the app's own client uses in TLS mode. */
+  maxInternalConnections: number;
+  /**
+   * Total time a TLS handshake may take, a deadline and not an idle timeout.
+   * The same margin as `connectTimeoutMs`, for the same slow-radio reason.
+   */
+  tlsHandshakeTimeoutMs: number;
 }
 
 export const EMBEDDED_BROKER_LIMITS: Readonly<EmbeddedBrokerLimits> = {
@@ -72,6 +81,8 @@ export const EMBEDDED_BROKER_LIMITS: Readonly<EmbeddedBrokerLimits> = {
   maxConnections: 32,
   connectTimeoutMs: 15_000,
   maxKeepaliveSec: 300,
+  maxInternalConnections: 16,
+  tlsHandshakeTimeoutMs: 15_000,
 };
 
 export interface EmbeddedBrokerOptions {
@@ -99,6 +110,13 @@ export interface EmbeddedBrokerOptions {
    */
   deviceId?: string;
   /**
+   * PEM files of the TLS identity. With them the listener on `port` speaks TLS
+   * only; the app's own client reaches the broker over a plaintext listener on
+   * the loopback, and `EmbeddedBrokerHandle.url` points at it. Without them the
+   * broker serves plain MQTT.
+   */
+  tls?: BrokerTlsFiles;
+  /**
    * How long to wait for in-flight client work to drain on `close()`.
    * Defaults to 10s so shutdown is bounded even when MQTT keepalive clients
    * (e.g. the ESP32 proxy) hold the connection open.
@@ -109,10 +127,15 @@ export interface EmbeddedBrokerOptions {
 }
 
 export interface EmbeddedBrokerHandle {
-  /** URL an internal client can use to connect (loopback for a wildcard bind, else the bound address). */
+  /**
+   * URL the app's own client uses (loopback for a wildcard bind, else the bound
+   * address). In TLS mode it is a plaintext loopback URL on its own port.
+   */
   url: string;
-  /** Actual port the server is listening on (useful when `port: 0`). */
+  /** Actual port the public listener is listening on (useful when `port: 0`). */
   port: number;
+  /** True when the public listener serves TLS. */
+  tls: boolean;
   /** Stop accepting new connections and close the broker. Idempotent. */
   close: () => Promise<void>;
 }
@@ -160,6 +183,10 @@ export async function startEmbeddedBroker(
         'Set both, or change embedded_broker_bind to 127.0.0.1.',
     );
   }
+
+  // Read the TLS files before anything starts: a bad file must leave nothing
+  // running, and it never falls back to plain MQTT.
+  const tlsMaterial = opts.tls ? loadBrokerTls(opts.tls) : null;
 
   const aedes = await Aedes.createBroker({
     id: opts.brokerId ?? 'ble-scale-sync-embedded',
@@ -293,14 +320,17 @@ export async function startEmbeddedBroker(
   const sockets = new Set<Socket>();
   const peers = new WeakMap<object, string>();
   const peerOf = (conn: object): string => peers.get(conn) ?? 'unknown address';
-  const server: Server = createServer((socket) => {
+
+  /** Hand one accepted connection (plain, or already through the TLS handshake) to aedes. */
+  const serve = (socket: Socket): void => {
     sockets.add(socket);
-    socket.on('close', () => sockets.delete(socket));
+    socket.once('close', () => sockets.delete(socket));
     const peer = displayAddress(socket.remoteAddress);
     peers.set(socket, peer);
     aedes.handle(socket);
     // After handle(): the guard is a 'data' tap and needs aedes' 'readable'
-    // listener in place first (see mqtt-frame-guard.ts).
+    // listener in place first (see mqtt-frame-guard.ts). On a TLS listener this
+    // socket is the TLSSocket, so the guard sees the decrypted stream.
     attachMqttFrameGuard(
       socket,
       { firstPacketMax: limits.maxFirstPacketBytes, packetMax: limits.maxPacketBytes },
@@ -314,71 +344,157 @@ export async function startEmbeddedBroker(
         socket.destroy();
       },
     );
-  });
-  server.maxConnections = limits.maxConnections;
-  // No per-IP cap on purpose: behind Docker Desktop or a NAT every client
-  // shares one address.
-  server.on('drop', (data) => {
-    warnThrottled(
-      'broker-cap',
-      `Refused a connection from ${displayAddress(data?.remoteAddress)}: ` +
-        `the broker already has ${limits.maxConnections} open connections.`,
+  };
+
+  /** Cap the connections of a listener and say so when one is dropped. */
+  const capConnections = (server: Server, max: number): void => {
+    server.maxConnections = max;
+    // No per-IP cap on purpose: behind Docker Desktop or a NAT every client
+    // shares one address.
+    server.on('drop', (data) => {
+      warnThrottled(
+        'broker-cap',
+        `Refused a connection from ${displayAddress(data?.remoteAddress)}: ` +
+          `the broker already has ${max} open connections.`,
+      );
+    });
+  };
+
+  const servers: Server[] = [];
+  let publicServer: Server;
+  let internalServer: Server | null = null;
+  if (tlsMaterial) {
+    // The LAN listener speaks TLS only; there is no plaintext fallback on it.
+    // The app's own client uses a second listener on the loopback, which the LAN
+    // cannot reach, so it needs no certificate that names 127.0.0.1.
+    const tlsServer = createTlsServer(
+      {
+        cert: tlsMaterial.cert,
+        key: tlsMaterial.key,
+        minVersion: 'TLSv1.2',
+        handshakeTimeout: limits.tlsHandshakeTimeoutMs,
+      },
+      serve,
     );
-  });
+    // Node does not close a socket whose handshake timed out or failed, so
+    // without the destroy() an idle socket would stay open for ever.
+    tlsServer.on('tlsClientError', (err, socket) => {
+      // A reset connection has lost its address by now; the one remembered for
+      // the raw socket at accept time is what is left.
+      const raw = (socket as { _parent?: object })._parent;
+      const peer = socket.remoteAddress
+        ? displayAddress(socket.remoteAddress)
+        : peerOf(raw ?? socket);
+      warnThrottled(
+        'broker-tls',
+        `TLS handshake from ${peer} failed (${errorCodeOf(err)}). ` +
+          'Check that the device uses TLS (mqtt_tls), trusts this certificate (mqtt_ca_file), ' +
+          'checks the name in mqtt_tls_hostname and has the right date.',
+      );
+      socket.destroy();
+    });
+    // A socket still in its handshake never reaches serve(), so close() would
+    // wait out the handshake timeout for it. Track the raw socket as well.
+    tlsServer.on('connection', (raw: Socket) => {
+      peers.set(raw, displayAddress(raw.remoteAddress));
+      sockets.add(raw);
+      raw.once('close', () => sockets.delete(raw));
+    });
+    publicServer = tlsServer;
+    internalServer = createServer(serve);
+    capConnections(internalServer, limits.maxInternalConnections);
+    servers.push(publicServer, internalServer);
+  } else {
+    publicServer = createServer(serve);
+    servers.push(publicServer);
+  }
+  capConnections(publicServer, limits.maxConnections);
 
-  await new Promise<void>((resolve, reject) => {
-    const onError = (err: NodeJS.ErrnoException) => {
-      server.off('listening', onListening);
-      if (err.code === 'EADDRINUSE') {
-        reject(
-          new Error(
-            `Port ${opts.port} on ${bindHost} is already in use. ` +
-              `Stop the other MQTT broker (e.g. Mosquitto) or set ` +
-              `ble.mqtt_proxy.embedded_broker_port to a free port.`,
-          ),
-        );
-      } else {
-        reject(err);
-      }
-    };
-    const onListening = () => {
-      server.off('error', onError);
-      resolve();
-    };
-    server.once('error', onError);
-    server.once('listening', onListening);
-    server.listen(opts.port, bindHost);
-  });
+  const listen = (server: Server, port: number, host: string): Promise<void> =>
+    new Promise<void>((resolve, reject) => {
+      const onError = (err: NodeJS.ErrnoException) => {
+        server.off('listening', onListening);
+        if (err.code === 'EADDRINUSE') {
+          reject(
+            new Error(
+              `Port ${port} on ${host} is already in use. ` +
+                `Stop the other MQTT broker (e.g. Mosquitto) or set ` +
+                `ble.mqtt_proxy.embedded_broker_port to a free port.`,
+            ),
+          );
+        } else {
+          reject(err);
+        }
+      };
+      const onListening = () => {
+        server.off('error', onError);
+        resolve();
+      };
+      server.once('error', onError);
+      server.once('listening', onListening);
+      server.listen(port, host);
+    });
 
-  const addr = server.address();
-  const actualPort = typeof addr === 'object' && addr ? addr.port : opts.port;
-  const url = `mqtt://${internalClientHost(typeof addr === 'object' ? addr : null)}:${actualPort}`;
-
-  log.info(
-    `Embedded MQTT broker listening on ${bindHost}:${actualPort}` +
-      (authEnabled ? ' (authentication enabled)' : '') +
-      (topicPrefix !== undefined ? ` [ACL: ${topicPrefix}/*]` : ''),
-  );
-
-  let closed = false;
-  const close = async (): Promise<void> => {
-    if (closed) return;
-    closed = true;
-    await new Promise<void>((resolve) => {
+  const shutdown = (): Promise<void> =>
+    new Promise<void>((resolve) => {
       aedes.close(() => {
-        server.close(() => resolve());
+        const closing = servers.map(
+          (server) => new Promise<void>((done) => server.close(() => done())),
+        );
         // Forcefully destroy any sockets still open (MQTT keepalive clients
         // would otherwise block server.close for up to drainTimeout).
         for (const socket of sockets) {
           socket.destroy();
         }
         sockets.clear();
+        void Promise.all(closing).then(() => resolve());
       });
     });
+
+  try {
+    // The public port first: a port in use is the likely failure. The loopback
+    // listener takes an ephemeral port and cannot collide.
+    await listen(publicServer, opts.port, bindHost);
+    if (internalServer) await listen(internalServer, 0, '127.0.0.1');
+  } catch (err) {
+    // aedes keeps timers and the listeners it opened would stay: undo it all.
+    await shutdown();
+    throw err;
+  }
+
+  const publicAddr = publicServer.address();
+  const actualPort = typeof publicAddr === 'object' && publicAddr ? publicAddr.port : opts.port;
+  const clientAddr = (internalServer ?? publicServer).address();
+  const clientPort = typeof clientAddr === 'object' && clientAddr ? clientAddr.port : actualPort;
+  const url = `mqtt://${internalClientHost(typeof clientAddr === 'object' ? clientAddr : null)}:${clientPort}`;
+
+  log.info(
+    `Embedded MQTT broker listening on ${bindHost}:${actualPort}` +
+      (tlsMaterial
+        ? authEnabled
+          ? ' (TLS, authentication enabled)'
+          : ' (TLS)'
+        : authEnabled
+          ? ' (authentication enabled)'
+          : '') +
+      (topicPrefix !== undefined ? ` [ACL: ${topicPrefix}/*]` : ''),
+  );
+  if (!tlsMaterial && !isLoopback(bindHost)) {
+    log.info(
+      'Embedded MQTT broker is not encrypted: its login and the readings cross the network in plain text. ' +
+        'Set ble.mqtt_proxy.embedded_broker_tls_cert and embedded_broker_tls_key to use TLS.',
+    );
+  }
+
+  let closed = false;
+  const close = async (): Promise<void> => {
+    if (closed) return;
+    closed = true;
+    await shutdown();
     log.info('Embedded MQTT broker stopped');
   };
 
-  return { url, port: actualPort, close };
+  return { url, port: actualPort, tls: tlsMaterial !== null, close };
 }
 
 /**
@@ -394,6 +510,12 @@ function internalClientHost(addr: { address: string; family: string | number } |
   if (addr.address === '0.0.0.0') return '127.0.0.1';
   if (addr.address === '::') return '[::1]';
   return ipv6 ? `[${addr.address}]` : addr.address;
+}
+
+/** Library error code (`ERR_SSL_...`, `ECONNRESET`) for a log line, never message text. */
+function errorCodeOf(err: Error): string {
+  const code = (err as NodeJS.ErrnoException).code;
+  return typeof code === 'string' ? code : 'unknown error';
 }
 
 /** Peer address for a log line: an IPv4-mapped IPv6 address shown as plain IPv4. */

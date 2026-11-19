@@ -87,6 +87,23 @@ describe('diffRestartRequired', () => {
       'ble.mqtt_proxy.embedded_broker_port',
     );
 
+    const tlsA = baseConfig({
+      ble: {
+        handler: 'mqtt-proxy',
+        mqtt_proxy: { embedded_broker_tls_cert: '/c/a.pem', embedded_broker_tls_key: '/c/a.key' },
+      },
+    });
+    const tlsB = baseConfig({
+      ble: {
+        handler: 'mqtt-proxy',
+        mqtt_proxy: { embedded_broker_tls_cert: '/c/b.pem', embedded_broker_tls_key: '/c/b.key' },
+      },
+    });
+    expect(diffRestartRequired(tlsA, tlsB).map((f) => f.key)).toEqual([
+      'ble.mqtt_proxy.embedded_broker_tls_cert',
+      'ble.mqtt_proxy.embedded_broker_tls_key',
+    ]);
+
     const c = baseConfig({
       ble: { handler: 'esphome-proxy', esphome_proxy: { host: 'p', advertisement_timeout: 0 } },
     });

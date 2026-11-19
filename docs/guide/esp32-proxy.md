@@ -144,7 +144,7 @@ ble:
 
 Restart BLE Scale Sync. `ble-scale-sync setup` (`npm run setup` from a clone) asks for the same values. The broker of the [MQTT exporter](/exporters#mqtt) can serve the proxy too.
 
-`broker_url` takes `mqtts://` for TLS, which covers only the server's own connection. For TLS on the ESP32's connection, set in `config.json`:
+`broker_url` takes `mqtts://` for TLS, which covers only the server's own connection; the [embedded broker](#embedded-broker-tls) serves TLS itself. For TLS on the ESP32's connection, set in `config.json`:
 
 - `"mqtt_tls": true`;
 - `"mqtt_ca_file"`: a CA certificate file in `firmware/`, which `flash.sh` uploads with the app. Without it the link is encrypted but the broker is not verified;
@@ -169,6 +169,77 @@ ble:
 The schema rejects an embedded broker on a non-loopback address without `username` and `password`. If another broker already holds port 1883, startup fails: set `embedded_broker_port` to a free port such as `1884`, and the same `mqtt_port` in `config.json`. Allow the port through the host firewall.
 
 The embedded broker closes a connection whose first packet is over 16 KiB or whose later packet is over 1 MiB (a scan result of 500 devices stays under 600 KiB), keeps at most 32 connections open, and expects the CONNECT packet within 15 seconds. It refuses a keep alive of 0 or over 300 seconds; the ESP32 firmware and the app use 60 seconds. A retained publish is accepted only on `<topic_prefix>/<device_id>/status` and `<topic_prefix>/<device_id>/config`; a client that retains another topic is disconnected. It logs an oversized packet, a refused connection, a failed login and a publish or subscribe outside `topic_prefix` as a warning, each at most once a minute.
+
+### Encrypt the ESP32 connection {#embedded-broker-tls}
+
+Without TLS the broker's login and every reading cross the network in plain text. With a certificate and its private key the embedded broker serves TLS only on `embedded_broker_port`, and a plain MQTT client is refused there. The app reaches its own broker over a loopback-only listener.
+
+1. Create the certificate. Replace `ble-scale-sync.lan` with a name of your choice (it needs no DNS entry) and `192.168.1.100` with this machine's LAN address. The commands are tested with OpenSSL 3.
+
+   ```bash
+   mkdir broker-cert && cd broker-cert
+   cat > ca.cnf <<'EOF'
+   [ca]
+   default_ca = c
+   [c]
+   database = index.txt
+   new_certs_dir = .
+   serial = serial
+   default_md = sha256
+   policy = p
+   unique_subject = no
+   copy_extensions = copy
+   [p]
+   commonName = supplied
+   [req]
+   distinguished_name = dn
+   prompt = no
+   [dn]
+   CN = ble-scale-sync.lan
+   [ext]
+   subjectAltName = DNS:ble-scale-sync.lan,IP:192.168.1.100
+   basicConstraints = critical,CA:TRUE
+   EOF
+   : > index.txt && echo 01 > serial
+   openssl req -new -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes \
+     -keyout broker.key -out broker.csr -config ca.cnf
+   openssl ca -batch -selfsign -config ca.cnf -keyfile broker.key -in broker.csr \
+     -out broker.pem -startdate 19600101000000Z -enddate 21001231235959Z \
+     -extensions ext -notext
+   chmod 600 broker.key
+   ```
+
+   The ESP32 does not know the date, so the certificate has to be valid from before 1970. The recipe starts it in 1960 and ends it in 2100, which is why `broker.key` has to stay private. If it leaks, create a new pair and flash the new `broker.pem`.
+
+2. Set the two keys and the port in `config.yaml`, and restart BLE Scale Sync.
+
+   ```yaml
+   ble:
+     handler: mqtt-proxy
+     mqtt_proxy:
+       embedded_broker_port: 8883 # the conventional MQTT over TLS port
+       embedded_broker_tls_cert: /etc/ble-scale-sync/broker.pem # PEM, absolute or ~/
+       embedded_broker_tls_key: /etc/ble-scale-sync/broker.key # PEM, no passphrase
+       username: myuser
+       password: '${MQTT_PASSWORD}'
+   ```
+
+3. Copy `broker.pem` into `firmware/` and set these keys in the ESP32 `config.json`, then run `./flash.sh --app-only`. `mqtt_broker` stays the IP address, and `mqtt_tls_hostname` is the DNS name from the certificate.
+
+   ```json
+   "mqtt_port": 8883,
+   "mqtt_tls": true,
+   "mqtt_ca_file": "broker.pem",
+   "mqtt_tls_hostname": "ble-scale-sync.lan"
+   ```
+
+4. Check the log for `Embedded MQTT broker listening on 0.0.0.0:8883 (TLS, authentication enabled)`, and the certificate with `openssl s_client -connect 192.168.1.100:8883 -servername ble-scale-sync.lan`.
+
+Set both keys or neither, and not together with `broker_url`. A missing, unreadable, encrypted or mismatched file stops startup with a message that names the file, and the broker never falls back to plain MQTT. `ble-scale-sync validate` (`npm run validate` from a clone) reads the files on the machine it runs on, so run it inside the container when the paths are container paths.
+
+With Docker, add `'8883:8883'` under `ports` and `./certs:/certs:ro` under `volumes` of the service, and use `/certs/...` paths. The app runs as user `node` (uid 1000), so that user must be able to read the key file.
+
+A certificate from a public CA starts today, and the ESP32 cannot verify it. With such a certificate set `mqtt_tls: true` without `mqtt_ca_file`: the link is encrypted and the broker is not verified.
 
 ### Home Assistant add-on
 

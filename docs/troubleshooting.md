@@ -144,6 +144,13 @@ The log shows `Ignored a malformed scan batch from the ESP32 proxy: ...` or a si
 
 A line `Failed to handle a ... from the ESP32 proxy: ...` is a different case: the message was well formed and handling it failed. [Report an issue](#report-an-issue) with the line, a `DEBUG=true` log and the scale model.
 
+### `TLS handshake from ... failed` {#embedded-broker-tls-handshake}
+
+The embedded broker serves TLS on its port, and a client did not complete the handshake. The log shows `TLS handshake from <ip> failed (<code>)`. Only the first one each minute is a warning.
+
+- `ERR_SSL_WRONG_VERSION_NUMBER`: the client speaks plain MQTT. Set `"mqtt_tls": true` in the ESP32 `config.json`, or point the client at a plain broker.
+- `ECONNRESET` or an `ERR_SSL_*ALERT*` code: the client closed the connection during the handshake because it does not trust the certificate, the name differs from `mqtt_tls_hostname`, or the date is wrong. Check `mqtt_ca_file`, `mqtt_tls_hostname` and the certificate dates, see [Encrypt the ESP32 connection](/guide/esp32-proxy#embedded-broker-tls).
+
 ## Pairing
 
 ### Beurer or Sanitas pairing problems

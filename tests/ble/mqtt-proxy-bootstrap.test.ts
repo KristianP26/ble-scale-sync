@@ -1,5 +1,9 @@
 import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { bootstrapMqttProxy } from '../../src/ble/mqtt-proxy-bootstrap.js';
+import { hasOpenssl, makeBrokerCert } from '../helpers/broker-cert.js';
 import type { MqttProxyConfig } from '../../src/config/schema.js';
 
 beforeAll(() => {
@@ -64,6 +68,71 @@ describe('bootstrapMqttProxy', () => {
     } finally {
       if (result.embeddedBroker) await result.embeddedBroker.close();
     }
+  });
+
+  describe.skipIf(!hasOpenssl())('with TLS keys', () => {
+    let dir: string;
+    let cert: { cert: string; key: string };
+
+    beforeAll(() => {
+      dir = mkdtempSync(join(tmpdir(), 'bss-bootstrap-tls-'));
+      cert = makeBrokerCert(dir);
+    });
+
+    afterAll(() => {
+      rmSync(dir, { recursive: true, force: true });
+    });
+
+    const tlsConfig = (certFile: string, keyFile: string) =>
+      baseConfig({
+        username: 'alice',
+        password: 'secret',
+        embedded_broker_tls_cert: certFile,
+        embedded_broker_tls_key: keyFile,
+      });
+
+    it('starts a TLS broker and points broker_url at its loopback listener', async () => {
+      const result = await bootstrapMqttProxy(tlsConfig(cert.cert, cert.key));
+      try {
+        expect(result.embeddedBroker?.tls).toBe(true);
+        expect(result.mqttProxy.broker_url).toBe(result.embeddedBroker!.url);
+        expect(result.mqttProxy.broker_url).toMatch(/^mqtt:\/\/127\.0\.0\.1:\d+$/);
+        const { connectAsync } = await import('mqtt');
+        const client = await connectAsync(`mqtts://127.0.0.1:${result.embeddedBroker!.port}`, {
+          clientId: 'bootstrap-tls',
+          ca: readFileSync(cert.cert),
+          servername: 'localhost',
+          username: 'alice',
+          password: 'secret',
+          reconnectPeriod: 0,
+          connectTimeout: 3000,
+        });
+        expect(client.connected).toBe(true);
+        await client.endAsync(true);
+      } finally {
+        if (result.embeddedBroker) await result.embeddedBroker.close();
+      }
+    });
+
+    it.skipIf(process.platform === 'win32')('expands ~/ in the file paths', async () => {
+      vi.stubEnv('HOME', dir);
+      try {
+        const result = await bootstrapMqttProxy(tlsConfig('~/broker.pem', '~/broker.key'));
+        try {
+          expect(result.embeddedBroker?.tls).toBe(true);
+        } finally {
+          if (result.embeddedBroker) await result.embeddedBroker.close();
+        }
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    });
+
+    it('does not start without a usable file', async () => {
+      await expect(bootstrapMqttProxy(tlsConfig(join(dir, 'nope.pem'), cert.key))).rejects.toThrow(
+        /certificate file not found/,
+      );
+    });
   });
 
   it('propagates credentials from config to the embedded broker', async () => {
