@@ -1,4 +1,7 @@
+import { existsSync } from 'node:fs';
+import { isAbsolute } from 'node:path';
 import type { WizardStep, WizardContext } from '../types.js';
+import { expandHome } from '../../config/token-dirs.js';
 import type {
   MqttProxyConfig,
   EsphomeProxyConfig,
@@ -50,7 +53,40 @@ const MQTT_PROXY_KEYS = [
   'password',
   'embedded_broker_port',
   'embedded_broker_bind',
+  'embedded_broker_tls_cert',
+  'embedded_broker_tls_key',
 ] as const;
+
+/**
+ * An absolute path, or one that starts with `~/`, like the schema asks for. The
+ * file itself is not checked: the wizard also runs where the config is only
+ * written (a laptop or `docker run ... setup` for a container whose paths are
+ * `/certs/...`), and refusing a path that is not there would make TLS unusable
+ * for exactly those users.
+ */
+function validateTlsFilePath(v: string): string | true {
+  return isAbsolute(expandHome(v.trim())) ? true : 'Must be an absolute path or start with ~/';
+}
+
+/** One TLS file prompt; a file that is not on this machine is a warning, not an error. */
+async function promptTlsFile(
+  ctx: WizardContext,
+  message: string,
+  current: string | null | undefined,
+): Promise<string> {
+  const answer = (
+    await ctx.prompts.input(message, {
+      default: current ?? undefined,
+      validate: validateTlsFilePath,
+    })
+  ).trim();
+  if (!existsSync(expandHome(answer))) {
+    console.log(
+      `\n  ${warn(`File not found on this machine: ${answer}. Check the path before starting the app.`)}`,
+    );
+  }
+  return answer;
+}
 
 /**
  * Ask for the ESP32 MQTT proxy settings. Every prompt starts from `current`
@@ -94,6 +130,8 @@ async function promptMqttProxy(
   let password: string | undefined;
   let embedded_broker_port: number | undefined;
   let embedded_broker_bind: string | undefined;
+  let embedded_broker_tls_cert: string | undefined;
+  let embedded_broker_tls_key: string | undefined;
 
   if (brokerMode === 'external') {
     broker_url = await ctx.prompts.input('MQTT broker URL:', {
@@ -160,6 +198,31 @@ async function promptMqttProxy(
         `\n  ${info('No auth selected, binding embedded broker to 127.0.0.1 (loopback only).')}`,
       );
     }
+
+    // Only a broker the LAN can reach has traffic worth encrypting.
+    if (wantAuth && !isLoopback(embedded_broker_bind)) {
+      const wantTls = await ctx.prompts.confirm(
+        'Encrypt the ESP32 connection with TLS? (needs a certificate and key file)',
+        { default: !!current?.embedded_broker_tls_cert },
+      );
+      if (wantTls) {
+        embedded_broker_tls_cert = await promptTlsFile(
+          ctx,
+          'TLS certificate file (PEM, absolute path):',
+          current?.embedded_broker_tls_cert,
+        );
+        embedded_broker_tls_key = await promptTlsFile(
+          ctx,
+          'TLS private key file (PEM, absolute path):',
+          current?.embedded_broker_tls_key,
+        );
+        if (embedded_broker_port === 1883) {
+          console.log(
+            `\n  ${info('MQTT over TLS conventionally uses port 8883; use the same mqtt_port in the ESP32 config.json.')}`,
+          );
+        }
+      }
+    }
   }
 
   return {
@@ -171,6 +234,9 @@ async function promptMqttProxy(
     ...(password ? { password } : {}),
     ...(embedded_broker_port != null ? { embedded_broker_port } : {}),
     ...(embedded_broker_bind ? { embedded_broker_bind } : {}),
+    ...(embedded_broker_tls_cert && embedded_broker_tls_key
+      ? { embedded_broker_tls_cert, embedded_broker_tls_key }
+      : {}),
   } as MqttProxyConfig;
 }
 

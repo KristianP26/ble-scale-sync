@@ -1,4 +1,7 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   bleStep,
   validateMac,
@@ -203,6 +206,111 @@ describe('embedded broker password prompt', () => {
     expect(validate).toBeDefined();
     expect(validate!('')).not.toBe(true);
     expect(validate!('secret')).toBe(true);
+  });
+});
+
+describe('embedded broker TLS prompts', () => {
+  const TLS_CONFIRM = /^Encrypt the ESP32 connection with TLS/;
+  const CERT = /^TLS certificate file/;
+  const KEY = /^TLS private key file/;
+
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'bss-wizard-tls-'));
+    writeFileSync(join(dir, 'broker.pem'), '');
+    writeFileSync(join(dir, 'broker.key'), '');
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+    vi.restoreAllMocks();
+  });
+
+  /** The answers up to and including the login, for a LAN-exposed broker on `port`. */
+  const lanBroker = (port: string): Array<[RegExp, ScriptedAnswer]> => [
+    [/^MQTT broker:/, 'embedded'],
+    [/^ESP32 device ID:/, 'my-esp'],
+    [/^MQTT topic prefix:/, 'ble-proxy'],
+    [/^Embedded broker port:/, port],
+    [/^Require username\/password for the embedded broker/, true],
+    [/^MQTT username:/, 'admin'],
+    [/^MQTT password/, 'secret'],
+    [STORE_ENV, false],
+  ];
+
+  it('stores the certificate and key when TLS is chosen', async () => {
+    const cert = join(dir, 'broker.pem');
+    const key = join(dir, 'broker.key');
+    const { ctx } = makeCtx([...lanBroker('8883'), [TLS_CONFIRM, true], [CERT, cert], [KEY, key]]);
+
+    const result = await promptMqttProxy(ctx);
+
+    expect(result).toEqual({
+      device_id: 'my-esp',
+      topic_prefix: 'ble-proxy',
+      embedded_broker_port: 8883,
+      embedded_broker_bind: '0.0.0.0',
+      username: 'admin',
+      password: 'secret',
+      embedded_broker_tls_cert: cert,
+      embedded_broker_tls_key: key,
+    });
+  });
+
+  it('stores no TLS keys when TLS is declined', async () => {
+    const { ctx } = makeCtx([...lanBroker('1883'), [TLS_CONFIRM, false]]);
+
+    const result = await promptMqttProxy(ctx);
+
+    expect(result).not.toHaveProperty('embedded_broker_tls_cert');
+    expect(result).not.toHaveProperty('embedded_broker_tls_key');
+  });
+
+  it('keeps a path whose file is not on this machine and says so', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const { ctx } = makeCtx([
+      ...lanBroker('8883'),
+      [TLS_CONFIRM, true],
+      [CERT, '/certs/broker.pem'],
+      [KEY, '/certs/broker.key'],
+    ]);
+
+    const result = await promptMqttProxy(ctx);
+
+    expect(result.embedded_broker_tls_cert).toBe('/certs/broker.pem');
+    expect(result.embedded_broker_tls_key).toBe('/certs/broker.key');
+    const out = log.mock.calls.map((c) => String(c[0])).join('\n');
+    expect(out).toContain('File not found on this machine: /certs/broker.pem');
+  });
+
+  it('points at port 8883 when TLS is chosen on port 1883, and not on 8883', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const answers: Array<[RegExp, ScriptedAnswer]> = [
+      [TLS_CONFIRM, true],
+      [CERT, join(dir, 'broker.pem')],
+      [KEY, join(dir, 'broker.key')],
+    ];
+    await promptMqttProxy(makeCtx([...lanBroker('1883'), ...answers]).ctx);
+    expect(log.mock.calls.map((c) => String(c[0])).join('\n')).toContain('port 8883');
+
+    log.mockClear();
+    await promptMqttProxy(makeCtx([...lanBroker('8883'), ...answers]).ctx);
+    expect(log.mock.calls.map((c) => String(c[0])).join('\n')).not.toContain('port 8883');
+  });
+
+  it('does not ask for TLS on a loopback broker or an external one', async () => {
+    const loopback = makeCtx([
+      [/^MQTT broker:/, 'embedded'],
+      [/^Require username\/password for the embedded broker/, false],
+    ]);
+    await promptMqttProxy(loopback.ctx);
+    expect(loopback.asked.some((m) => TLS_CONFIRM.test(m))).toBe(false);
+
+    const external = makeCtx([
+      [/^MQTT broker:/, 'external'],
+      [/^MQTT broker URL:/, 'mqtts://broker.example.com:8883'],
+    ]);
+    await promptMqttProxy(external.ctx);
+    expect(external.asked.some((m) => TLS_CONFIRM.test(m))).toBe(false);
   });
 });
 

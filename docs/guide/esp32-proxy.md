@@ -211,7 +211,7 @@ Without TLS the broker's login and every reading cross the network in plain text
 
    The ESP32 does not know the date, so the certificate has to be valid from before 1970. The recipe starts it in 1960 and ends it in 2100, which is why `broker.key` has to stay private. If it leaks, create a new pair and flash the new `broker.pem`.
 
-2. Set the two keys and the port in `config.yaml`, and restart BLE Scale Sync.
+2. Set the two keys and the port in `config.yaml`, and restart BLE Scale Sync. `ble-scale-sync setup` asks for both files when the embedded broker listens on the LAN.
 
    ```yaml
    ble:
