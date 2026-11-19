@@ -26,11 +26,21 @@ export interface EmbeddedBrokerLimits {
   maxFirstPacketBytes: number;
   /** Largest later packet in bytes of MQTT remaining length. */
   maxPacketBytes: number;
+  /** Open connections the listener accepts; the next one is dropped. */
+  maxConnections: number;
+  /**
+   * How long a socket may stay open without sending its CONNECT. Short enough
+   * to free a slot soon, long enough for a slow Wi-Fi or TLS start on a classic
+   * ESP32 (15 s is a judgement call, not measured on hardware).
+   */
+  connectTimeoutMs: number;
 }
 
 export const EMBEDDED_BROKER_LIMITS: Readonly<EmbeddedBrokerLimits> = {
   maxFirstPacketBytes: 16_384,
   maxPacketBytes: 1_048_576,
+  maxConnections: 32,
+  connectTimeoutMs: 15_000,
 };
 
 export interface EmbeddedBrokerOptions {
@@ -125,6 +135,7 @@ export async function startEmbeddedBroker(
   const aedes = await Aedes.createBroker({
     id: opts.brokerId ?? 'ble-scale-sync-embedded',
     drainTimeout,
+    connectTimeout: limits.connectTimeoutMs,
   });
 
   if (authEnabled) {
@@ -187,6 +198,10 @@ export async function startEmbeddedBroker(
   aedes.on('clientError', (client, err) => {
     log.debug(`Client error ${client.id}: ${errMsg(err)}`);
   });
+  // A socket that never completed CONNECT has no client id yet.
+  aedes.on('connectionError', (_client, err) => {
+    log.debug(`Connection error: ${errMsg(err)}`);
+  });
 
   const sockets = new Set<Socket>();
   const server: Server = createServer((socket) => {
@@ -208,6 +223,16 @@ export async function startEmbeddedBroker(
         );
         socket.destroy();
       },
+    );
+  });
+  server.maxConnections = limits.maxConnections;
+  // No per-IP cap on purpose: behind Docker Desktop or a NAT every client
+  // shares one address.
+  server.on('drop', (data) => {
+    warnThrottled(
+      'broker-cap',
+      `Refused a connection from ${displayAddress(data?.remoteAddress)}: ` +
+        `the broker already has ${limits.maxConnections} open connections.`,
     );
   });
 

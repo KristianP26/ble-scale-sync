@@ -421,6 +421,81 @@ describe('startEmbeddedBroker packet size limits', () => {
   });
 });
 
+describe('startEmbeddedBroker connection limits', () => {
+  it('closes the connection over the cap and accepts one again after another closes', async () => {
+    const broker = await startEmbeddedBroker({
+      port: 0,
+      bindHost: '127.0.0.1',
+      limits: { maxConnections: 3 },
+    });
+    const idle: Socket[] = [];
+    try {
+      for (let i = 0; i < 3; i++) idle.push(await rawSocket(broker.port));
+      expect(idle.every((s) => !s.destroyed)).toBe(true);
+
+      const fourth = await rawSocket(broker.port);
+      expect(await socketClosesWithin(fourth, 1000)).toBe(true);
+      expect(idle.every((s) => !s.destroyed)).toBe(true);
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining(
+          'Refused a connection from 127.0.0.1: the broker already has 3 open connections.',
+        ),
+      );
+
+      const freed = socketClosesWithin(idle[0], 1000);
+      idle[0].destroy();
+      await freed;
+      await new Promise((r) => setTimeout(r, 50));
+      const client = await connectAsync(broker.url, { clientId: 'cap-after', reconnectPeriod: 0 });
+      expect(client.connected).toBe(true);
+      await client.endAsync(true);
+    } finally {
+      for (const s of idle) s.destroy();
+      await broker.close();
+    }
+  });
+
+  it('closes a socket that sends no CONNECT within the timeout', async () => {
+    const broker = await startEmbeddedBroker({
+      port: 0,
+      bindHost: '127.0.0.1',
+      limits: { connectTimeoutMs: 300 },
+    });
+    try {
+      const socket = await rawSocket(broker.port);
+      expect(await socketClosesWithin(socket, 2000)).toBe(true);
+    } finally {
+      await broker.close();
+    }
+  });
+
+  // The cap of 32 only holds up if a reconnect loop does not pile up sockets:
+  // aedes closes the older connection of the same client id on takeover.
+  it('does not accumulate sockets when a client reconnects with a fixed id', async () => {
+    const broker = await startEmbeddedBroker({
+      port: 0,
+      bindHost: '127.0.0.1',
+      limits: { maxConnections: 3 },
+    });
+    try {
+      for (let i = 0; i < 5; i++) {
+        const client = await connectAsync(broker.url, {
+          clientId: 'fixed-id',
+          clean: false,
+          reconnectPeriod: 0,
+          connectTimeout: 1500,
+        });
+        expect(client.connected).toBe(true);
+        // Not ended: the next iteration takes the id over while this one is open.
+        client.on('error', () => {});
+      }
+      expect(warnSpy).not.toHaveBeenCalledWith(expect.stringContaining('Refused a connection'));
+    } finally {
+      await broker.close();
+    }
+  });
+});
+
 /** Raw TCP socket to 127.0.0.1:`port`; data is buffered, errors are swallowed. */
 function rawSocket(port: number): Promise<Socket & { received?: Buffer }> {
   return new Promise((resolve, reject) => {
