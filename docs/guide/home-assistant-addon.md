@@ -135,6 +135,7 @@ The options cover one user, MQTT and Garmin Connect. For several users, another 
 - The other options are ignored, the transport options included: the file's `ble.handler` decides. The log warns about a `ble` or transport option you left set. Two exceptions: `proxy_liveness_timeout_min` is applied on top of the file unless the file sets `ble.proxy_liveness_timeout_min`, and `ble_adapter` with `reset_bluetooth` controls the adapter reset at startup.
 - The add-on does not sign in to Garmin. Import a token as in [Sign in to Garmin with MFA](#mfa-workaround); it lands in `/data/garmin-tokens`, where every `garmin` exporter without its own `token_dir` looks. Only that default directory is imported, so give further Garmin accounts a `token_dir` you can write to, such as `/share/ble-scale-sync/garmin-tokens/<name>`.
 - A `strava` exporter without its own `token_dir` keeps its tokens in `/data/strava-tokens`, which survives restarts and updates.
+- A `${SUPERVISOR_TOKEN}` or `${HASSIO_TOKEN}` reference stops the add-on with an `ERROR` line that names the setting, because the add-on's Supervisor token is never passed on through the file.
 - In this mode the adapter reset at startup runs only when `ble_adapter` is set. Turn off `reset_bluetooth` if your file uses a proxy.
 - For Home Assistant Bluetooth, the add-on's own Supervisor access works without a long-lived token. Write the URL in full, because `http://supervisor/core` alone does not reach the websocket, and leave out `token`:
 
@@ -202,4 +203,4 @@ If nobody has weighed in, the run exits with code 1 and the add-on keeps retryin
 - The add-on exits with `DBusError` and `AccessDenied`: reinstall the add-on so the Supervisor applies its manifest; see [Docker issues](/troubleshooting#docker-issues).
 - A Beurer scale asks to pair again or shows a code over and over: [Beurer scales](/guide/scales/beurer).
 - Discovery stops after hours: [BlueZ stuck state](/troubleshooting#ble-discovery-stops-working-after-hours-bluez-stuck-state).
-- The add-on stops with `ERROR:` about a transport: fix the option the line names. The add-on's Documentation tab lists each message.
+- The add-on stops with `ERROR:` about a transport or about the Supervisor token: fix the option the line names. The add-on's Documentation tab lists each message.

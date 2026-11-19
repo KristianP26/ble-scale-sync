@@ -253,6 +253,23 @@ if [ "$CUSTOM_CONFIG" = "true" ]; then
     log "ERROR: Failed to copy custom config from $CUSTOM_PATH"
     exit 1
   fi
+  # The app never expands ${SUPERVISOR_TOKEN} or ${HASSIO_TOKEN}: whatever such
+  # a value feeds would receive this add-on's Supervisor access. Stop here
+  # instead of starting an app that exits at once and letting the restart loop
+  # below do that for ever. $FRESH is what becomes $CONFIG.
+  _ecrc=0
+  _ecpaths=$(node "$ADDON_CONFIG" check-env-refs "$FRESH" 2>/dev/null) || _ecrc=$?
+  case "$_ecrc" in
+    0 | 7) ;;
+    6)
+      rm -f "$FRESH"
+      log "ERROR: $CUSTOM_PATH reads the Supervisor token through a \${...} reference, at: $(printf '%s' "$_ecpaths" | tr '\n' ' ')"
+      log "The token is a credential of this add-on and is never expanded in config.yaml: whatever the value feeds would receive it."
+      log "Delete the reference. For ble.handler ha-bluetooth use url: ws://supervisor/core/websocket and leave out token: the app reads it itself."
+      exit 1
+      ;;
+    *) log "WARNING: could not check $CUSTOM_PATH for Supervisor token references; the app refuses them anyway." ;;
+  esac
   # In this mode the whole option-to-config generation below is skipped, so any
   # UI option set here does nothing. Say so for the two QN bytes specifically:
   # they are knobs handed to reporters who are chasing a scale that reads

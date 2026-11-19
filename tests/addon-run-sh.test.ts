@@ -15,6 +15,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { parse } from 'yaml';
+import { BLOCKED_ENV_REFS, resolveEnvReferences } from '../src/config/env-refs.js';
 import { UserSchema } from '../src/config/schema.js';
 import { isValidScaleId } from '../src/ble/scale-id.js';
 
@@ -527,6 +528,113 @@ const TYPE_TRAPS = [
   '    password: "1e5"',
   '',
 ].join('\n');
+
+describe('addon-config.mjs check-env-refs', () => {
+  function check(fileContent: string): { status: number | null; out: string; err: string } {
+    return withTempDir((dir) => {
+      const file = join(dir, 'config.yaml');
+      writeFileSync(file, fileContent);
+      const res = spawnSync(process.execPath, [ADDON_CONFIG, 'check-env-refs', file], {
+        encoding: 'utf8',
+      });
+      return { status: res.status, out: res.stdout, err: res.stderr };
+    });
+  }
+
+  const OTHER_HA = 'ws://ha.example:8123/api/websocket';
+
+  it('names the path of a reference and exits 6', () => {
+    const r = check(
+      `ble:\n  handler: ha-bluetooth\n  ha_bluetooth:\n    url: ${OTHER_HA}\n    token: '\${SUPERVISOR_TOKEN}'\n`,
+    );
+    expect(r).toEqual({ status: 6, out: 'ble.ha_bluetooth.token\n', err: '' });
+  });
+
+  it('finds a HASSIO_TOKEN reference inside a longer value, in any letter case', () => {
+    const r = check(
+      'global_exporters:\n  - type: webhook\n    url: http://example.test/hook\n    headers:\n      X-Api-Key: "k-${hassio_token}-x"\n',
+    );
+    expect(r.status).toBe(6);
+    expect(r.out).toBe('global_exporters[0].headers.X-Api-Key\n');
+  });
+
+  it('sees what the app sees: a double-quoted escape and an alias are references too', () => {
+    // A text search for the literal reference misses both.
+    const escape = check('url: "\\x24{SUPERVISOR_TOKEN}"\n');
+    expect(escape).toMatchObject({ status: 6, out: 'url\n' });
+    const alias = check("a: &t '${SUPERVISOR_TOKEN}'\nb:\n  - *t\n");
+    expect(alias).toMatchObject({ status: 6 });
+    expect(alias.out.split('\n').sort()).toEqual(['', 'a', 'b[0]']);
+  });
+
+  it('passes a literal $${...}, another variable and a file without references', () => {
+    for (const file of [
+      "token: '$${SUPERVISOR_TOKEN}'\n",
+      "token: '${HA_TOKEN}'\n",
+      'version: 1\n',
+      '',
+    ]) {
+      expect(check(file), file).toEqual({ status: 0, out: '', err: '' });
+    }
+  });
+
+  it('exits 7, without a crash, for YAML it cannot read', () => {
+    // An alias with no anchor throws from toJS() and is not in doc.errors.
+    for (const file of ['users: [unclosed\n', 'x: *nope\n', 'k: 1\nk: 2\n']) {
+      expect(check(file), file).toEqual({ status: 7, out: '', err: '' });
+    }
+    expect(check('a: &a [1]\nb: *a\n').status).toBe(0);
+  });
+
+  it('never prints a value', () => {
+    const r = check("secret: swordfish\nurl: 'http://x/${SUPERVISOR_TOKEN}/swordfish'\n");
+    expect(r.status).toBe(6);
+    expect(r.out).toBe('url\n');
+    expect(r.out + r.err).not.toContain('swordfish');
+  });
+
+  it('prints at most 20 paths and keeps odd key characters out of the line', () => {
+    const many = Array.from({ length: 30 }, (_, i) => `k${i}: '\${HASSIO_TOKEN}'`).join('\n');
+    expect(check(`${many}\n`).out.trimEnd().split('\n')).toHaveLength(20);
+    expect(check("'a b;c': '${HASSIO_TOKEN}'\n").out).toBe('a?b?c\n');
+  });
+
+  it('agrees with the app on which strings are refused', () => {
+    // Guards drift of the list and the syntax copied into the .mjs.
+    const strings = [
+      '${SUPERVISOR_TOKEN}',
+      'x${HASSIO_TOKEN}y',
+      '${supervisor_token}',
+      '${Hassio_Token}',
+      '$${SUPERVISOR_TOKEN}',
+      '${HA_TOKEN}',
+      '${SUPERVISOR_TOKEN_2}',
+      '${ SUPERVISOR_TOKEN }',
+      'SUPERVISOR_TOKEN',
+    ];
+    for (const s of strings) {
+      const flagged = check(`v: ${JSON.stringify(s)}\n`).status === 6;
+      let refused = false;
+      try {
+        resolveEnvReferences({ v: s });
+      } catch (err) {
+        refused = (err as Error).message.includes('cannot be referenced');
+      }
+      expect(flagged, s).toBe(refused);
+    }
+  });
+
+  it('lists the same names as the app', () => {
+    const copy = /const BLOCKED_ENV_REFS = \[([^\]]*)\];/.exec(readFileSync(ADDON_CONFIG, 'utf8'));
+    expect(copy, 'BLOCKED_ENV_REFS not found in addon-config.mjs').not.toBeNull();
+    const names = [...copy![1].matchAll(/'([A-Za-z0-9_]+)'/g)].map((m) => m[1]);
+    expect(names).toEqual([...BLOCKED_ENV_REFS]);
+  });
+
+  it('is run by run.sh on the copy that becomes the config, before the app starts', () => {
+    expect(customConfigBranch()).toMatch(/node "\$ADDON_CONFIG" check-env-refs "\$FRESH"/);
+  });
+});
 
 describe('addon-config.mjs merge-weights', () => {
   function merge(fresh: string, persistent: string | null): { status: number | null; out: string } {

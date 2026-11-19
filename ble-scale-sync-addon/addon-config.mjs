@@ -13,7 +13,14 @@
  *     Exit 0 written, 3 the file already sets it, 4 value out of range,
  *     5 the file is not a mapping (or ble is not one).
  *
- * Both edits go through the `yaml` package the app itself reads config.yaml
+ *   check-env-refs <file>
+ *     List the config paths whose value references ${SUPERVISOR_TOKEN} or
+ *     ${HASSIO_TOKEN}, one per line, never a value. The app refuses those
+ *     references; run.sh uses this to stop with a clear message instead of
+ *     starting an app that exits at once. Exit 0 none, 6 at least one, 7 the
+ *     file is not valid YAML (the app reports that itself).
+ *
+ * The edits go through the `yaml` package the app itself reads config.yaml
  * with (YAML 1.2), loaded from the image's own node_modules. They used to run
  * through PyYAML, which is YAML 1.1: a load and dump of the whole document
  * rewrote values the app then read as a different type. `beurer_pin: 0123`
@@ -99,16 +106,63 @@ function proxyLiveness(path, raw) {
   return 0;
 }
 
+/** Mirrors BLOCKED_ENV_REFS and the reference syntax of src/config/env-refs.ts. */
+const BLOCKED_ENV_REFS = ['SUPERVISOR_TOKEN', 'HASSIO_TOKEN'];
+const ENV_REF_REGEX = /\$(\$?)\{([^}]+)}/g;
+
+function pathText(path) {
+  const text = path
+    .map((p, i) =>
+      typeof p === 'number'
+        ? `[${p}]`
+        : (i ? '.' : '') + String(p).replace(/[^A-Za-z0-9_.-]/g, '?'),
+    )
+    .join('');
+  return text || '(root)';
+}
+
+function collectBlocked(value, path, found) {
+  if (typeof value === 'string') {
+    for (const m of value.matchAll(ENV_REF_REGEX)) {
+      if (!m[1] && BLOCKED_ENV_REFS.includes(m[2].toUpperCase())) found.add(pathText(path));
+    }
+  } else if (Array.isArray(value)) {
+    value.forEach((item, i) => collectBlocked(item, [...path, i], found));
+  } else if (value !== null && typeof value === 'object') {
+    for (const [key, item] of Object.entries(value)) collectBlocked(item, [...path, key], found);
+  }
+}
+
+function checkEnvRefs(path) {
+  const { doc } = load(path);
+  if (doc.errors.length > 0) return 7;
+  let data;
+  try {
+    data = doc.toJS();
+  } catch {
+    // An alias with no anchor throws here, without an entry in doc.errors.
+    return 7;
+  }
+  const found = new Set();
+  collectBlocked(data, [], found);
+  if (found.size === 0) return 0;
+  console.log([...found].slice(0, 20).join('\n'));
+  return 6;
+}
+
 const [command, ...args] = process.argv.slice(2);
 let code;
 if (command === 'merge-weights' && args.length === 2) {
   code = mergeWeights(args[0], args[1]);
 } else if (command === 'proxy-liveness' && args.length === 2) {
   code = proxyLiveness(args[0], args[1]);
+} else if (command === 'check-env-refs' && args.length === 1) {
+  code = checkEnvRefs(args[0]);
 } else {
   console.error(
     'Usage: addon-config.mjs merge-weights <fresh> <persistent>\n' +
-      '       addon-config.mjs proxy-liveness <file> <minutes>',
+      '       addon-config.mjs proxy-liveness <file> <minutes>\n' +
+      '       addon-config.mjs check-env-refs <file>',
   );
   code = 2;
 }

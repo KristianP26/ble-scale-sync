@@ -1054,16 +1054,20 @@ describe.skipIf(!HARNESS)('run.sh custom_config and the transport options', () =
     return `${RUN_SH.slice(start, end)}\nfi\n`;
   }
 
-  function run(options: Record<string, unknown>): { status: number | null; stdout: string } {
+  function run(
+    options: Record<string, unknown>,
+    file = 'version: 1\n',
+  ): { status: number | null; stdout: string; freshLeft: boolean } {
     const raw = mkdtempSync(join(tmpdir(), 'addon-custom-'));
     const dir = raw.replace(/\\/g, '/');
     try {
       writeFileSync(`${dir}/options.json`, JSON.stringify(options));
-      writeFileSync(`${dir}/custom.yaml`, 'version: 1\n');
+      writeFileSync(`${dir}/custom.yaml`, file);
       const script = [
         'set -e',
         `OPTIONS='${dir}/options.json'`,
         `FRESH='${dir}/fresh.yaml'`,
+        `ADDON_CONFIG='${resolve('ble-scale-sync-addon/addon-config.mjs').replace(/\\/g, '/')}'`,
         logFunction(),
         ...['option readers', 'yaml escape', 'option checks', 'ble transport', 'mode'].map(block),
         customBranch().replaceAll('/share/ble-scale-sync/config.yaml', `${dir}/custom.yaml`),
@@ -1073,13 +1077,75 @@ describe.skipIf(!HARNESS)('run.sh custom_config and the transport options', () =
         env: { PATH: process.env.PATH },
       });
       expect(res.stderr).toBe('');
-      return { status: res.status, stdout: res.stdout.replaceAll(dir, '<tmp>') };
+      return {
+        status: res.status,
+        stdout: res.stdout.replaceAll(dir, '<tmp>'),
+        freshLeft: existsSync(`${dir}/fresh.yaml`),
+      };
     } finally {
       rmSync(raw, { recursive: true, force: true });
     }
   }
 
   const CUSTOM = { ...DEFAULTS, custom_config: true };
+
+  describe('Supervisor token references in the file', () => {
+    // Not the Supervisor URL, so these stay refusals whatever else is done to
+    // the documented ha-bluetooth snippet.
+    const OTHER_HA = 'ws://ha.example:8123/api/websocket';
+    const REFUSED: [string, string][] = [
+      [
+        'a plain reference',
+        `ble:\n  handler: ha-bluetooth\n  ha_bluetooth:\n    url: ${OTHER_HA}\n    token: '\${SUPERVISOR_TOKEN}'\n`,
+      ],
+      [
+        'a HASSIO_TOKEN reference in an exporter header',
+        'global_exporters:\n  - type: webhook\n    url: http://example.test/hook\n    headers:\n      X-Api-Key: "k-${hassio_token}"\n',
+      ],
+      [
+        'a double-quoted escape of the dollar sign',
+        'global_exporters:\n  - type: webhook\n    url: "\\x24{SUPERVISOR_TOKEN}"\n',
+      ],
+      [
+        'an alias of a reference',
+        "x-ref: &t '${SUPERVISOR_TOKEN}'\nglobal_exporters:\n  - type: webhook\n    url: http://example.test/hook\n    headers:\n      X-Api-Key: *t\n",
+      ],
+    ];
+
+    it.each(REFUSED)('stops the add-on on %s', (_name, file) => {
+      const r = run(CUSTOM, file);
+      expect(r.status).toBe(1);
+      expect(r.stdout).toContain(
+        'ERROR: <tmp>/custom.yaml reads the Supervisor token through a ${...} reference, at: ',
+      );
+      expect(r.freshLeft).toBe(false);
+    });
+
+    it('names the config path of the reference', () => {
+      const r = run(CUSTOM, REFUSED[1][1]);
+      expect(r.stdout).toContain('at: global_exporters[0].headers.X-Api-Key');
+    });
+
+    it('goes on with a clean file, a literal $${...} and another variable', () => {
+      for (const file of [
+        'version: 1\n',
+        "global_exporters:\n  - type: webhook\n    url: http://example.test/hook\n    headers:\n      X-Api-Key: '$${SUPERVISOR_TOKEN}'\n",
+        "ble:\n  handler: ha-bluetooth\n  ha_bluetooth:\n    url: ws://ha.example:8123/api/websocket\n    token: '${HA_TOKEN}'\n",
+      ]) {
+        const r = run(CUSTOM, file);
+        expect(r.status, file).toBe(0);
+        expect(r.stdout, file).not.toContain('Supervisor token');
+        // A wrong ADDON_CONFIG path would switch the check off without a failure.
+        expect(r.stdout, file).not.toContain('could not check');
+      }
+    });
+
+    it('leaves a file that is not YAML to the app', () => {
+      const r = run(CUSTOM, 'users: [unclosed\n');
+      expect(r.status).toBe(0);
+      expect(r.stdout).not.toContain('could not check');
+    });
+  });
 
   it('names the transport options it ignores, never their values', () => {
     const r = run({

@@ -71,6 +71,7 @@ A transport that cannot run stops the app with `ERROR:` and the reason, followed
 Other startup errors:
 
 - `custom_config is enabled but /share/ble-scale-sync/config.yaml does not exist`: create the file or turn off **Use custom config.yaml**.
+- `reads the Supervisor token through a ${...} reference`: delete the reference from your custom config. For `ha-bluetooth`, use `url: ws://supervisor/core/websocket` and no `token`.
 - `DBusError` with `AccessDenied` and `An AppArmor policy prevents this sender`: uninstall and reinstall the app so the Supervisor applies its manifest.
 
 ## More help
