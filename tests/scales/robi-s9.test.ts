@@ -222,5 +222,120 @@ describe('RobiS9Adapter', () => {
       expect(lines).toEqual(frames.map((hex) => `Robi S9 frame: ${hex}`));
       spy.mockRestore();
     });
+
+    const J_A2_SETTLING = '66000700a2010001252a0013'; // the reporter's own state-01 variant
+    const J_A7_BIT5 = `${J_A7.slice(0, -2)}3d`; // trailer with bit 5 set, as the spec's unit sends
+    const S11_A2_SETTLED = '010700a2030000e772000000000000000000001e';
+    const feed = (adapter: RobiS9Adapter, uuid: number, hex: string) =>
+      adapter.parseCharNotification(uuid16(uuid), Buffer.from(hex, 'hex'));
+    const trailerOk = (hex: string, from: number) => {
+      const b = Buffer.from(hex, 'hex');
+      let sum = 0;
+      for (let i = from; i < b.length - 1; i++) sum += b[i];
+      return (sum & 0x1f) === (b[b.length - 1] & 0x1f);
+    };
+
+    it('reads the A7 of the length-prefixed layout after its settled A2', () => {
+      const adapter = makeAdapter();
+      adapter.onSessionStart();
+      expect(feed(adapter, 0xffb2, J_A2)).toBeNull();
+      const reading = feed(adapter, 0xffb3, J_A7);
+      expect(reading).not.toBeNull();
+      expect(reading!.weight).toBeCloseTo(75.05, 2);
+      expect(reading!.impedance).toBe(0);
+      expect(adapter.isComplete(reading!)).toBe(true);
+      expect(adapter.dedupMark()).toBe(0x6955b900);
+    });
+
+    it('takes the A7 only after a settled A2 of the same weight', () => {
+      const adapter = makeAdapter();
+      adapter.onSessionStart();
+      expect(feed(adapter, 0xffb3, J_A7)).toBeNull();
+      expect(feed(adapter, 0xffb2, J_A2_SETTLING)).toBeNull();
+      expect(feed(adapter, 0xffb3, J_A7)).toBeNull();
+      expect(feed(adapter, 0xffb2, J_A2)).toBeNull();
+      expect(feed(adapter, 0xffb3, J_A7)!.weight).toBeCloseTo(75.05, 2);
+    });
+
+    it('does not export the same length-prefixed A7 twice', () => {
+      const adapter = makeAdapter();
+      adapter.onSessionStart();
+      feed(adapter, 0xffb2, J_A2);
+      expect(feed(adapter, 0xffb3, J_A7)).not.toBeNull();
+      adapter.onSessionStart();
+      expect(feed(adapter, 0xffb2, J_A2)).toBeNull();
+      expect(feed(adapter, 0xffb3, J_A7)).toBeNull();
+    });
+
+    it('does not read the A7 when its length field disagrees with its size', () => {
+      // Guards a fix that shifts the offsets without checking the length: a cut frame
+      // (MTU 23 fragment) must be logged and ignored, never decoded on a guess.
+      const adapter = makeAdapter();
+      adapter.onSessionStart();
+      feed(adapter, 0xffb2, J_A2);
+      expect(feed(adapter, 0xffb3, J_A7.slice(0, 40))).toBeNull();
+      expect(feed(adapter, 0xffb3, `${J_A7}00`)).toBeNull();
+    });
+
+    it('has valid trailers on the edited frames and on a classic frame (fixture check)', () => {
+      expect(trailerOk(J_A2, 4)).toBe(true);
+      expect(trailerOk(J_A2_SETTLING, 4)).toBe(true);
+      expect(trailerOk(J_A7, 4)).toBe(true);
+      expect(trailerOk(J_A7_BIT5, 4)).toBe(true);
+      expect(trailerOk(S11_A2_SETTLED, 3)).toBe(true);
+    });
+
+    it('does not depend on the trailer, including bit 5 set', () => {
+      // The trailer variants follow the patch posted in #540.
+      const adapter = makeAdapter();
+      adapter.onSessionStart();
+      feed(adapter, 0xffb2, J_A2);
+      expect(feed(adapter, 0xffb3, J_A7_BIT5)!.weight).toBeCloseTo(75.05, 2);
+    });
+
+    it('does not decode a length-prefixed A3: no source shows one', () => {
+      const adapter = makeAdapter();
+      adapter.onSessionStart();
+      feed(adapter, 0xffb2, J_A2);
+      // Non-zero bytes where the 20-byte A3 keeps its weight.
+      expect(feed(adapter, 0xffb3, '66000700a301252a00000013')).toBeNull();
+    });
+
+    it('never throws on length-consistent frames that are too short for their type', () => {
+      for (const type of [0xa2, 0xa3, 0xa7, 0xaa]) {
+        for (let n = 6; n <= 45; n++) {
+          const adapter = makeAdapter();
+          adapter.onSessionStart();
+          const b = Buffer.alloc(n, 0xff);
+          b[0] = 0x66;
+          b.writeUInt16BE(n - 5, 1);
+          b[3] = 0x00;
+          b[4] = type;
+          if (type === 0xa2) b[5] = 0x03;
+          expect(() => adapter.parseCharNotification(uuid16(0xffb2), b)).not.toThrow();
+          expect(adapter.parseCharNotification(uuid16(0xffb3), b)).toBeNull();
+        }
+      }
+    });
+
+    it('reports a frame in neither layout once per session', () => {
+      const spy = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+      spy.mockClear(); // spyOn returns the existing mock when already spied
+      const notices = () => spy.mock.calls.filter((c) => String(c[0]).includes('not decoding'));
+      const adapter = makeAdapter();
+      adapter.onSessionStart();
+      feed(adapter, 0xffb2, J_A2);
+      feed(adapter, 0xffb3, J_A7);
+      feed(adapter, 0xffb2, S11_A2_SETTLED);
+      expect(notices()).toHaveLength(0);
+      feed(adapter, 0xffb3, J_A7.slice(0, 40));
+      feed(adapter, 0xffb3, S11_A7_PART_1);
+      feed(adapter, 0xffb3, '0102030405');
+      expect(notices()).toHaveLength(1);
+      adapter.onSessionStart();
+      feed(adapter, 0xffb3, '0102030405');
+      expect(notices()).toHaveLength(2);
+      spy.mockRestore();
+    });
   });
 });

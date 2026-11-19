@@ -21,11 +21,14 @@ const CHR_FFB2 = uuid16(0xffb2); // notify (live frames)
 const CHR_FFB3 = uuid16(0xffb3); // indicate (final result) - see binding note
 
 /**
- * Captured handshake (#228 HCI snoop, Fitdays app). Replayed verbatim: the
- * 20-byte frames carry a trailer checksum whose algorithm is not cracked, plus a
- * unix-timestamp + token in the B1 frames, so regenerating them is unsafe. The
- * timestamp is therefore stale on replay; the scale appears to accept it for a
- * weigh-in. Order = seq 00..0a as the app sent them.
+ * Captured handshake (#228 HCI snoop, Fitdays app). Replayed verbatim. The
+ * trailer is the low 5 bits of the sum of the bytes from the type byte up to the
+ * trailer, but regenerating the frames is still unsafe: the B1 frames carry a
+ * unix timestamp and a token, and the session id is unknown. The timestamp is
+ * therefore stale on replay; the scale appears to accept it for a weigh-in.
+ * Order = seq 00..0a as the app sent them. The frames are 20-byte frames: a
+ * scale that frames its messages with a length prefix (#540) probably cannot
+ * read them (no A0/A1 acks were seen from it).
  */
 const HANDSHAKE: string[] = [
   '000300b000000000000000000000000000000010',
@@ -76,13 +79,30 @@ class RobiS9Session {
   cachedWeight = 0;
   cachedImpedance = 0;
   final = false;
+  /** The "not decoding this frame" notice is logged once per session. */
+  unknownLayoutLogged = false;
+}
+
+/**
+ * Index of the type byte: 3 in the 20-byte frames, 4 in the length-prefixed ones (#540).
+ * 20-byte: [seq][len u8][part][type][payload][zero padding][trailer], part 00 = single frame.
+ * length-prefixed: [seq][len u16 BE][part][type][payload][trailer], len + 5 bytes, no padding.
+ * The length-prefixed check is strict on purpose: a cut or padded frame is never decoded on
+ * a guess. A 20-byte frame needs byte 1 = 00 and byte 2 = 0f to pass it, which none does
+ * (byte 1 is its length, at least 3, and its type byte is never 0).
+ */
+function typeIndex(data: Buffer): 3 | 4 | null {
+  if (data.length >= 6 && data[3] === 0x00 && data.length === data.readUInt16BE(1) + 5) return 4;
+  if (data.length >= 11 && data[2] === 0x00) return 3;
+  return null;
 }
 
 /**
  * Adapter for the Robi S9 smart scale (Fitdays app, Lefu-style FFB0 protocol).
  *
  * Shares service 0xFFB0 with the openScale MGB family but speaks a different
- * 20-byte frame protocol (`[seq][len][00][type][payload][trailer]`): the phone
+ * 20-byte frame protocol (`[seq][len][00][type][payload][trailer]`; the JEETIF2421
+ * sends A2 and A7 as length-prefixed frames instead, see {@link typeIndex}): the phone
  * runs a B0/B1/B2/BD handshake on FFB1, the scale streams A2 live frames on FFB2
  * (notify) and the final result as an A3 frame on FFB3 (indicate). The MGB
  * adapter sent the wrong init and never subscribed FFB3, so the scale dropped
@@ -168,12 +188,28 @@ export class RobiS9Adapter implements ScaleAdapterCore, GattWiring, MultiCharNot
     // Before any gate: a scale speaking a layout this adapter does not decode
     // (#540) must still leave its complete frames in the log.
     bleLog.debug(`Robi S9 frame: ${data.toString('hex')}`);
-    if (data.length < 11 || data[2] !== 0x00) return null;
+    const typeAt = typeIndex(data);
+    if (typeAt === null) {
+      if (!this.s.unknownLayoutLogged) {
+        this.s.unknownLayoutLogged = true;
+        bleLog.debug(
+          'Robi S9: not decoding a frame that is neither a 20-byte nor a length-prefixed frame ' +
+            '(the follow-up packets of an S11 record are expected); further ones are not reported this session',
+        );
+      }
+      return null;
+    }
+    // Every A2 and A7 offset below is written for the 20-byte layout; the
+    // length-prefixed one has its type one byte later and everything after it too.
+    const shift = typeAt - 3;
+    const type = data[typeAt];
 
     // Final result arrives as the A3 frame on FFB3. A2 (live) frames use a
     // different alignment and are treated as progress only. A3 layout:
     //   [seq][len][00][a3][flag][weight u24 BE grams][... trailer]
-    if (data[3] === 0xa3) {
+    // Only the 20-byte layout: no source shows an A3 in the length-prefixed one,
+    // and a guessed offset would export a wrong weight as final.
+    if (type === 0xa3 && shift === 0) {
       const w = data.readUIntBE(WEIGHT_OFFSET, WEIGHT_BYTES) / WEIGHT_DIV;
       if (w > 0 && Number.isFinite(w)) {
         this.s.cachedWeight = w;
@@ -187,18 +223,19 @@ export class RobiS9Adapter implements ScaleAdapterCore, GattWiring, MultiCharNot
     }
 
     if (
-      data[3] === 0xa2 &&
-      data[A2_STATE_OFFSET] === A2_STATE_SETTLED &&
-      data.length >= A2_WEIGHT_OFFSET + WEIGHT_BYTES
+      type === 0xa2 &&
+      data.length >= A2_WEIGHT_OFFSET + shift + WEIGHT_BYTES &&
+      data[A2_STATE_OFFSET + shift] === A2_STATE_SETTLED
     ) {
-      const grams = data.readUIntBE(A2_WEIGHT_OFFSET, WEIGHT_BYTES);
+      const grams = data.readUIntBE(A2_WEIGHT_OFFSET + shift, WEIGHT_BYTES);
       if (grams > 0) this.s.liveGrams = grams;
     }
 
-    // Healthkeep S11: final result as the first packet of the A7 record.
-    if (data[3] === 0xa7 && data.length >= A7_WEIGHT_OFFSET + WEIGHT_BYTES) {
-      const grams = data.readUIntBE(A7_WEIGHT_OFFSET, WEIGHT_BYTES);
-      const stamp = data.readUInt32BE(A7_STAMP_OFFSET);
+    // Final result as the first packet of the A7 record (Healthkeep S11) or as
+    // the whole 40-byte frame (JEETIF2421).
+    if (type === 0xa7 && data.length >= A7_WEIGHT_OFFSET + shift + WEIGHT_BYTES) {
+      const grams = data.readUIntBE(A7_WEIGHT_OFFSET + shift, WEIGHT_BYTES);
+      const stamp = data.readUInt32BE(A7_STAMP_OFFSET + shift);
       if (stamp !== 0 && stamp === this.lastA7Stamp) {
         bleLog.debug(`Robi S9: A7 record ${stamp} was already exported, ignoring it`);
       } else if (grams === 0 || grams !== this.s.liveGrams) {

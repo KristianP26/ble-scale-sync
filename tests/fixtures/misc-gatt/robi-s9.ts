@@ -9,6 +9,12 @@ import { fromSnoop, type SnoopLine } from '../../helpers/replay/trace.js';
  * dropped there are not in the log, and the log does not say which of FFB2 or
  * FFB3 carried each one; all are replayed on FFB2 (the adapter ignores the
  * characteristic). No MAC or personal data in the frames.
+ *
+ * `robi-wide-a2-a7` is derived, not captured: the two length-prefixed frames of the
+ * JEETIF2421 from the body of #540 are the reporter's, with personal measurement
+ * fields replaced and the trailers recomputed by the reporter (low 5 bits only);
+ * the spacing between them is composed here. Swap them for the raw frames when
+ * those arrive.
  */
 const ISSUE_248 = `
 18:25:46.322 000700a201000000000000000000000000000003
@@ -119,6 +125,23 @@ export const session: SessionFixture = {
         { atMs: 2500, dir: 'rx', hex: '030800a300000000000000000000000000000000' },
         { atMs: 2600, dir: 'rx', hex: '030801a300012dc2000000000000000000000013' },
         { atMs: 3000, dir: 'rx', uuid: 'ffb3', hex: '030800a300012dc2000000000000000000000013' },
+      ],
+    },
+    'robi-wide-a2-a7': {
+      provenance: 'derived',
+      source: '#540 body, reporter-edited frames, spacing composed',
+      steps: [
+        ...[0, 200, 400, 600, 800].map((atMs) => ({
+          atMs,
+          dir: 'rx' as const,
+          hex: '66000700a2030001252a0015',
+        })),
+        {
+          atMs: 1500,
+          dir: 'rx',
+          uuid: 'ffb3',
+          hex: 'a6002300a76955b9002501252a000a0000000000000000000000000000000000000000000000001d',
+        },
       ],
     },
   },

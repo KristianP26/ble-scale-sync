@@ -796,6 +796,18 @@ const POST_DISCOVERY: PostDiscoveryCase[] = [
     },
     expected: 'Robi S9',
   },
+  // #540: pins the existing matching (passes without the decoder fix). The JEETIF2421 is
+  // found by its FFB0 service and resolves to Robi S9 once FFB3 is discovered; there is no
+  // name claim on purpose.
+  {
+    label: 'named JEETIF2421 (ffb0 advertised, ffb3 discovered, #540)',
+    advertised: { localName: 'JEETIF2421', serviceUuids: [uuid16(0xffb0)] },
+    gatt: {
+      serviceUuids: [uuid16(0xffb0)],
+      characteristicUuids: [0xffb1, 0xffb2, 0xffb3].map(uuid16),
+    },
+    expected: 'Robi S9',
+  },
   // #474: the Yunmai Mini 2 without a name. Before the product id claim the
   // proxies (characteristics only) found nothing, and noble and node-ble with
   // scale_mac, which pass the discovered services, gave it to QN's nameless
