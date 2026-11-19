@@ -114,7 +114,9 @@ class CommandQueueTest(_Base):
 
     def test_a_legit_burst_fits(self):
         # Guard against a cap set too low: 3 subscribes, 8 handshake writes, a
-        # disconnect, a beep and 2 display messages.
+        # disconnect, a beep and 2 display messages (a display board takes them).
+        self.main = load_main(VALID_CONFIG, HAS_DISPLAY=True)
+        self.main.time = _fake_time()
         for i in range(3):
             self.send("subscribe/0000ff%02d" % i)
         for _ in range(8):

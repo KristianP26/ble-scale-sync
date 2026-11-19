@@ -1,11 +1,12 @@
-"""Host-runnable tests: the payloads of the display topics are bounded.
+"""Host-runnable tests: the display topics are switchable and their payloads are bounded.
 
 A display board shows the readings and export results the server sends on
-display/reading and display/result. The payloads come from whoever can publish
-on those topics, so the firmware checks what reaches the LVGL labels: text is
-cut to a screen's worth, "#" (an LVGL recolor tag) is removed, the row count is
-capped and a weight that is not a plausible number is an error instead of a
-crash in the UI.
+display/reading and display/result. They stay on for a display board, because
+that is what the board is for, and "display_topics": false in config.json turns
+them off. The payloads come from whoever can publish on those topics, so the
+firmware checks what reaches the LVGL labels: text is cut to a screen's worth,
+"#" (an LVGL recolor tag) is removed, the row count is capped and a weight that
+is not a plausible number is an error instead of a crash in the UI.
 
 Run: python -m unittest discover -s firmware/tests
 """
@@ -46,6 +47,17 @@ class _Ui:
 
     def on_result(self, *args):
         self.calls.append(("result",) + args)
+
+
+class _Recorder:
+    def __init__(self):
+        self.subscribed = []
+
+    async def subscribe(self, topic, qos=0):
+        self.subscribed.append(topic)
+
+    async def publish(self, topic, msg, retain=False, qos=0):
+        pass
 
 
 def _load(has_display=True, **cfg):
@@ -102,6 +114,64 @@ def _run_loop(main, pending):
 def _show(pending, **cfg):
     calls, errors, _ = _run_loop(_load(**cfg), pending)
     return calls, errors
+
+
+class DisplayTopicsSwitchTest(unittest.TestCase):
+    def _subscriptions(self, main):
+        recorder = _Recorder()
+        asyncio.run(main.on_connect(recorder))
+        return recorder.subscribed
+
+    def test_the_topics_stay_on_for_a_display_board(self):
+        main = _load()
+        subs = self._subscriptions(main)
+        self.assertIn(main.topic("display/reading"), subs)
+        self.assertIn(main.topic("display/result"), subs)
+
+    def test_null_means_on(self):
+        main = _load(display_topics=None)
+        self.assertIn(main.topic("display/reading"), self._subscriptions(main))
+
+    def test_false_unsubscribes_them(self):
+        main = _load(display_topics=False)
+        subs = self._subscriptions(main)
+        self.assertNotIn(main.topic("display/reading"), subs)
+        self.assertNotIn(main.topic("display/result"), subs)
+
+    def test_a_headless_board_never_subscribes(self):
+        main = _load(has_display=False, display_topics=True)
+        subs = self._subscriptions(main)
+        self.assertNotIn(main.topic("display/reading"), subs)
+        self.assertNotIn(main.topic("display/result"), subs)
+
+    def test_a_switched_off_message_is_not_queued(self):
+        main = _load(display_topics=False)
+        for name in ("display/reading", "display/result"):
+            main.on_message(main.topic(name).encode(), b"{}", False)
+        self.assertEqual(main._pending, [])
+
+    def test_a_switched_on_message_is_queued(self):
+        main = _load()
+        main.on_message(main.topic("display/result").encode(), b"{}", False)
+        self.assertEqual(len(main._pending), 1)
+
+    def test_a_message_already_queued_is_not_shown_when_off(self):
+        calls, errors = _show(
+            [("display/result", {"name": "a", "weight": 1})], display_topics=False
+        )
+        self.assertEqual(calls, [])
+        self.assertEqual(errors, [])
+
+    def test_a_quoted_flag_is_refused(self):
+        with self.assertRaises(ValueError) as ctx:
+            _load(display_topics="false")
+        self.assertIn("display_topics", str(ctx.exception))
+
+    def test_the_boot_line_reports_both_switches(self):
+        _, _, text = _run_loop(_load(display_topics=False, screenshot=True), [])
+        self.assertIn("Display topics: off, screenshot: on", text)
+        _, _, text = _run_loop(_load(), [])
+        self.assertIn("Display topics: on, screenshot: off", text)
 
 
 class DisplayPayloadTest(unittest.TestCase):

@@ -24,6 +24,8 @@
 | BEEP_PINS | {"sck": N, "ws": N, "sd": N} | None |
 | HAS_DISPLAY | Has LVGL display | False |
 
+A board with `HAS_DISPLAY = True` subscribes to the `display/*` topics unless `display_topics` is `false` in `config.json`, and to `screenshot` only with `"screenshot": true`.
+
 ## Adding a display board with RGB parallel interface — ~30 minutes
 
 Requires building custom MicroPython firmware with the rgb_panel_lvgl C module.

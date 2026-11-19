@@ -26,7 +26,7 @@ if board.HAS_DISPLAY:
 # strings (an open network); the rest must be non-empty.
 REQUIRED_CONFIG_KEYS = ("wifi_ssid", "wifi_password", "mqtt_broker", "mqtt_port", "device_id", "topic_prefix")
 _NON_EMPTY_CONFIG_KEYS = ("mqtt_broker", "device_id", "topic_prefix")
-_BOOL_CONFIG_KEYS = ("screenshot",)
+_BOOL_CONFIG_KEYS = ("screenshot", "display_topics")
 
 
 def config_problems(c):
@@ -77,10 +77,13 @@ def load_config(path="config.json"):
 
 cfg = load_config()
 
-# A screenshot dumps what the panel shows (user names, weights) and holds the
-# main loop for seconds, so it is answered only with "screenshot": true in
-# config.json. A board without a display never subscribes to it.
+# Display-board features the host reaches over MQTT. A screenshot dumps what the
+# panel shows (user names, weights) and holds the main loop for seconds, so it is
+# answered only with "screenshot": true in config.json. The display topics are
+# what a display board is for: on there unless "display_topics": false. Boards
+# without a display never subscribe to either.
 SCREENSHOT_ENABLED = bool(board.HAS_DISPLAY) and cfg.get("screenshot") is True
+DISPLAY_TOPICS_ENABLED = bool(board.HAS_DISPLAY) and cfg.get("display_topics") is not False
 
 PREFIX = cfg["topic_prefix"]
 DEVICE_ID = cfg["device_id"]
@@ -277,6 +280,8 @@ def _handle_message(topic_bytes, msg, retained):
     # Not subscribed when off, so this only catches a message that arrives anyway.
     if t == topic("screenshot") and not SCREENSHOT_ENABLED:
         return
+    if (t == topic("display/reading") or t == topic("display/result")) and not DISPLAY_TOPICS_ENABLED:
+        return
     if not _queue_command(t, msg):
         return
     # Any accepted host command counts as engagement with the current GATT
@@ -294,7 +299,7 @@ async def on_connect(client_ref):
     await client_ref.subscribe(topic("disconnect"), 0)
     await client_ref.subscribe(topic("config"), 0)
     await client_ref.subscribe(topic("beep"), 0)
-    if board.HAS_DISPLAY:
+    if DISPLAY_TOPICS_ENABLED:
         await client_ref.subscribe(topic("display/reading"), 0)
         await client_ref.subscribe(topic("display/result"), 0)
     if SCREENSHOT_ENABLED:
@@ -1141,6 +1146,10 @@ async def main():
     global _pending_dropped
     print(f"Board: {board.BOARD_NAME}")
     if board.HAS_DISPLAY:
+        # Computed first: the simplest f-string form for MicroPython's parser.
+        shown = "on" if DISPLAY_TOPICS_ENABLED else "off"
+        shot = "on" if SCREENSHOT_ENABLED else "off"
+        print(f"Display topics: {shown}, screenshot: {shot}")
         ui.init()
         asyncio.create_task(_connection_monitor())
     await _connect_with_retry()
@@ -1171,7 +1180,7 @@ async def main():
                         else:
                             beep()
                 elif t == topic("display/reading"):
-                    if board.HAS_DISPLAY:
+                    if DISPLAY_TOPICS_ENABLED:
                         d = _display_payload(msg)
                         ui.on_reading(
                             _display_text(d.get("slug", "")),
@@ -1181,7 +1190,7 @@ async def main():
                             _display_rows(d.get("exporters", []), _display_text),
                         )
                 elif t == topic("display/result"):
-                    if board.HAS_DISPLAY:
+                    if DISPLAY_TOPICS_ENABLED:
                         d = _display_payload(msg)
                         ui.on_result(
                             _display_text(d.get("slug", "")),

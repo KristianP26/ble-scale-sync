@@ -74,19 +74,22 @@ class ConfigValidationTest(unittest.TestCase):
         # An open network has no password.
         load_main(_with(wifi_password=""))
 
-    def test_quoted_screenshot_flag_is_refused(self):
-        # "true" in quotes would silently read as off.
-        for value in ("true", "false", 1, 0, []):
-            with self.subTest(value=value):
-                with self.assertRaises(ValueError) as ctx:
-                    load_main(_with(screenshot=value))
-                self.assertIn("screenshot", str(ctx.exception))
-                self.assertIn("true or false", str(ctx.exception))
+    def test_quoted_display_flags_are_refused(self):
+        # "true" in quotes would silently read as off (or, for display_topics,
+        # as on while the user meant off).
+        for key in ("screenshot", "display_topics"):
+            for value in ("true", "false", 1, 0, []):
+                with self.subTest(key=key, value=value):
+                    with self.assertRaises(ValueError) as ctx:
+                        load_main(_with(**{key: value}))
+                    self.assertIn(key, str(ctx.exception))
+                    self.assertIn("true or false", str(ctx.exception))
 
-    def test_screenshot_flag_may_be_a_boolean_or_null(self):
-        for value in (True, False, None):
-            with self.subTest(value=value):
-                load_main(_with(screenshot=value))
+    def test_display_flags_may_be_a_boolean_or_null(self):
+        for key in ("screenshot", "display_topics"):
+            for value in (True, False, None):
+                with self.subTest(key=key, value=value):
+                    load_main(_with(**{key: value}))
 
     def test_the_shipped_example_is_a_valid_config(self):
         with open(os.path.join(FIRMWARE_DIR, "config.json.example")) as f:
@@ -94,6 +97,7 @@ class ConfigValidationTest(unittest.TestCase):
         main = load_main(VALID_CONFIG)
         self.assertEqual(main.config_problems(example), [])
         self.assertIs(example["screenshot"], False)
+        self.assertIs(example["display_topics"], True)
 
     def test_missing_file_says_so(self):
         with self.assertRaises(OSError) as ctx:

@@ -9,6 +9,7 @@
   "mqtt_tls": false,
   "mqtt_ca_file": null,
   "mqtt_tls_hostname": null,
+  "display_topics": true,
   "screenshot": false,
   "device_id": "esp32-ble-proxy",
   "topic_prefix": "ble-proxy"

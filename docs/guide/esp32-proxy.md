@@ -70,6 +70,7 @@ Edit `config.json`:
   "mqtt_tls": false,
   "mqtt_ca_file": null,
   "mqtt_tls_hostname": null,
+  "display_topics": true,
   "screenshot": false,
   "device_id": "esp32-ble-proxy",
   "topic_prefix": "ble-proxy"
@@ -78,7 +79,7 @@ Edit `config.json`:
 
 With `"board": null` the board is detected from the chip. Detection cannot tell a WROOM-32 from an Atom Echo, so on a WROOM-32 set `"board": "esp_wroom_32"` or pass `--board esp_wroom_32` to `flash.sh`. Other values: `atom_echo`, `esp32_s3`, `guition_4848`.
 
-`screenshot` applies to boards with a display. With `true` the ESP32 answers a request from `firmware/tools/capture_screenshot.py` with a dump of the screen; with `false` or no key it ignores the request. The key takes `true` or `false` without quotes. After a change, upload the file with `./flash.sh --app-only`.
+`display_topics` and `screenshot` apply to boards with a display. `display_topics` (default `true`) shows the readings and export results the server sends; `false` ignores them. `screenshot` (default `false`) lets `firmware/tools/capture_screenshot.py` request a dump of the screen. Both take `true` or `false` without quotes. After a change, upload the file with `./flash.sh --app-only`. The serial console prints `Display topics: on, screenshot: off` at boot, with the values in use.
 
 ### 3. Flash {#_2-flash}
 
@@ -298,8 +299,8 @@ All topics start with `{topic_prefix}/{device_id}/` (default `ble-proxy/esp32-bl
 | `scan/results` | ESP32 -> Server | JSON array of discovered devices |
 | `config` | Server -> ESP32 | Retained JSON: `scales` (MACs), `users`, `passive` (MACs read from advertisements, never connected), `autoConnect` (`false` disables the autonomous connect), `lazy_notify` (`true`: enable a notification only on `subscribe/{uuid}`) |
 | `beep` | Server -> ESP32 | Empty, or JSON with `freq` (20 to 4000 Hz), `duration` (1 to 500 ms), `repeat` (1 to 3); values outside are clamped |
-| `display/reading` | Server -> ESP32 | JSON with user slug, name, weight (0 to 1000), impedance and exporter list. Text is cut to 40 characters without `#`, lists to 16 rows. A bad payload is answered on `error` |
-| `display/result` | Server -> ESP32 | JSON with user slug, name, weight and per-exporter results, cut like `display/reading` |
+| `display/reading` | Server -> ESP32 | Display boards, unless `display_topics` is `false`: JSON with user slug, name, weight (0 to 1000), impedance and exporter list. Text is cut to 40 characters without `#`, lists to 16 rows. A bad payload is answered on `error` |
+| `display/result` | Server -> ESP32 | Display boards, unless `display_topics` is `false`: JSON with user slug, name, weight and per-exporter results, cut like `display/reading` |
 | `connect` | Server -> ESP32 | JSON with `address` and `addr_type` |
 | `connected` | ESP32 -> Server | JSON with `address`, the discovered `chars` (uuid and properties), and `autonomous: true` when the ESP32 connected on its own |
 | `disconnect` | Server -> ESP32 | Any payload |
