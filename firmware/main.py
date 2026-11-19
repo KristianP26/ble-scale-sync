@@ -361,6 +361,11 @@ def mqtt_tls_settings(c, read_file):
     if ca_file:
         import ssl
 
+        if not c.get("mqtt_tls_hostname") and _is_ip_literal(host):
+            # A warning, not a refusal: a certificate that carries the IP as its
+            # common name may still verify on some builds.
+            print("MQTT TLS: mqtt_broker is an IP address, set mqtt_tls_hostname to a name in the broker certificate or verification may fail")
+
         try:
             cadata = read_file(ca_file)
         except OSError as e:

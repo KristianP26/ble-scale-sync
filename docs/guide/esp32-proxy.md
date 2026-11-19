@@ -152,7 +152,7 @@ Restart BLE Scale Sync. `ble-scale-sync setup` (`npm run setup` from a clone) as
 
 - `"mqtt_tls": true`;
 - `"mqtt_ca_file"`: a CA certificate file in `firmware/`, which `flash.sh` uploads with the app. Without it the link is encrypted but the broker is not verified;
-- `"mqtt_tls_hostname"`: the broker's certificate name, when `mqtt_broker` is an IP address.
+- `"mqtt_tls_hostname"`: the broker's certificate name, when `mqtt_broker` is an IP address. With a CA file and an IP address but no name, the serial console prints `MQTT TLS: mqtt_broker is an IP address, set mqtt_tls_hostname ...` and the check may fail.
 
 ### Embedded broker
 

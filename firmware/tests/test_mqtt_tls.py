@@ -12,7 +12,9 @@ CERT_REQUIRED without `server_hostname` raises ValueError.
 Run: python -m unittest discover -s firmware/tests
 """
 
+import contextlib
 import importlib.util
+import io
 import json
 import os
 import ssl
@@ -159,6 +161,31 @@ class MqttTlsConfigTest(unittest.TestCase):
             files={"ca.pem": _CA},
         )
         self.assertEqual(mc["ssl_params"]["server_hostname"], "mqtt.home.example")
+
+    def _boot_output(self, extra_cfg, files=None):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            mc = _boot_main(extra_cfg, files=files)
+        return mc, out.getvalue()
+
+    def test_a_ca_checked_against_an_ip_address_warns_but_still_boots(self):
+        mc, text = self._boot_output(
+            {"mqtt_tls": True, "mqtt_broker": "192.168.1.100", "mqtt_ca_file": "ca.pem"},
+            files={"ca.pem": _CA},
+        )
+        self.assertIn("set mqtt_tls_hostname", text)
+        self.assertEqual(mc["ssl_params"]["server_hostname"], "192.168.1.100")
+
+    def test_no_warning_with_a_hostname_a_dns_broker_or_no_ca(self):
+        cases = (
+            {"mqtt_broker": "192.168.1.100", "mqtt_ca_file": "ca.pem", "mqtt_tls_hostname": "mqtt.lan"},
+            {"mqtt_broker": "broker.lan", "mqtt_ca_file": "ca.pem"},
+            {"mqtt_broker": "192.168.1.100"},
+        )
+        for extra in cases:
+            with self.subTest(extra=extra):
+                _, text = self._boot_output(dict(extra, mqtt_tls=True), files={"ca.pem": _CA})
+                self.assertNotIn("set mqtt_tls_hostname", text)
 
     def test_missing_ca_file_fails_loudly_instead_of_skipping_verification(self):
         with self.assertRaises(OSError) as ctx:
