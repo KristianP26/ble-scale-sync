@@ -94,6 +94,8 @@ interface GenerateCase {
   supervisorToken?: string;
   /** Replies of GET /services/mqtt, in call order; the last one repeats. */
   supervisor?: SupervisorReply[];
+  /** Files to create (empty) in the add-on config folder of this run, by name. */
+  certFiles?: string[];
 }
 
 interface Generated {
@@ -137,11 +139,14 @@ function generate(c: GenerateCase): Generated {
         writeFileSync(`${stub}/reply.${i + 1}.body`, JSON.stringify(r.body));
     });
     writeFileSync(`${dir}/options.json`, JSON.stringify(c.options));
+    mkdirSync(`${dir}/config`);
+    for (const name of c.certFiles ?? []) writeFileSync(`${dir}/config/${name}`, '');
 
     const script = [
       'set -e',
       `OPTIONS='${dir}/options.json'`,
       `FRESH='${dir}/fresh.yaml'`,
+      `CERT_DIR='${dir}/config'`,
       logFunction(),
       ...GENERATE_BLOCKS.map(block),
     ]
@@ -959,6 +964,141 @@ describe.skipIf(!HARNESS)(
         });
         expectLoads(r);
         expect(r.stdout).toContain('WARNING: mqtt_proxy_broker embedded wants port 1883');
+      });
+
+      it('embedded: warns about every port the Mosquitto add-on maps, and only those', () => {
+        for (const port of [1883, 1884, 8883, 8884]) {
+          const r = generate({
+            options: { ...EMBEDDED, mqtt_proxy_embedded_broker_port: port },
+            supervisorToken: 'supervisor-token-sentinel',
+            supervisor: [MOSQUITTO_REPLY],
+          });
+          expectLoads(r);
+          expect(r.stdout, String(port)).toContain(
+            `WARNING: mqtt_proxy_broker embedded wants port ${port}, which the Mosquitto broker add-on`,
+          );
+        }
+        const free = generate({
+          options: { ...EMBEDDED, mqtt_proxy_embedded_broker_port: 18883 },
+          supervisorToken: 'supervisor-token-sentinel',
+          supervisor: [MOSQUITTO_REPLY],
+        });
+        expectLoads(free);
+        expect(free.stdout).not.toContain('WARNING: mqtt_proxy_broker');
+      });
+
+      describe('embedded broker TLS', () => {
+        const TLS = {
+          ...EMBEDDED,
+          mqtt_proxy_embedded_broker_port: 18883,
+          mqtt_proxy_embedded_tls: true,
+        };
+
+        it('writes the certificate and key from the config folder, and the app loads them', () => {
+          const r = generate({ options: TLS, certFiles: ['broker.pem', 'broker.key'] });
+          const config = expectLoads(r);
+          expect(config.ble?.mqtt_proxy).toMatchObject({
+            embedded_broker_port: 18883,
+            embedded_broker_tls_cert: expect.stringMatching(/\/config\/broker\.pem$/),
+            embedded_broker_tls_key: expect.stringMatching(/\/config\/broker\.key$/),
+          });
+          expect(r.text).toContain('embedded_broker_tls_cert: "<tmp>/config/broker.pem"');
+          expect(r.stdout).toContain(
+            '(embedded broker on port 18883, TLS, device esp32-ble-proxy)',
+          );
+          expect(r.stdout).not.toContain('embedded-broker-secret');
+        });
+
+        it('uses the file names of the options, and the defaults for an emptied one', () => {
+          const named = generate({
+            options: {
+              ...TLS,
+              mqtt_proxy_embedded_tls_certfile: ' my.pem ',
+              mqtt_proxy_embedded_tls_keyfile: 'my.key',
+            },
+            certFiles: ['my.pem', 'my.key'],
+          });
+          expectLoads(named);
+          expect(named.text).toContain('embedded_broker_tls_cert: "<tmp>/config/my.pem"');
+          expect(named.text).toContain('embedded_broker_tls_key: "<tmp>/config/my.key"');
+
+          const emptied = generate({
+            options: {
+              ...TLS,
+              mqtt_proxy_embedded_tls_certfile: '',
+              mqtt_proxy_embedded_tls_keyfile: '',
+            },
+            certFiles: ['broker.pem', 'broker.key'],
+          });
+          expectLoads(emptied);
+          expect(emptied.text).toContain('<tmp>/config/broker.pem');
+          expect(emptied.text).toContain('<tmp>/config/broker.key');
+        });
+
+        it('stops when a file is not in the config folder, naming the option only', () => {
+          expectStopped(
+            generate({ options: TLS, certFiles: ['broker.key'] }),
+            'mqtt_proxy_embedded_tls is on, but mqtt_proxy_embedded_tls_certfile does not name a ' +
+              'readable file in the add-on config folder.',
+          );
+          expectStopped(
+            generate({ options: TLS, certFiles: ['broker.pem'] }),
+            'mqtt_proxy_embedded_tls is on, but mqtt_proxy_embedded_tls_keyfile does not name a ' +
+              'readable file in the add-on config folder.',
+          );
+        });
+
+        it('stops on a path or a name that climbs out of the config folder', () => {
+          for (const name of ['/etc/passwd', '../data/options.json', 'sub/broker.key', '.hidden']) {
+            expectStopped(
+              generate({
+                options: { ...TLS, mqtt_proxy_embedded_tls_keyfile: name },
+                certFiles: ['broker.pem'],
+              }),
+              'mqtt_proxy_embedded_tls_keyfile takes a file name in the add-on config folder, not a path.',
+            );
+          }
+        });
+
+        it('reads a switch set to false, or a missing one, as off', () => {
+          // opt() reads false as unset: the switch needs opt_bool, or "false"
+          // would be reported as set but ignored (or worse, turn TLS on).
+          const missing: Record<string, unknown> = { ...EMBEDDED };
+          delete missing.mqtt_proxy_embedded_tls;
+          for (const options of [{ ...EMBEDDED, mqtt_proxy_embedded_tls: false }, missing]) {
+            const r = generate({ options });
+            expectLoads(r);
+            expect(r.text).not.toContain('embedded_broker_tls');
+            expect(r.stdout).toContain('(embedded broker on port 1883, device');
+            expect(r.stdout).not.toContain('mqtt_proxy_embedded_tls');
+          }
+        });
+
+        it('shared: names the TLS options it ignores', () => {
+          const r = generate({
+            options: {
+              ...SHARED,
+              mqtt_auto: false,
+              mqtt_broker_url: 'mqtt://h:1883',
+              mqtt_proxy_embedded_tls: true,
+              mqtt_proxy_embedded_tls_certfile: 'my.pem',
+            },
+          });
+          expectLoads(r);
+          expect(r.text).not.toContain('embedded_broker_tls');
+          expect(r.stdout).toContain(
+            'only apply to mqtt_proxy_broker embedded, so they are ignored: ' +
+              'mqtt_proxy_embedded_tls, mqtt_proxy_embedded_tls_certfile.',
+          );
+        });
+
+        it('a certificate or key set but TLS off writes neither key', () => {
+          const r = generate({
+            options: { ...EMBEDDED, mqtt_proxy_embedded_tls_certfile: 'my.pem' },
+          });
+          expectLoads(r);
+          expect(r.text).not.toContain('embedded_broker_tls');
+        });
       });
 
       it('shared: names the embedded-only options it ignores', () => {

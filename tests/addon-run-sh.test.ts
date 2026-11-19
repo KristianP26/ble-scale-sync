@@ -1276,9 +1276,28 @@ describe('add-on option ble_transport (#420)', () => {
       'mqtt_proxy_device_id',
       'mqtt_proxy_topic_prefix',
       'mqtt_proxy_embedded_broker_port',
+      // The two file names; the switch has no entry, an empty read is skipped.
+      'mqtt_proxy_embedded_tls_certfile',
+      'mqtt_proxy_embedded_tls_keyfile',
     ]) {
       expect(block, key).toContain(`${key}=${String(MANIFEST.options[key])}`);
     }
+  });
+
+  it('maps its own config folder read-only and not ssl, for the embedded broker certificate', () => {
+    const map = (
+      parse(lf(readFileSync('ble-scale-sync-addon/config.yaml', 'utf8'))) as {
+        map: string[];
+      }
+    ).map;
+    expect(map).toContain('addon_config:ro');
+    expect(map.some((m) => m.startsWith('ssl'))).toBe(false);
+    expect(map).toContain('share:rw');
+    expect(RUN_SH).toMatch(/^CERT_DIR="\/config"$/m);
+    expect(MANIFEST.options).toHaveProperty('mqtt_proxy_embedded_tls', false);
+    expect(SCHEMA.mqtt_proxy_embedded_tls).toBe('bool?');
+    expect(SCHEMA.mqtt_proxy_embedded_tls_certfile).toBe('str?');
+    expect(SCHEMA.mqtt_proxy_embedded_tls_keyfile).toBe('str?');
   });
 
   it('lists the options in the same order in options and schema, the order of the form', () => {
@@ -1409,6 +1428,65 @@ describe.skipIf(!SHELL)('run.sh ble_transport_problem', { timeout: 30_000 }, () 
     for (const vars of runnable) {
       expect(problem(vars), JSON.stringify(vars)).toEqual({ status: 0, out: '' });
     }
+  });
+
+  describe('embedded broker TLS files', () => {
+    const TLS_ON = {
+      ...MQTT_EMBEDDED,
+      MQTT_PROXY_USERNAME: 'esp32',
+      MQTT_PROXY_PASSWORD: 'pw',
+      MQTT_PROXY_TLS: 'true',
+      MQTT_PROXY_TLS_CERT: 'broker.pem',
+      MQTT_PROXY_TLS_KEY: 'broker.key',
+    };
+
+    /** The verdict with `files` present in a fresh config folder. */
+    function withSsl(vars: Record<string, string>, files: string[]) {
+      return withTempDir((raw) => {
+        const dir = raw.replace(/\\/g, '/');
+        for (const name of files) writeFileSync(join(raw, name), '');
+        return problem({ ...vars, CERT_DIR: dir });
+      });
+    }
+
+    it('says nothing when both files are in the config folder, or TLS is off', () => {
+      expect(withSsl(TLS_ON, ['broker.pem', 'broker.key'])).toEqual({ status: 0, out: '' });
+      expect(withSsl({ ...TLS_ON, MQTT_PROXY_TLS: 'false' }, [])).toEqual({ status: 0, out: '' });
+      expect(withSsl({ ...TLS_ON, MQTT_PROXY_TLS: '' }, [])).toEqual({ status: 0, out: '' });
+    });
+
+    it('names the option of a file that is not there', () => {
+      const missing = (option: string) =>
+        `mqtt_proxy_embedded_tls is on, but ${option} does not name a readable file in the ` +
+        "add-on config folder. Put the certificate in the add-on's folder under addon_configs " +
+        'and enter its file name, or turn mqtt_proxy_embedded_tls off.';
+      expect(withSsl(TLS_ON, ['broker.key']).out).toBe(missing('mqtt_proxy_embedded_tls_certfile'));
+      expect(withSsl(TLS_ON, ['broker.pem']).out).toBe(missing('mqtt_proxy_embedded_tls_keyfile'));
+      expect(withSsl(TLS_ON, []).out).toBe(missing('mqtt_proxy_embedded_tls_certfile'));
+    });
+
+    it('wants a file name, not a path or a name that starts with a dot', () => {
+      for (const name of ['/etc/passwd', '../x.pem', 'a/b.pem', '.hidden', 'a..b', 'a b.pem']) {
+        expect(
+          withSsl({ ...TLS_ON, MQTT_PROXY_TLS_CERT: name }, ['broker.key', 'broker.pem']).out,
+          name,
+        ).toBe(
+          'mqtt_proxy_embedded_tls_certfile takes a file name in the add-on config folder, not a path.',
+        );
+        expect(
+          withSsl({ ...TLS_ON, MQTT_PROXY_TLS_KEY: name }, ['broker.key', 'broker.pem']).out,
+          name,
+        ).toBe(
+          'mqtt_proxy_embedded_tls_keyfile takes a file name in the add-on config folder, not a path.',
+        );
+      }
+    });
+
+    it('does not look at the files for the shared broker', () => {
+      expect(
+        withSsl({ ...MQTT_SHARED, MQTT_BROKER_URL: 'mqtt://h:1883', MQTT_PROXY_TLS: 'true' }, []),
+      ).toEqual({ status: 0, out: '' });
+    });
   });
 
   it('names what is wrong, and returns 0 so set -e lets the caller report it', () => {

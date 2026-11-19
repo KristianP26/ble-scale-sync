@@ -64,6 +64,7 @@ The add-on writes `/data/config.yaml` from these options on every start, so a ch
 | `mqtt_proxy_broker`               | `shared`          | `shared` uses the MQTT options below, `embedded` a broker in the add-on        |
 | `mqtt_proxy_device_id`, `mqtt_proxy_topic_prefix` | `esp32-ble-proxy`, `ble-proxy` | `ble.mqtt_proxy`, [ESP32 proxy](/guide/esp32-proxy#home-assistant-add-on) |
 | `mqtt_proxy_embedded_broker_port`, `mqtt_proxy_username`, `mqtt_proxy_password` | `1883`, empty, empty | Embedded broker only; username and password are required there |
+| `mqtt_proxy_embedded_tls`, `mqtt_proxy_embedded_tls_certfile`, `mqtt_proxy_embedded_tls_keyfile` | `false`, `broker.pem`, `broker.key` | Embedded broker only: TLS from two files in the add-on's own config folder (`/addon_configs/<slug>/` on the host, read-only for the add-on), see [ESP32 proxy](/guide/esp32-proxy#embedded-broker-tls) |
 | `proxy_liveness_timeout_min`      | `30`              | `ble.proxy_liveness_timeout_min`, proxy transports only                        |
 
 ### Units and user {#user-profile}

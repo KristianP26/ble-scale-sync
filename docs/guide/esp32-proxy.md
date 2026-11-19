@@ -166,7 +166,7 @@ ble:
     password: '${MQTT_PASSWORD}'
 ```
 
-The schema rejects an embedded broker on a non-loopback address without `username` and `password`. If another broker already holds port 1883, startup fails: set `embedded_broker_port` to a free port such as `1884`, and the same `mqtt_port` in `config.json`. Allow the port through the host firewall.
+The schema rejects an embedded broker on a non-loopback address without `username` and `password`. If another broker already holds port 1883, startup fails: set `embedded_broker_port` to a free port such as `18883`, and the same `mqtt_port` in `config.json`. Allow the port through the host firewall.
 
 The embedded broker closes a connection whose first packet is over 16 KiB or whose later packet is over 1 MiB (a scan result of 500 devices stays under 600 KiB), keeps at most 32 connections open, and expects the CONNECT packet within 15 seconds. It refuses a keep alive of 0 or over 300 seconds; the ESP32 firmware and the app use 60 seconds. A retained publish is accepted only on `<topic_prefix>/<device_id>/status` and `<topic_prefix>/<device_id>/config`; a client that retains another topic is disconnected. It logs an oversized packet, a refused connection, a failed login and a publish or subscribe outside `topic_prefix` as a warning, each at most once a minute.
 
@@ -248,7 +248,7 @@ A certificate from a public CA starts today, and the ESP32 cannot verify it. Wit
 In the [add-on](/guide/home-assistant-addon#bluetooth-transports), set **Bluetooth transport** to `mqtt-proxy` and pick the broker with **ESP32 proxy broker**:
 
 - `shared` (default) uses the broker of the add-on's MQTT options, which is the Mosquitto broker add-on when MQTT auto-detection is on, even with the MQTT exporter off. Give the ESP32 its own login on that broker (a Home Assistant user, or an entry under `logins` in the Mosquitto add-on) and put it in `mqtt_user` and `mqtt_password` of `config.json`.
-- `embedded` starts the broker inside the add-on. **Embedded broker username** and **Embedded broker password** are required, since it listens on the host network. The Mosquitto add-on holds port 1883 on the host, so set **Embedded broker port** to a free one such as `1884` and the same `mqtt_port` in `config.json`.
+- `embedded` starts the broker inside the add-on. **Embedded broker username** and **Embedded broker password** are required, since it listens on the host network. The Mosquitto add-on holds ports 1883, 1884, 8883 and 8884 on the host, so set **Embedded broker port** to another one such as `18883` and the same `mqtt_port` in `config.json`. To encrypt the ESP32's connection, turn on **Embedded broker TLS**, copy `broker.pem` and `broker.key` from the [recipe](#embedded-broker-tls) into the add-on's own config folder, `/addon_configs/<slug>/` on the host (the Samba share `addon_configs` shows it). The add-on reads it read-only. The options default to those two file names; enter other names if you used them.
 
 `mqtt_broker` in `config.json` is the Home Assistant host's IP address for the Mosquitto add-on and for `embedded`, or the broker's own address when you set one by hand. **ESP32 proxy device ID** and **ESP32 proxy topic prefix** must match `device_id` and `topic_prefix`.
 

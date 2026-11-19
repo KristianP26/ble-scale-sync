@@ -7,6 +7,9 @@ OPTIONS="/data/options.json"
 CONFIG="/data/config.yaml"
 FRESH="/tmp/config-fresh.yaml"
 ADDON_CONFIG="/app/addon-config.mjs"
+# The add-on's own config folder, mapped read-only by the manifest
+# (map: addon_config:ro); /addon_configs/<slug> on the host.
+CERT_DIR="/config"
 mkdir -p /data
 
 log() { echo "[ble-scale-sync] $*"; }
@@ -110,7 +113,7 @@ valid_esphome_key() {
 # >>> ble transport
 
 ESPHOME_OPTIONS="esphome_proxy_host esphome_proxy_port esphome_proxy_encryption_key"
-MQTT_PROXY_EMBEDDED_OPTIONS="mqtt_proxy_embedded_broker_port mqtt_proxy_username mqtt_proxy_password"
+MQTT_PROXY_EMBEDDED_OPTIONS="mqtt_proxy_embedded_broker_port mqtt_proxy_username mqtt_proxy_password mqtt_proxy_embedded_tls mqtt_proxy_embedded_tls_certfile mqtt_proxy_embedded_tls_keyfile"
 MQTT_PROXY_OPTIONS="mqtt_proxy_broker mqtt_proxy_device_id mqtt_proxy_topic_prefix $MQTT_PROXY_EMBEDDED_OPTIONS"
 
 # Names of the given transport options that differ from their defaults in the
@@ -123,13 +126,36 @@ transport_options_set() {
     case "$_o=$_v" in
       esphome_proxy_port=6053 | mqtt_proxy_broker=shared | \
         mqtt_proxy_device_id=esp32-ble-proxy | mqtt_proxy_topic_prefix=ble-proxy | \
-        mqtt_proxy_embedded_broker_port=1883)
+        mqtt_proxy_embedded_broker_port=1883 | mqtt_proxy_embedded_tls_certfile=broker.pem | \
+        mqtt_proxy_embedded_tls_keyfile=broker.key)
         continue
         ;;
     esac
     _set="${_set:+$_set, }$_o"
   done
   printf '%s' "$_set"
+  return 0
+}
+
+# Why the embedded broker's TLS files cannot be used, on one line, or nothing.
+# Each option takes a plain file name in the add-on config folder: a path could
+# reach any file the add-on can read. Option names only, never a value.
+embedded_tls_problem() {
+  for _t in "mqtt_proxy_embedded_tls_certfile=$MQTT_PROXY_TLS_CERT" \
+    "mqtt_proxy_embedded_tls_keyfile=$MQTT_PROXY_TLS_KEY"; do
+    _tname=${_t%%=*}
+    _tfile=${_t#*=}
+    case "$_tfile" in
+      */* | .* | *..* | *[[:space:]]*)
+        echo "$_tname takes a file name in the add-on config folder, not a path."
+        return 0
+        ;;
+    esac
+    if [ ! -f "$CERT_DIR/$_tfile" ] || [ ! -r "$CERT_DIR/$_tfile" ]; then
+      echo "mqtt_proxy_embedded_tls is on, but $_tname does not name a readable file in the add-on config folder. Put the certificate in the add-on's folder under addon_configs and enter its file name, or turn mqtt_proxy_embedded_tls off."
+      return 0
+    fi
+  done
   return 0
 }
 
@@ -156,6 +182,9 @@ ble_transport_problem() {
       elif [ "$MQTT_PROXY_BROKER" = "embedded" ] &&
         { [ -z "$MQTT_PROXY_USERNAME" ] || [ -z "$MQTT_PROXY_PASSWORD" ]; }; then
         echo "mqtt_proxy_broker embedded listens on this host's network, so it needs mqtt_proxy_username and mqtt_proxy_password; the ESP32 logs in with them."
+      elif [ "$MQTT_PROXY_BROKER" = "embedded" ] && [ "$MQTT_PROXY_TLS" = "true" ] &&
+        [ -n "$(embedded_tls_problem)" ]; then
+        embedded_tls_problem
       elif [ "$MQTT_PROXY_BROKER" = "shared" ] && [ -z "$MQTT_BROKER_URL" ]; then
         echo "ble_transport is mqtt-proxy with mqtt_proxy_broker shared, but no MQTT broker is available. Start the Mosquitto broker add-on with MQTT auto-detect on, set mqtt_broker_url, or set mqtt_proxy_broker to embedded."
       elif [ "$MQTT_PROXY_BROKER" = "shared" ]; then
@@ -207,6 +236,11 @@ emit_ble_transport() {
         printf '%s\n' "    embedded_broker_port: $MQTT_PROXY_PORT" \
           "    username: \"$(yaml_escape "$MQTT_PROXY_USERNAME")\"" \
           "    password: \"$(yaml_escape "$MQTT_PROXY_PASSWORD")\""
+        if [ "$MQTT_PROXY_TLS" = "true" ]; then
+          printf '%s\n' \
+            "    embedded_broker_tls_cert: \"$(yaml_escape "$CERT_DIR/$MQTT_PROXY_TLS_CERT")\"" \
+            "    embedded_broker_tls_key: \"$(yaml_escape "$CERT_DIR/$MQTT_PROXY_TLS_KEY")\""
+        fi
       fi
       [ -z "$MQTT_PROXY_DEVICE_ID" ] ||
         printf '%s\n' "    device_id: \"$(yaml_escape "$MQTT_PROXY_DEVICE_ID")\""
@@ -457,6 +491,13 @@ else
   MQTT_PROXY_PORT=$(opt_int mqtt_proxy_embedded_broker_port 1883)
   MQTT_PROXY_USERNAME=$(opt mqtt_proxy_username)
   MQTT_PROXY_PASSWORD=$(opt mqtt_proxy_password)
+  # opt() would read false as unset, and an unset switch must mean off.
+  MQTT_PROXY_TLS=$(opt_bool mqtt_proxy_embedded_tls)
+  # An emptied name means the manifest's default, as for the device ID.
+  MQTT_PROXY_TLS_CERT=$(opt mqtt_proxy_embedded_tls_certfile | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+  [ -n "$MQTT_PROXY_TLS_CERT" ] || MQTT_PROXY_TLS_CERT=broker.pem
+  MQTT_PROXY_TLS_KEY=$(opt mqtt_proxy_embedded_tls_keyfile | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+  [ -n "$MQTT_PROXY_TLS_KEY" ] || MQTT_PROXY_TLS_KEY=broker.key
 
   # The options that only steer the built-in adapter are not written for a
   # proxy transport, which has no use for them, so that the ble: block and its
@@ -616,11 +657,15 @@ else
   _problem=$(ble_transport_problem)
   [ -z "$_problem" ] || ble_transport_error "$_problem"
 
-  # A heuristic, hence only a warning: the Mosquitto add-on maps 1883 on the
-  # host, but the mapping can be changed.
+  # A heuristic, hence only a warning: the Mosquitto add-on maps 1883, 1884,
+  # 8883 and 8884 on the host, but the mapping can be changed.
   if [ "$BLE_TRANSPORT" = "mqtt-proxy" ] && [ "$MQTT_PROXY_BROKER" = "embedded" ] &&
-    [ "$MQTT_PROXY_PORT" = "1883" ] && [ "$MQTT_DETECTED" = "true" ]; then
-    log "WARNING: mqtt_proxy_broker embedded wants port 1883, which the Mosquitto broker add-on usually holds on this host. If the broker fails to start, use mqtt_proxy_broker shared, or another mqtt_proxy_embedded_broker_port with the same mqtt_port in the ESP32's config.json."
+    [ "$MQTT_DETECTED" = "true" ]; then
+    case "$MQTT_PROXY_PORT" in
+      1883 | 1884 | 8883 | 8884)
+        log "WARNING: mqtt_proxy_broker embedded wants port $MQTT_PROXY_PORT, which the Mosquitto broker add-on usually holds on this host (it maps 1883, 1884, 8883 and 8884). If the broker fails to start, use mqtt_proxy_broker shared, or another mqtt_proxy_embedded_broker_port with the same mqtt_port in the ESP32's config.json."
+        ;;
+    esac
   fi
 
   _other=""
@@ -653,6 +698,7 @@ else
         _broker="shared broker"
       else
         _broker="embedded broker on port $MQTT_PROXY_PORT"
+        [ "$MQTT_PROXY_TLS" != "true" ] || _broker="$_broker, TLS"
       fi
       log "Bluetooth transport: mqtt-proxy ($_broker, device ${MQTT_PROXY_DEVICE_ID:-esp32-ble-proxy})"
       ;;
