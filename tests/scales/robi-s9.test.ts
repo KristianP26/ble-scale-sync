@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { RobiS9Adapter } from '../../src/scales/robi-s9.js';
 import { adapters } from '../../src/scales/index.js';
 import { uuid16 } from '../../src/scales/body-comp-helpers.js';
+import { bleLog } from '../../src/ble/types.js';
 import type { ConnectionContext } from '../../src/interfaces/scale-adapter.js';
 import { mockPeripheral, defaultProfile } from '../helpers/scale-test-utils.js';
 
@@ -189,6 +190,37 @@ describe('RobiS9Adapter', () => {
       const adapter = makeAdapter();
       const a2 = Buffer.from('1d0700a20400012c000000000000000000000013', 'hex');
       expect(adapter.parseCharNotification(uuid16(0xffb2), a2)).toBeNull();
+    });
+  });
+
+  describe('length-prefixed frames (JEETIF2421, #540)', () => {
+    // Reporter-edited frames from the body of #540 (JEETIF2421 over an ESPHome proxy): personal
+    // measurement fields replaced and trailers recomputed by the reporter (low 5 bits only: the
+    // scale's own A7 trailer may carry bit 5). Length, type, state and weight offsets are as the
+    // scale sent them. Replace with the raw frames when they arrive.
+    const J_A2 = '66000700a2030001252a0015'; // 12 B, state 03, 75.05 kg
+    const J_A7 = 'a6002300a76955b9002501252a000a0000000000000000000000000000000000000000000000001d'; // 40 B
+    const S11_A7_PART_1 = '4123013c012c0122001d012b0114010700ff1203';
+
+    it('logs every frame in full before deciding whether it can decode it', () => {
+      const spy = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+      spy.mockClear(); // spyOn returns the existing mock when already spied
+      const adapter = makeAdapter();
+      adapter.onSessionStart();
+      const frames = [
+        J_A2,
+        J_A7,
+        J_A7.slice(0, 40), // the first 20 bytes of the A7
+        S11_A7_PART_1,
+        '0102030405',
+      ];
+      for (const hex of frames)
+        adapter.parseCharNotification(uuid16(0xffb2), Buffer.from(hex, 'hex'));
+      const lines = spy.mock.calls
+        .map((c) => String(c[0]))
+        .filter((l) => l.startsWith('Robi S9 frame:'));
+      expect(lines).toEqual(frames.map((hex) => `Robi S9 frame: ${hex}`));
+      spy.mockRestore();
     });
   });
 });

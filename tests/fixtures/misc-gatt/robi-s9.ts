@@ -5,7 +5,7 @@ import { fromSnoop, type SnoopLine } from '../../helpers/replay/trace.js';
  * Robi S9 (Lefu/Icomon FFB0). `#248` is the reporter's DEBUG log in #248
  * comment 4952277405 (v1.18 era): every `Robi S9 frame:` line from the first
  * frame to the A3 that resolved the session at 77.85 kg, with its timestamp.
- * The adapter logs a frame only after its own length/part gate, so frames it
+ * The adapter of that version logged a frame only after its own length/part gate, so frames it
  * dropped there are not in the log, and the log does not say which of FFB2 or
  * FFB3 carried each one; all are replayed on FFB2 (the adapter ignores the
  * characteristic). No MAC or personal data in the frames.

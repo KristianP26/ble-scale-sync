@@ -165,8 +165,10 @@ export class RobiS9Adapter implements ScaleAdapterCore, GattWiring, MultiCharNot
   }
 
   parseCharNotification(_charUuid: string, data: Buffer): ScaleReading | null {
-    if (data.length < 11 || data[2] !== 0x00) return null;
+    // Before any gate: a scale speaking a layout this adapter does not decode
+    // (#540) must still leave its complete frames in the log.
     bleLog.debug(`Robi S9 frame: ${data.toString('hex')}`);
+    if (data.length < 11 || data[2] !== 0x00) return null;
 
     // Final result arrives as the A3 frame on FFB3. A2 (live) frames use a
     // different alignment and are treated as progress only. A3 layout:
