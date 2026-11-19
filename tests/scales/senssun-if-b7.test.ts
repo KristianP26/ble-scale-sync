@@ -56,6 +56,25 @@ const LB_FINISHED_202 = '02031164fb012d925001223800caa2864d';
 const FINISHED_67_25 = '020311187a93c1b333021a4500b4a1ab61';
 const MAC_BLE_MONITOR = '18:7A:93:C1:B3:33';
 
+/*
+ * Variant 01 03 28: a second unit sold as Grifema GA2001, 64:FB:01:45:98:B6, via
+ * Home Assistant's Bluetooth (ha-bluetooth). Weights matched the scale display
+ * and the MovingLife vendor app on the same weigh-in.
+ */
+/** Finished (status 0x81), [9] = 0x21: 0x043B = 108.3 kg, [12..13] a copy of the weight. */
+const V0128_FINISHED_108_3 = '01032864fb014598b621043b043b810545';
+/** Finished, [9] = 0x21: 0x043D = 108.5 kg, the same frame on two separate weigh-ins. */
+const V0128_FINISHED_108_5 = '01032864fb014598b621043d043d810549';
+/** Sent right after V0128_FINISHED_108_3: [9] = 0x01, 108.3 kg, [12..13] = 552. */
+const V0128_RESULT_552 = '01032864fb014598b601043b022881010c';
+/**
+ * Weighing (status 0x01), 108.3 kg. Reconstructed: only the tail
+ * ...043b043b0105c5 was noted from the log, [0..9] are taken from the finished
+ * frame of the same weigh-in. The checksum closes.
+ */
+const V0128_WEIGHING_108_3 = '01032864fb014598b621043b043b0105c5';
+const MAC_0128 = '64:FB:01:45:98:B6';
+
 function buf(hex: string): Buffer {
   return Buffer.from(hex, 'hex');
 }
@@ -386,6 +405,94 @@ describe('SenssunIfB7Adapter (#423)', () => {
       expect(adapter.computeMetrics({ weight: 67.25, impedance: 180 }, profile)).toEqual(
         buildPayload(67.25, 0, {}, profile),
       );
+    });
+  });
+  describe('variant 01 03 28 (second Grifema GA2001 unit)', () => {
+    it('claims all captured frames on its own address and wins the registry', () => {
+      const adapter = new SenssunIfB7Adapter();
+      for (const f of [V0128_FINISHED_108_3, V0128_FINISHED_108_5, V0128_RESULT_552]) {
+        expect(adapter.matches(advert(f, MAC_0128))).toBe(true);
+      }
+      expect(resolveAdapter(advert(V0128_FINISHED_108_3, MAC_0128), adapters)?.name).toBe(
+        'Senssun IF_B7',
+      );
+    });
+
+    it('refuses the frame from another address', () => {
+      const adapter = new SenssunIfB7Adapter();
+      expect(adapter.matches(advert(V0128_FINISHED_108_3, MAC_423))).toBe(false);
+    });
+
+    it('needs the +0x20 checksum (derived: [16] 0x45 -> 0x25, the 02 03 11 rule)', () => {
+      const adapter = new SenssunIfB7Adapter();
+      const plainSum = withByte(V0128_FINISHED_108_3, 16, 0x25);
+      expect(adapter.matches(advert(plainSum, MAC_0128))).toBe(false);
+      expect(adapter.parseBroadcast(plainSum)).toBeNull();
+    });
+
+    it('does not accept the 02 03 11 header with the +0x20 checksum (derived: [0..2])', () => {
+      const adapter = new SenssunIfB7Adapter();
+      const b = buf(V0128_FINISHED_108_3);
+      b[0] = 0x02;
+      b[1] = 0x03;
+      b[2] = 0x11;
+      expect(adapter.matches(advert(b, MAC_0128))).toBe(false);
+    });
+
+    it('reads the finished frames as kg * 10', () => {
+      const adapter = new SenssunIfB7Adapter();
+      expect(adapter.parseBroadcast(buf(V0128_FINISHED_108_3))).toEqual({
+        weight: 108.3,
+        impedance: 0,
+      });
+      expect(adapter.parseBroadcast(buf(V0128_FINISHED_108_5))).toEqual({
+        weight: 108.5,
+        impedance: 0,
+      });
+      expect(adapter.parseLiveBroadcast(buf(V0128_FINISHED_108_3))).toBeNull();
+    });
+
+    it('reads the [9] = 0x01 frame as the same weight and only logs [12..13]', () => {
+      const adapter = new SenssunIfB7Adapter();
+      const debug = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+      expect(adapter.parseBroadcast(buf(V0128_RESULT_552))).toEqual({
+        weight: 108.3,
+        impedance: 0,
+      });
+      expect(debug.mock.calls.some(([m]) => String(m).includes('[12..13]=552'))).toBe(true);
+    });
+
+    it('reports the weighing frame as a live weight, not a reading (reconstructed frame)', () => {
+      const adapter = new SenssunIfB7Adapter();
+      expect(adapter.parseBroadcast(buf(V0128_WEIGHING_108_3))).toBeNull();
+      expect(adapter.parseLiveBroadcast(buf(V0128_WEIGHING_108_3))).toEqual({ weight: 108.3 });
+    });
+
+    it('completes on the finished frame', () => {
+      const adapter = new SenssunIfB7Adapter();
+      const decision = evaluateAdvertisement(adapter, advert(V0128_FINISHED_108_3, MAC_0128));
+      expect(decision).toEqual({ kind: 'complete', reading: { weight: 108.3, impedance: 0 } });
+    });
+
+    it('refuses a 0xA_ state, which is the 02 03 11 finished code (derived: [14] 0x81 -> 0xA1)', () => {
+      const adapter = new SenssunIfB7Adapter();
+      const b = withByte(V0128_FINISHED_108_3, 14, 0xa1);
+      b[16] = (b[16] + 0x20) & 0xff;
+      expect(adapter.parseBroadcast(b)).toBeNull();
+      expect(adapter.parseLiveBroadcast(b)).toBeNull();
+    });
+
+    it('refuses the lb display, not captured on this variant, and warns once (derived: [14] 0x81 -> 0x82)', () => {
+      const adapter = new SenssunIfB7Adapter();
+      const warn = vi.spyOn(bleLog, 'warn').mockImplementation(() => {});
+      const b = withByte(V0128_FINISHED_108_3, 14, 0x82);
+      b[16] = (b[16] + 1) & 0xff;
+      expect(adapter.parseBroadcast(b)).toBeNull();
+      expect(adapter.parseBroadcast(b)).toBeNull();
+      expect(warn).toHaveBeenCalledTimes(1);
+      const message = String(warn.mock.calls[0][0]);
+      expect(message).toContain('010328');
+      expect(message).toContain('Only kg is decoded');
     });
   });
 });
