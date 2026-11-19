@@ -74,10 +74,10 @@ class ConfigValidationTest(unittest.TestCase):
         # An open network has no password.
         load_main(_with(wifi_password=""))
 
-    def test_quoted_display_flags_are_refused(self):
-        # "true" in quotes would silently read as off (or, for display_topics,
-        # as on while the user meant off).
-        for key in ("screenshot", "display_topics"):
+    def test_quoted_boolean_flags_are_refused(self):
+        # "true" in quotes would silently read as off: for mqtt_tls a plaintext
+        # link, for display_topics a switch that stays on.
+        for key in ("mqtt_tls", "screenshot", "display_topics"):
             for value in ("true", "false", 1, 0, []):
                 with self.subTest(key=key, value=value):
                     with self.assertRaises(ValueError) as ctx:
@@ -85,7 +85,7 @@ class ConfigValidationTest(unittest.TestCase):
                     self.assertIn(key, str(ctx.exception))
                     self.assertIn("true or false", str(ctx.exception))
 
-    def test_display_flags_may_be_a_boolean_or_null(self):
+    def test_boolean_flags_may_be_a_boolean_or_null(self):
         for key in ("screenshot", "display_topics"):
             for value in (True, False, None):
                 with self.subTest(key=key, value=value):

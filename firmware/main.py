@@ -26,7 +26,7 @@ if board.HAS_DISPLAY:
 # strings (an open network); the rest must be non-empty.
 REQUIRED_CONFIG_KEYS = ("wifi_ssid", "wifi_password", "mqtt_broker", "mqtt_port", "device_id", "topic_prefix")
 _NON_EMPTY_CONFIG_KEYS = ("mqtt_broker", "device_id", "topic_prefix")
-_BOOL_CONFIG_KEYS = ("screenshot", "display_topics")
+_BOOL_CONFIG_KEYS = ("mqtt_tls", "screenshot", "display_topics")
 
 
 def config_problems(c):
@@ -47,7 +47,8 @@ def config_problems(c):
     # bool is an int subclass, so it is excluded explicitly.
     if "mqtt_port" not in missing and (type(port) is not int or not 0 < port < 65536):
         problems.append("mqtt_port must be a number from 1 to 65535, without quotes")
-    # A quoted "true" would otherwise read as "off" and nobody would know why.
+    # A quoted "true" would otherwise read as "off" and nobody would know why; for
+    # mqtt_tls that means a plaintext link that sends the password unencrypted.
     for k in _BOOL_CONFIG_KEYS:
         if c.get(k) is not None and type(c[k]) is not bool:
             problems.append(f"{k} must be true or false, without quotes")

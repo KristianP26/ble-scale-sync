@@ -79,7 +79,7 @@ Edit `config.json`:
 
 With `"board": null` the board is detected from the chip. Detection cannot tell a WROOM-32 from an Atom Echo, so on a WROOM-32 set `"board": "esp_wroom_32"` or pass `--board esp_wroom_32` to `flash.sh`. Other values: `atom_echo`, `esp32_s3`, `guition_4848`.
 
-`display_topics` and `screenshot` apply to boards with a display. `display_topics` (default `true`) shows the readings and export results the server sends; `false` ignores them. `screenshot` (default `false`) lets `firmware/tools/capture_screenshot.py` request a dump of the screen. Both take `true` or `false` without quotes. After a change, upload the file with `./flash.sh --app-only`. The serial console prints `Display topics: on, screenshot: off` at boot, with the values in use.
+`display_topics` and `screenshot` apply to boards with a display. `display_topics` (default `true`) shows the readings and export results the server sends; `false` ignores them. `screenshot` (default `false`) lets `firmware/tools/capture_screenshot.py` request a dump of the screen. These two and `mqtt_tls` take `true` or `false` without quotes, and the ESP32 refuses to start on a quoted value. After a change, upload the file with `./flash.sh --app-only`. The serial console prints `Display topics: on, screenshot: off` at boot.
 
 ### 3. Flash {#_2-flash}
 
