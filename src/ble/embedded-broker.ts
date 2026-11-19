@@ -4,11 +4,34 @@ import type { AuthenticateError } from 'aedes';
 import { createLogger } from '../logger.js';
 import { errMsg } from '../utils/error.js';
 import { isLoopback } from './loopback.js';
+import { attachMqttFrameGuard } from './mqtt-frame-guard.js';
+import { warnThrottled as warnThrottledTo } from './peer-input.js';
 
 const log = createLogger('MQTTBroker');
 
+/** The broker's policy warnings, once a minute per kind, under the broker's own log scope. */
+const warnThrottled = (key: string, text: string): void => warnThrottledTo(key, text, { log });
+
 /** aedes AuthErrorCode.BAD_USERNAME_OR_PASSWORD (const enum, not importable at runtime). */
 const AUTH_BAD_USER_PASS = 4;
+
+/**
+ * What the broker bounds on its own, because aedes does not (ADR D112). Fixed
+ * constants, not config keys: the shipped clients stay far below them (a scan
+ * result of 500 devices is under 600 KiB). `EmbeddedBrokerOptions.limits`
+ * exists for tests.
+ */
+export interface EmbeddedBrokerLimits {
+  /** Largest first packet (a CONNECT is under 300 B) in bytes of MQTT remaining length. */
+  maxFirstPacketBytes: number;
+  /** Largest later packet in bytes of MQTT remaining length. */
+  maxPacketBytes: number;
+}
+
+export const EMBEDDED_BROKER_LIMITS: Readonly<EmbeddedBrokerLimits> = {
+  maxFirstPacketBytes: 16_384,
+  maxPacketBytes: 1_048_576,
+};
 
 export interface EmbeddedBrokerOptions {
   /** Port to listen on. Use 0 for an OS-assigned ephemeral port (tests). */
@@ -34,6 +57,8 @@ export interface EmbeddedBrokerOptions {
    * (e.g. the ESP32 proxy) hold the connection open.
    */
   drainTimeoutMs?: number;
+  /** Overrides of `EMBEDDED_BROKER_LIMITS`, for tests. */
+  limits?: Partial<EmbeddedBrokerLimits>;
 }
 
 export interface EmbeddedBrokerHandle {
@@ -75,6 +100,7 @@ export async function startEmbeddedBroker(
   const bindHost = opts.bindHost ?? '0.0.0.0';
   const authEnabled = !!opts.username;
   const drainTimeout = opts.drainTimeoutMs ?? 10_000;
+  const limits: EmbeddedBrokerLimits = { ...EMBEDDED_BROKER_LIMITS, ...opts.limits };
 
   // The config schema already rejects this; this is the last line of defence
   // for any other caller. With a username set, authenticate() below compares
@@ -167,6 +193,22 @@ export async function startEmbeddedBroker(
     sockets.add(socket);
     socket.on('close', () => sockets.delete(socket));
     aedes.handle(socket);
+    // After handle(): the guard is a 'data' tap and needs aedes' 'readable'
+    // listener in place first (see mqtt-frame-guard.ts).
+    const peer = displayAddress(socket.remoteAddress);
+    attachMqttFrameGuard(
+      socket,
+      { firstPacketMax: limits.maxFirstPacketBytes, packetMax: limits.maxPacketBytes },
+      ({ packetIndex }) => {
+        warnThrottled(
+          packetIndex === 0 ? 'broker-oversize-first' : 'broker-oversize',
+          packetIndex === 0
+            ? `Closed a connection from ${peer}: its first packet is over the limit of ${limits.maxFirstPacketBytes} bytes.`
+            : `Closed a connection from ${peer}: it announced an MQTT packet over the limit of ${limits.maxPacketBytes} bytes.`,
+        );
+        socket.destroy();
+      },
+    );
   });
 
   await new Promise<void>((resolve, reject) => {
@@ -237,6 +279,12 @@ function internalClientHost(addr: { address: string; family: string | number } |
   if (addr.address === '0.0.0.0') return '127.0.0.1';
   if (addr.address === '::') return '[::1]';
   return ipv6 ? `[${addr.address}]` : addr.address;
+}
+
+/** Peer address for a log line: an IPv4-mapped IPv6 address shown as plain IPv4. */
+function displayAddress(address: string | undefined): string {
+  if (!address) return 'unknown address';
+  return address.startsWith('::ffff:') ? address.slice(7) : address;
 }
 
 /**

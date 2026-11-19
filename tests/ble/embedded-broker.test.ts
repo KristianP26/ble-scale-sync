@@ -1,12 +1,31 @@
-import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
+import {
+  describe,
+  it,
+  expect,
+  vi,
+  beforeAll,
+  beforeEach,
+  afterAll,
+  type MockInstance,
+} from 'vitest';
 import { networkInterfaces } from 'node:os';
+import { connect as netConnect, type Socket } from 'node:net';
 import { connectAsync, type MqttClient } from 'mqtt';
 import { startEmbeddedBroker } from '../../src/ble/embedded-broker.js';
+import { _resetPeerInput } from '../../src/ble/peer-input.js';
+
+let warnSpy: MockInstance<typeof console.warn>;
 
 // Suppress log output during tests
 beforeAll(() => {
   vi.spyOn(console, 'log').mockImplementation(() => {});
   vi.spyOn(console, 'error').mockImplementation(() => {});
+  warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+});
+
+beforeEach(() => {
+  warnSpy.mockClear();
+  _resetPeerInput();
 });
 
 afterAll(() => {
@@ -256,6 +275,199 @@ describe('startEmbeddedBroker', () => {
     }
   });
 });
+
+describe('startEmbeddedBroker packet size limits', () => {
+  // One unauthenticated socket used to be able to make the broker buffer
+  // 150 MB: aedes and mqtt-packet have no packet size option.
+  it('closes a socket whose first packet announces 32 KiB', async () => {
+    const broker = await startEmbeddedBroker({ port: 0, bindHost: '127.0.0.1' });
+    try {
+      const socket = await rawSocket(broker.port);
+      const closed = socketClosesWithin(socket, 1000);
+      socket.write(Buffer.from([0x10, 0x80, 0x80, 0x02])); // remaining length 32768
+      expect(await closed).toBe(true);
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining(
+          'Closed a connection from 127.0.0.1: its first packet is over the limit of 16384 bytes.',
+        ),
+      );
+    } finally {
+      await broker.close();
+    }
+  });
+
+  it('closes a connected client that announces a later packet over the limit', async () => {
+    const broker = await startEmbeddedBroker({
+      port: 0,
+      bindHost: '127.0.0.1',
+      limits: { maxPacketBytes: 4096 },
+    });
+    try {
+      const socket = await rawSocket(broker.port);
+      socket.write(connectPacket('size-limit'));
+      await waitForBytes(socket, 4); // CONNACK
+      const closed = socketClosesWithin(socket, 1000);
+      socket.write(Buffer.from([0x30, 0x81, 0x20])); // PUBLISH, remaining length 4097
+      expect(await closed).toBe(true);
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining(
+          'Closed a connection from 127.0.0.1: it announced an MQTT packet over the limit of 4096 bytes.',
+        ),
+      );
+    } finally {
+      await broker.close();
+    }
+  });
+
+  it('delivers a publish whose remaining length is exactly the limit', async () => {
+    const broker = await startEmbeddedBroker({
+      port: 0,
+      bindHost: '127.0.0.1',
+      limits: { maxPacketBytes: 4096 },
+    });
+    try {
+      const client = await connectAsync(broker.url, { clientId: 'size-exact', reconnectPeriod: 0 });
+      try {
+        const received = new Promise<number>((resolve) => {
+          client.on('message', (_t, payload) => resolve(payload.length));
+        });
+        await client.subscribeAsync('t');
+        // QoS 0 remaining length = 2 (topic length) + 1 (topic) + payload.
+        await client.publishAsync('t', Buffer.alloc(4096 - 3, 0x61));
+        await expect(received).resolves.toBe(4093);
+      } finally {
+        await client.endAsync(true);
+      }
+    } finally {
+      await broker.close();
+    }
+  });
+
+  it('closes the publisher of a packet one byte over the limit', async () => {
+    const broker = await startEmbeddedBroker({
+      port: 0,
+      bindHost: '127.0.0.1',
+      limits: { maxPacketBytes: 4096 },
+    });
+    try {
+      const client = await connectAsync(broker.url, { clientId: 'size-over', reconnectPeriod: 0 });
+      try {
+        const closed = closesWithin(client, 1000);
+        void client.publishAsync('t', Buffer.alloc(4096 - 2, 0x61)).catch(() => {});
+        expect(await closed).toBe(true);
+      } finally {
+        await client.endAsync(true);
+      }
+    } finally {
+      await broker.close();
+    }
+  });
+
+  // The largest scan batch the firmware sends is about 430 KiB in the worst
+  // case (firmware/tests/test_scan_payload_size.py), so the default must carry
+  // a 900 KiB publish.
+  it('delivers a 900 KiB publish with the default limits', async () => {
+    const broker = await startEmbeddedBroker({ port: 0, bindHost: '127.0.0.1' });
+    try {
+      const client = await connectAsync(broker.url, { clientId: 'size-900k', reconnectPeriod: 0 });
+      try {
+        const received = new Promise<number>((resolve) => {
+          client.on('message', (_t, payload) => resolve(payload.length));
+        });
+        await client.subscribeAsync('scan/results');
+        await client.publishAsync('scan/results', Buffer.alloc(900 * 1024, 0x61));
+        await expect(received).resolves.toBe(900 * 1024);
+      } finally {
+        await client.endAsync(true);
+      }
+    } finally {
+      await broker.close();
+    }
+  });
+
+  it('does not cut a packet whose header arrives in two writes', async () => {
+    const broker = await startEmbeddedBroker({ port: 0, bindHost: '127.0.0.1' });
+    try {
+      const socket = await rawSocket(broker.port);
+      socket.write(connectPacket('size-split'));
+      await waitForBytes(socket, 4); // CONNACK
+      const before = socket.bytesRead;
+      socket.write(Buffer.from([0xc0])); // PINGREQ type byte only
+      await new Promise((r) => setTimeout(r, 30));
+      socket.write(Buffer.from([0x00])); // its length, one tick later
+      await waitForBytes(socket, before + 2); // PINGRESP d0 00
+      expect(socket.destroyed).toBe(false);
+    } finally {
+      await broker.close();
+    }
+  });
+
+  it('logs an oversize connection once a minute', async () => {
+    const broker = await startEmbeddedBroker({ port: 0, bindHost: '127.0.0.1' });
+    try {
+      for (let i = 0; i < 3; i++) {
+        const socket = await rawSocket(broker.port);
+        const closed = socketClosesWithin(socket, 1000);
+        socket.write(Buffer.from([0x10, 0x80, 0x80, 0x02]));
+        expect(await closed).toBe(true);
+      }
+      const lines = warnSpy.mock.calls.filter((c) => String(c[0]).includes('Closed a connection'));
+      expect(lines).toHaveLength(1);
+      // Under the broker's own scope, so a log filter on it sees the policy warnings too.
+      expect(String(lines[0][0])).toContain('[MQTTBroker]');
+    } finally {
+      await broker.close();
+    }
+  });
+});
+
+/** Raw TCP socket to 127.0.0.1:`port`; data is buffered, errors are swallowed. */
+function rawSocket(port: number): Promise<Socket & { received?: Buffer }> {
+  return new Promise((resolve, reject) => {
+    const socket: Socket & { received?: Buffer } = netConnect(port, '127.0.0.1');
+    socket.received = Buffer.alloc(0);
+    socket.on('data', (d) => {
+      socket.received = Buffer.concat([socket.received ?? Buffer.alloc(0), d]);
+    });
+    socket.on('error', () => {});
+    socket.once('connect', () => resolve(socket));
+    socket.once('error', reject);
+  });
+}
+
+/** MQTT 3.1.1 CONNECT, clean session, keep alive 60, no login. */
+function connectPacket(clientId: string): Buffer {
+  const id = Buffer.from(clientId);
+  const body = Buffer.concat([
+    Buffer.from([0x00, 0x04, 0x4d, 0x51, 0x54, 0x54, 0x04, 0x02, 0x00, 0x3c]),
+    Buffer.from([id.length >> 8, id.length & 0xff]),
+    id,
+  ]);
+  return Buffer.concat([Buffer.from([0x10, body.length]), body]);
+}
+
+function waitForBytes(socket: Socket & { received?: Buffer }, total: number): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const started = Date.now();
+    const poll = (): void => {
+      if ((socket.received?.length ?? 0) >= total) return resolve();
+      if (Date.now() - started > 2000) return reject(new Error('timed out waiting for bytes'));
+      setTimeout(poll, 10);
+    };
+    poll();
+  });
+}
+
+function socketClosesWithin(socket: Socket, ms: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    if (socket.destroyed) return resolve(true);
+    const timer = setTimeout(() => resolve(false), ms);
+    socket.once('close', () => {
+      clearTimeout(timer);
+      resolve(true);
+    });
+  });
+}
 
 /** Whether the client's connection closes within `ms`. */
 function closesWithin(client: MqttClient, ms: number): Promise<boolean> {

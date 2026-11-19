@@ -168,6 +168,8 @@ ble:
 
 The schema rejects an embedded broker on a non-loopback address without `username` and `password`. If another broker already holds port 1883, startup fails: set `embedded_broker_port` to a free port such as `1884`, and the same `mqtt_port` in `config.json`. Allow the port through the host firewall.
 
+The embedded broker closes a connection whose first packet is over 16 KiB or whose later packet is over 1 MiB (a scan result of 500 devices stays under 600 KiB). It logs each of these as a warning at most once a minute.
+
 ### Home Assistant add-on
 
 In the [add-on](/guide/home-assistant-addon#bluetooth-transports), set **Bluetooth transport** to `mqtt-proxy` and pick the broker with **ESP32 proxy broker**:
