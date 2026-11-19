@@ -93,6 +93,12 @@ export interface EmbeddedBrokerOptions {
    */
   topicPrefix?: string;
   /**
+   * Device id of the ESP32 proxy. With a `topicPrefix` it limits retained
+   * publishes to `<prefix>/<deviceId>/status` and `<prefix>/<deviceId>/config`.
+   * Without it retained publishes are allowed anywhere under the prefix.
+   */
+  deviceId?: string;
+  /**
    * How long to wait for in-flight client work to drain on `close()`.
    * Defaults to 10s so shutdown is bounded even when MQTT keepalive clients
    * (e.g. the ESP32 proxy) hold the connection open.
@@ -199,6 +205,19 @@ export async function startEmbeddedBroker(
       );
     };
 
+    // aedes-persistence keeps retained messages in memory and nothing else
+    // bounds them: a client with the login could retain a topic per random
+    // name, up to the packet limit each. The only retained publishers are the
+    // ESP32 (`status`, also as its will) and the app (`config`), both on the
+    // exact topics of one device id, so everything else under the prefix is
+    // refused and the store holds two entries at most. Exact strings, not a
+    // pattern: a device id may contain '/'.
+    const deviceId = opts.deviceId;
+    const retainedAllowed =
+      deviceId !== undefined
+        ? new Set([`${topicPrefix}/${deviceId}/status`, `${topicPrefix}/${deviceId}/config`])
+        : null;
+
     aedes.authorizePublish = (client, packet, callback) => {
       if (!client) return callback(null); // broker-originated
       if (packet.topic.startsWith('$SYS/')) {
@@ -207,6 +226,14 @@ export async function startEmbeddedBroker(
       if (!isAllowed(packet.topic, false)) {
         return callback(
           new BrokerPolicyError('acl', `publish rejected: topic outside "${topicPrefix}"`),
+        );
+      }
+      if (packet.retain && retainedAllowed && !retainedAllowed.has(packet.topic)) {
+        return callback(
+          new BrokerPolicyError(
+            'acl',
+            `publish rejected: retained messages are only allowed on ${topicPrefix}/${deviceId}/status and ${topicPrefix}/${deviceId}/config`,
+          ),
         );
       }
       callback(null);

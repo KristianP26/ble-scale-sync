@@ -694,6 +694,150 @@ describe('startEmbeddedBroker topic ACL', () => {
   });
 });
 
+describe('startEmbeddedBroker retained messages', () => {
+  const start = (deviceId?: string) =>
+    startEmbeddedBroker({ port: 0, bindHost: '127.0.0.1', topicPrefix: 'ble-proxy', deviceId });
+
+  /** Publishes retained from one client, then reads what a late subscriber gets. */
+  async function retainedFor(
+    url: string,
+    topic: string,
+    payload: string,
+  ): Promise<{ closed: boolean; replayed: string[] }> {
+    const publisher = await connectAsync(url, {
+      clientId: `ret-pub-${Math.random().toString(16).slice(2)}`,
+      reconnectPeriod: 0,
+    });
+    const closed = closesWithin(publisher, 400);
+    void publisher.publishAsync(topic, payload, { retain: true }).catch(() => {});
+    const wasClosed = await closed;
+    await publisher.endAsync(true);
+
+    const replayed: string[] = [];
+    const late = await connectAsync(url, {
+      clientId: `ret-sub-${Math.random().toString(16).slice(2)}`,
+      reconnectPeriod: 0,
+    });
+    late.on('message', (t, p) => replayed.push(`${t}=${p.toString()}`));
+    await late.subscribeAsync('ble-proxy/#');
+    await new Promise((r) => setTimeout(r, 100));
+    await late.endAsync(true);
+    return { closed: wasClosed, replayed };
+  }
+
+  it('stores a retained status and config of the device for a late subscriber', async () => {
+    const broker = await start('esp');
+    try {
+      const status = await retainedFor(broker.url, 'ble-proxy/esp/status', 'online');
+      expect(status.closed).toBe(false);
+      expect(status.replayed).toContain('ble-proxy/esp/status=online');
+      const config = await retainedFor(broker.url, 'ble-proxy/esp/config', '{"a":1}');
+      expect(config.closed).toBe(false);
+      expect(config.replayed).toContain('ble-proxy/esp/config={"a":1}');
+    } finally {
+      await broker.close();
+    }
+  });
+
+  it('lets the device clear its retained status with an empty payload', async () => {
+    const broker = await start('esp');
+    try {
+      await retainedFor(broker.url, 'ble-proxy/esp/status', 'online');
+      const cleared = await retainedFor(broker.url, 'ble-proxy/esp/status', '');
+      expect(cleared.closed).toBe(false);
+      expect(cleared.replayed.filter((m) => m.startsWith('ble-proxy/esp/status'))).toEqual([]);
+    } finally {
+      await broker.close();
+    }
+  });
+
+  it('disconnects a client that retains any other topic under the prefix', async () => {
+    const broker = await start('esp');
+    try {
+      expect((await retainedFor(broker.url, 'ble-proxy/esp/other', 'x')).closed).toBe(true);
+      // Another device name: this is what separates the exact topics from a
+      // pattern, which would let a client fill the store with names of its own.
+      const rogue = await retainedFor(broker.url, 'ble-proxy/rogue/status', 'x');
+      expect(rogue.closed).toBe(true);
+      expect(rogue.replayed).toEqual([]);
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining(
+          'publish rejected: retained messages are only allowed on ble-proxy/esp/status and ble-proxy/esp/config',
+        ),
+      );
+    } finally {
+      await broker.close();
+    }
+  });
+
+  it('still allows a publish that is not retained on any topic under the prefix', async () => {
+    const broker = await start('esp');
+    try {
+      expect(await aclRefuses(broker.url, 'publish', 'ble-proxy/esp/other')).toBe(false);
+      expect(await aclRefuses(broker.url, 'publish', 'ble-proxy/esp/status')).toBe(false);
+    } finally {
+      await broker.close();
+    }
+  });
+
+  it('works for a device id that contains a slash', async () => {
+    const broker = await start('home/esp');
+    try {
+      const status = await retainedFor(broker.url, 'ble-proxy/home/esp/status', 'online');
+      expect(status.closed).toBe(false);
+      expect(status.replayed).toContain('ble-proxy/home/esp/status=online');
+      const config = await retainedFor(broker.url, 'ble-proxy/home/esp/config', '{}');
+      expect(config.closed).toBe(false);
+      expect((await retainedFor(broker.url, 'ble-proxy/home/other', 'x')).closed).toBe(true);
+    } finally {
+      await broker.close();
+    }
+  });
+
+  it('publishes the retained will of the device on an unclean disconnect', async () => {
+    const broker = await start('esp');
+    try {
+      const watcher = await connectAsync(broker.url, {
+        clientId: 'will-watch',
+        reconnectPeriod: 0,
+      });
+      const offline = new Promise<void>((resolve) => {
+        watcher.on('message', (t, p) => {
+          if (t === 'ble-proxy/esp/status' && p.toString() === 'offline') resolve();
+        });
+      });
+      await watcher.subscribeAsync('ble-proxy/esp/status');
+      const device = await connectAsync(broker.url, {
+        clientId: 'esp',
+        reconnectPeriod: 0,
+        will: {
+          topic: 'ble-proxy/esp/status',
+          payload: Buffer.from('offline'),
+          qos: 1,
+          retain: true,
+        },
+      });
+      device.stream.destroy();
+      await expect(offline).resolves.toBeUndefined();
+      await watcher.endAsync(true);
+    } finally {
+      await broker.close();
+    }
+  });
+
+  // Without a device id the rule is off: direct callers keep today's behavior.
+  it('allows a retained publish anywhere under the prefix when no device id is given', async () => {
+    const broker = await start();
+    try {
+      const other = await retainedFor(broker.url, 'ble-proxy/esp/other', 'x');
+      expect(other.closed).toBe(false);
+      expect(other.replayed).toContain('ble-proxy/esp/other=x');
+    } finally {
+      await broker.close();
+    }
+  });
+});
+
 describe('startEmbeddedBroker keep alive limit', () => {
   const connectWith = (url: string, keepalive: number, clientId: string): Promise<MqttClient> =>
     connectAsync(url, { clientId, keepalive, reconnectPeriod: 0, connectTimeout: 2000 });

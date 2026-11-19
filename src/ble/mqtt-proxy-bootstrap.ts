@@ -35,6 +35,7 @@ export async function bootstrapMqttProxy(
     username: mqttProxy.username,
     password: mqttProxy.password,
     topicPrefix: mqttProxy.topic_prefix,
+    deviceId: mqttProxy.device_id,
   });
 
   return {

@@ -41,6 +41,31 @@ describe('bootstrapMqttProxy', () => {
     }
   });
 
+  it('limits retained publishes to the device of the config', async () => {
+    const result = await bootstrapMqttProxy(baseConfig({ device_id: 'esp-a' }));
+    try {
+      const { connectAsync } = await import('mqtt');
+      const client = await connectAsync(result.mqttProxy.broker_url!, {
+        clientId: 'retained-check',
+        clean: true,
+        reconnectPeriod: 0,
+      });
+      const closed = new Promise<boolean>((resolve) => {
+        const timer = setTimeout(() => resolve(false), 500);
+        client.once('close', () => {
+          clearTimeout(timer);
+          resolve(true);
+        });
+      });
+      // Another device's status: the retained rule is keyed to `device_id`.
+      void client.publishAsync('ble-proxy/esp-b/status', 'x', { retain: true }).catch(() => {});
+      expect(await closed).toBe(true);
+      await client.endAsync(true);
+    } finally {
+      if (result.embeddedBroker) await result.embeddedBroker.close();
+    }
+  });
+
   it('propagates credentials from config to the embedded broker', async () => {
     const mqttProxy = baseConfig({ username: 'alice', password: 'secret' });
     const result = await bootstrapMqttProxy(mqttProxy);
