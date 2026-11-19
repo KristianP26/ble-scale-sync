@@ -92,11 +92,26 @@ describe('startEmbeddedBroker', () => {
   });
 
   // Last line of defence behind the config schema: a LAN-exposed broker with a
-  // username but no password would accept that username with an empty password.
+  // username but no password would accept that username with an empty password,
+  // and one with no login lets anyone on the network in.
   it('refuses to start on a non-loopback bind with a username but no password', async () => {
     await expect(
       startEmbeddedBroker({ port: 0, bindHost: '0.0.0.0', username: 'user' }),
     ).rejects.toThrow(/password/);
+  });
+
+  it('refuses to start on a non-loopback bind with no login at all', async () => {
+    await expect(startEmbeddedBroker({ port: 0, bindHost: '0.0.0.0' })).rejects.toThrow(
+      /needs mqtt_proxy\.username and mqtt_proxy\.password/,
+    );
+    await expect(
+      startEmbeddedBroker({ port: 0, bindHost: '0.0.0.0', username: null, password: 'pass' }),
+    ).rejects.toThrow(/needs mqtt_proxy\.username/);
+  });
+
+  it('still starts on a loopback bind with no password', async () => {
+    const broker = await startEmbeddedBroker({ port: 0, bindHost: '127.0.0.1', username: 'user' });
+    await broker.close();
   });
 
   it('accepts correct credentials when authentication is configured', async () => {
@@ -273,7 +288,12 @@ describe('startEmbeddedBroker', () => {
   );
 
   it('keeps the IPv4 loopback URL for a wildcard bind', async () => {
-    const broker = await startEmbeddedBroker({ port: 0, bindHost: '0.0.0.0' });
+    const broker = await startEmbeddedBroker({
+      port: 0,
+      bindHost: '0.0.0.0',
+      username: 'user',
+      password: 'pass',
+    });
     try {
       expect(broker.url).toBe(`mqtt://127.0.0.1:${broker.port}`);
     } finally {

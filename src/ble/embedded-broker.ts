@@ -144,22 +144,14 @@ export async function startEmbeddedBroker(
   const limits: EmbeddedBrokerLimits = { ...EMBEDDED_BROKER_LIMITS, ...opts.limits };
 
   // The config schema already rejects this; this is the last line of defence
-  // for any other caller. With a username set, authenticate() below compares
-  // the password against '' when none is configured, so any LAN client that
-  // knows the username would get in with an empty password.
-  if (authEnabled && !opts.password && !isLoopback(bindHost)) {
+  // for any other caller. Without a login anyone on the network can publish to
+  // and subscribe from the broker, and with a username but no password
+  // authenticate() below compares the password against '', so any client that
+  // knows the username would get in. A loopback bind may run without either.
+  if (!isLoopback(bindHost) && !(opts.username && opts.password)) {
     throw new Error(
-      `Embedded broker on ${bindHost} has mqtt_proxy.username but no password. ` +
-        'Set mqtt_proxy.password, or change embedded_broker_bind to 127.0.0.1.',
-    );
-  }
-
-  if (!authEnabled && !isLoopback(bindHost)) {
-    log.warn(
-      `Embedded broker is binding ${bindHost} without authentication. Anyone on this ` +
-        `network can publish to and subscribe from it. Set mqtt_proxy.username + ` +
-        `mqtt_proxy.password in config.yaml, or change embedded_broker_bind to 127.0.0.1 ` +
-        `if the ESP32 runs on this machine.`,
+      `Embedded broker on ${bindHost} needs mqtt_proxy.username and mqtt_proxy.password. ` +
+        'Set both, or change embedded_broker_bind to 127.0.0.1.',
     );
   }
 

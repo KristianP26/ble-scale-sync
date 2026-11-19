@@ -16,8 +16,8 @@ export interface MqttProxyBootstrapResult {
  * port and the returned config's `broker_url` points at the loopback listener.
  *
  * Note on credentials: `username` and `password` are forwarded verbatim. A
- * username without a password is rejected for a non-loopback bind, by the
- * config schema and again by startEmbeddedBroker.
+ * non-loopback bind needs both, which the config schema requires and
+ * startEmbeddedBroker enforces again for any other caller.
  *
  * The caller owns the embedded broker handle and must call `close()` during
  * shutdown.
