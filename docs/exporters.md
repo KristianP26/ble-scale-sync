@@ -9,6 +9,8 @@ Every reading goes to all enabled exporters in parallel. Exporters under `global
 
 A run reports an error only when every exporter fails. Only targets that can record a past measurement get retries and weigh-ins replayed from the scale's memory, see [Historical readings](#historical-readings) and the [retry setting](/guide/configuration#runtime).
 
+Webhook, InfluxDB, Ntfy, Telegram, Wger, HealthLog, Dreeve, Intervals.icu, Runalyze and Strava never follow a redirect when they send a reading, because it would send the request and its headers to the new address. A 302 or 303 answer to the reading counts as delivered: a server such as a Google Apps Script web app answers that way after it stored the data. A 301, 307 or 308 fails with `HTTP 308: redirected to https://example.com, which is not followed` and is not retried. Set the URL to the address the server redirects to; `curl -sI <url>` prints it in the `location` header.
+
 | Target | What it does |
 | ------ | ------------ |
 | <DocIcon id="garmin.png" /> [Garmin Connect](#garmin) | Uploads weight and body composition, no phone app |

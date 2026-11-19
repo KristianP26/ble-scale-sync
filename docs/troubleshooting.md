@@ -236,6 +236,10 @@ A frozen event loop also stops the [watchdog](#the-app-exits-after-repeated-scan
 - `Garmin upload needs Python 3.12 or newer`: install Python 3.12 or newer on the host.
 - Login fails from a server: Garmin can block cloud and VPN addresses. Log in from another network and copy the token directory, see [Garmin Connect](/exporters#garmin). In the Home Assistant add-on, see [the MFA workaround](/guide/home-assistant-addon#mfa-workaround).
 
+### An export fails with `redirected to ..., which is not followed` {#export-redirected}
+
+The server answers the export with a 301, 307 or 308 redirect, most often from `http://` to `https://`, and the exporter does not follow it. Run `curl -sI <your url>`, copy the `location` value into `url` or `base_url`, and restart. The next export logs its success line, for example `Webhook delivered (HTTP 200).` A 302 or 303 answer to a reading is not an error: the export counts as delivered and the log says `answered HTTP 302, counted as delivered`. See [Exporters](/exporters).
+
 ### MQTT connection hangs or fails
 
 Use `mqtt://` for a plain connection and `mqtts://` for TLS: `mqtt://` on the TLS port 8883 hangs. Then check the broker URL, username and password. See [MQTT](/exporters#mqtt).

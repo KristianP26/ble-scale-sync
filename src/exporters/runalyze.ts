@@ -4,7 +4,7 @@ import type { Exporter, ExportContext, ExportResult } from '../interfaces/export
 import type { ExporterSchema } from '../interfaces/exporter-schema.js';
 import type { RunalyzeConfig } from './config.js';
 import { NonRetryableError } from '../utils/retry.js';
-import { sendWithRetry } from './http.js';
+import { sendWithRetry, fetchNoRedirect } from './http.js';
 import { errMsg } from '../utils/error.js';
 
 const log = createLogger('Runalyze');
@@ -122,7 +122,7 @@ export class RunalyzeExporter implements Exporter {
 
   async healthcheck(): Promise<ExportResult> {
     try {
-      const response = await fetch(METRIC_PATH, {
+      const response = await fetchNoRedirect(METRIC_PATH, {
         headers: { token: this.config.token },
         signal: AbortSignal.timeout(5000),
       });

@@ -5,7 +5,7 @@ import type { ExporterSchema } from '../interfaces/exporter-schema.js';
 import type { WgerConfig } from './config.js';
 import { toLocalDate } from './intervals.js';
 import { withRetry, httpError, NonRetryableError } from '../utils/retry.js';
-import { sendWithRetry, probe } from './http.js';
+import { sendWithRetry, probe, fetchNoRedirect } from './http.js';
 import { errMsg } from '../utils/error.js';
 
 const log = createLogger('Wger');
@@ -181,7 +181,7 @@ export class WgerExporter implements Exporter {
    * `kg` or `lb` is refused rather than guessed at.
    */
   private async fetchWeightUnit(): Promise<WgerWeightUnit> {
-    const response = await fetch(`${this.apiBase}/userprofile/`, {
+    const response = await fetchNoRedirect(`${this.apiBase}/userprofile/`, {
       headers: this.headers(),
       signal: AbortSignal.timeout(10_000),
     });
@@ -205,7 +205,7 @@ export class WgerExporter implements Exporter {
     let url: string | null = `${this.apiBase}/measurement-category/`;
     let pages = 0;
     while (url && pages < 50) {
-      const response = await fetch(url, {
+      const response = await fetchNoRedirect(url, {
         headers: this.headers(),
         signal: AbortSignal.timeout(10_000),
       });
@@ -222,7 +222,7 @@ export class WgerExporter implements Exporter {
 
     for (const cat of MEASUREMENT_CATEGORIES) {
       if (map.has(cat.name)) continue;
-      const response = await fetch(`${this.apiBase}/measurement-category/`, {
+      const response = await fetchNoRedirect(`${this.apiBase}/measurement-category/`, {
         method: 'POST',
         headers: this.headers(),
         body: JSON.stringify({ name: cat.name, unit: cat.unit }),

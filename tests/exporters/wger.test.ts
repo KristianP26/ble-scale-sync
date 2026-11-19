@@ -301,3 +301,61 @@ describe('WgerExporter', () => {
     });
   });
 });
+
+describe('redirects', () => {
+  const redirect = (status: number, location = 'https://other.example/x') =>
+    new Response(null, { status, headers: { location } });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    routeHappy();
+  });
+
+  it('asks for every request not to follow a redirect', async () => {
+    await new WgerExporter(config).export(sample);
+    expect(mockFetch.mock.calls.length).toBeGreaterThan(3);
+    for (const [, init] of mockFetch.mock.calls) {
+      expect(init.redirect).toBe('manual');
+    }
+  });
+
+  it('reports a redirect on the profile read and does not repeat it', async () => {
+    mockFetch.mockResolvedValue(redirect(308));
+    const result = await new WgerExporter(config).export(sample);
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('HTTP 308: redirected to https://other.example');
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports a redirect on the weight entry and sends nothing to the target', async () => {
+    mockFetch.mockImplementation((url: string) =>
+      Promise.resolve(url.endsWith('/weightentry/') ? redirect(307) : res({ weight_unit: 'kg' })),
+    );
+    const result = await new WgerExporter(config).export(sample);
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('HTTP 307: redirected to https://other.example');
+    expect(calls('POST', '/weightentry/')).toHaveLength(1);
+  });
+
+  it('keeps the weight and skips the measurements when the category list redirects', async () => {
+    mockFetch.mockImplementation((url: string, init?: { method?: string }) => {
+      const method = init?.method ?? 'GET';
+      if (url.endsWith('/measurement-category/') && method === 'GET') {
+        return Promise.resolve(redirect(301));
+      }
+      if (url.endsWith('/weightentry/')) return Promise.resolve(res({ id: 1 }, { status: 201 }));
+      return Promise.resolve(res({ weight_unit: 'kg' }));
+    });
+    const result = await new WgerExporter(config).export(sample);
+    expect(result.success).toBe(true);
+    expect(calls('POST', '/measurement/')).toHaveLength(0);
+    expect(calls('POST', '/measurement-category/')).toHaveLength(0);
+  });
+
+  it('reports a redirect on the health check', async () => {
+    mockFetch.mockResolvedValue(redirect(302));
+    const result = await new WgerExporter(config).healthcheck();
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('HTTP 302: redirected to https://other.example');
+  });
+});

@@ -271,6 +271,33 @@ describe('StravaExporter', () => {
     expect(result.error).toContain('Token refresh failed');
   });
 
+  it('does not follow a redirect of the upload', async () => {
+    mockFetch.mockResolvedValue(
+      new Response(null, { status: 308, headers: { location: 'https://other.example/x' } }),
+    );
+
+    const result = await new StravaExporter(defaultConfig).export(samplePayload);
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('HTTP 308: redirected to https://other.example');
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect(mockFetch.mock.calls[0][1].redirect).toBe('manual');
+  });
+
+  it('does not replay the client secret to a redirect of the token refresh', async () => {
+    vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(expiredTokens));
+    mockFetch.mockResolvedValue(
+      new Response(null, { status: 307, headers: { location: 'https://other.example/x' } }),
+    );
+
+    const result = await new StravaExporter(defaultConfig).export(samplePayload);
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('HTTP 307: redirected to https://other.example');
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect(mockFetch.mock.calls[0][1].redirect).toBe('manual');
+  });
+
   it('retries on failure (3 total attempts)', async () => {
     mockFetch.mockRejectedValue(new Error('network error'));
 
