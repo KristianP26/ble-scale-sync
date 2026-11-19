@@ -30,11 +30,12 @@ export interface BrokerCert {
 
 /**
  * Write a certificate for `cn` (also its DNS name) and 127.0.0.1 into `dir`,
- * which must exist and be empty.
+ * which must exist and be empty. `enddate` (`YYYYMMDDHHMMSSZ`) is for the
+ * expiry tests; the default is the end date of the documented recipe.
  */
 export function makeBrokerCert(
   dir: string,
-  { cn = 'localhost' }: { cn?: string } = {},
+  { cn = 'localhost', enddate = '21001231235959Z' }: { cn?: string; enddate?: string } = {},
 ): BrokerCert {
   writeFileSync(
     join(dir, 'ca.cnf'),
@@ -98,7 +99,7 @@ export function makeBrokerCert(
     '-startdate',
     '19600101000000Z',
     '-enddate',
-    '21001231235959Z',
+    enddate,
     '-extensions',
     'ext',
     '-notext',

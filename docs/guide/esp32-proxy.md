@@ -237,6 +237,8 @@ Without TLS the broker's login and every reading cross the network in plain text
 
 Set both keys or neither, and not together with `broker_url`. A missing, unreadable, encrypted or mismatched file stops startup with a message that names the file, and the broker never falls back to plain MQTT. `ble-scale-sync validate` (`npm run validate` from a clone) reads the files on the machine it runs on, so run it inside the container when the paths are container paths.
 
+The broker re-reads both files once a day, and a renewed certificate applies to new connections without a restart. It logs the end date of the certificate at start and warns when it is less than 30 days away or past. The certificate of the recipe runs until 2100, so the warning does not fire for it.
+
 With Docker, add `'8883:8883'` under `ports` and `./certs:/certs:ro` under `volumes` of the service, and use `/certs/...` paths. The app runs as user `node` (uid 1000), so that user must be able to read the key file.
 
 A certificate from a public CA starts today, and the ESP32 cannot verify it. With such a certificate set `mqtt_tls: true` without `mqtt_ca_file`: the link is encrypted and the broker is not verified.

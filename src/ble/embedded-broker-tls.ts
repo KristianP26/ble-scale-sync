@@ -103,6 +103,25 @@ export function loadBrokerTls(files: BrokerTlsFiles): BrokerTlsMaterial {
   return { cert, key, validTo: x509.validToDate };
 }
 
+/** A certificate with fewer days left than this is reported as `soon`. */
+export const CERT_EXPIRY_WARN_DAYS = 30;
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+export type CertExpiry = 'ok' | 'soon' | 'expired';
+
+/** Where a certificate that ends at `validTo` stands at `now`. */
+export function describeCertExpiry(validTo: Date, now: Date = new Date()): CertExpiry {
+  const msLeft = validTo.getTime() - now.getTime();
+  if (msLeft <= 0) return 'expired';
+  return msLeft < CERT_EXPIRY_WARN_DAYS * DAY_MS ? 'soon' : 'ok';
+}
+
+/** Whole days from `now` to `validTo`, rounded down; never negative. */
+export function daysUntil(validTo: Date, now: Date = new Date()): number {
+  return Math.max(0, Math.floor((validTo.getTime() - now.getTime()) / DAY_MS));
+}
+
 /** The files of a config, `~/` expanded, or null when it sets none. */
 export function brokerTlsFilesOf(
   mqttProxy: Pick<MqttProxyConfig, 'embedded_broker_tls_cert' | 'embedded_broker_tls_key'>,

@@ -1,11 +1,17 @@
 import { createServer, type Server, type Socket } from 'node:net';
-import { createServer as createTlsServer } from 'node:tls';
+import { createServer as createTlsServer, type Server as TlsServer } from 'node:tls';
 import { timingSafeEqual } from 'node:crypto';
 import type { AuthenticateError } from 'aedes';
 import { createLogger } from '../logger.js';
 import { errMsg } from '../utils/error.js';
 import { isLoopback } from './loopback.js';
-import { loadBrokerTls, type BrokerTlsFiles } from './embedded-broker-tls.js';
+import {
+  daysUntil,
+  describeCertExpiry,
+  loadBrokerTls,
+  type BrokerTlsFiles,
+  type BrokerTlsMaterial,
+} from './embedded-broker-tls.js';
 import { attachMqttFrameGuard } from './mqtt-frame-guard.js';
 import { warnThrottled as warnThrottledTo } from './peer-input.js';
 
@@ -73,6 +79,8 @@ export interface EmbeddedBrokerLimits {
    * The same margin as `connectTimeoutMs`, for the same slow-radio reason.
    */
   tlsHandshakeTimeoutMs: number;
+  /** How often the TLS files are read again to pick up a renewed certificate. */
+  tlsCheckIntervalMs: number;
 }
 
 export const EMBEDDED_BROKER_LIMITS: Readonly<EmbeddedBrokerLimits> = {
@@ -83,6 +91,7 @@ export const EMBEDDED_BROKER_LIMITS: Readonly<EmbeddedBrokerLimits> = {
   maxKeepaliveSec: 300,
   maxInternalConnections: 16,
   tlsHandshakeTimeoutMs: 15_000,
+  tlsCheckIntervalMs: 86_400_000,
 };
 
 export interface EmbeddedBrokerOptions {
@@ -138,6 +147,11 @@ export interface EmbeddedBrokerHandle {
   tls: boolean;
   /** Stop accepting new connections and close the broker. Idempotent. */
   close: () => Promise<void>;
+  /**
+   * One step of the daily certificate check: re-read the TLS files and apply a
+   * changed pair that loads. `unchanged` also when the broker serves plain MQTT.
+   */
+  reloadTls: () => 'unchanged' | 'reloaded' | 'failed';
 }
 
 /** Timing-safe string comparison. Handles length mismatch without leaking it. */
@@ -363,11 +377,12 @@ export async function startEmbeddedBroker(
   const servers: Server[] = [];
   let publicServer: Server;
   let internalServer: Server | null = null;
+  let tlsServer: TlsServer | null = null;
   if (tlsMaterial) {
     // The LAN listener speaks TLS only; there is no plaintext fallback on it.
     // The app's own client uses a second listener on the loopback, which the LAN
     // cannot reach, so it needs no certificate that names 127.0.0.1.
-    const tlsServer = createTlsServer(
+    const server = createTlsServer(
       {
         cert: tlsMaterial.cert,
         key: tlsMaterial.key,
@@ -376,6 +391,7 @@ export async function startEmbeddedBroker(
       },
       serve,
     );
+    tlsServer = server;
     // Node does not close a socket whose handshake timed out or failed, so
     // without the destroy() an idle socket would stay open for ever.
     tlsServer.on('tlsClientError', (err, socket) => {
@@ -486,15 +502,88 @@ export async function startEmbeddedBroker(
     );
   }
 
+  // The pair the listener hands to new handshakes. A changed pair is detected
+  // against this, not against what the previous check read: a renewal job that
+  // has written the new certificate but not yet the new key fails once, and the
+  // next check must still see the pair as new.
+  let applied = tlsMaterial;
+
+  const reportExpiry = (material: BrokerTlsMaterial, atStart: boolean): void => {
+    const state = describeCertExpiry(material.validTo);
+    const date = material.validTo.toISOString().slice(0, 10);
+    if (state === 'expired') {
+      log.warn(
+        `Embedded broker TLS certificate expired on ${date}. Devices that check the date will refuse it.`,
+      );
+    } else if (state === 'soon') {
+      log.warn(
+        `Embedded broker TLS certificate expires in ${daysUntil(material.validTo)} days (${date}).`,
+      );
+    } else if (atStart) {
+      log.info(
+        `Embedded broker TLS certificate expires in ${daysUntil(material.validTo)} days (${date}).`,
+      );
+    }
+  };
+
+  /**
+   * Read both files again and, when the pair changed and loads, use it for new
+   * handshakes. Connections that are open keep the certificate they were set up
+   * with. A pair that does not load leaves the old one in place.
+   */
+  const reloadTls = (): 'unchanged' | 'reloaded' | 'failed' => {
+    if (!tlsServer || !opts.tls || !applied) return 'unchanged';
+    let next: BrokerTlsMaterial;
+    try {
+      next = loadBrokerTls(opts.tls);
+    } catch (err) {
+      log.warn(
+        `Embedded broker TLS files changed but cannot be loaded (${errMsg(err)}); ` +
+          'keeping the previous certificate.',
+      );
+      return 'failed';
+    }
+    if (next.cert.equals(applied.cert) && next.key.equals(applied.key)) return 'unchanged';
+    try {
+      // Replaces the whole context, so the options are passed again.
+      tlsServer.setSecureContext({ cert: next.cert, key: next.key, minVersion: 'TLSv1.2' });
+    } catch (err) {
+      // Runs from a timer: an exception here would end the process, not skip a check.
+      log.warn(
+        `Embedded broker TLS certificate cannot be applied (${errMsg(err)}); ` +
+          'keeping the previous certificate.',
+      );
+      return 'failed';
+    }
+    applied = next;
+    log.info(
+      `Embedded broker TLS certificate reloaded (valid until ${next.validTo.toISOString().slice(0, 10)}).`,
+    );
+    return 'reloaded';
+  };
+
+  let checkTimer: NodeJS.Timeout | null = null;
+  if (tlsMaterial) {
+    reportExpiry(tlsMaterial, true);
+    // A renewed certificate (a renewal job that rewrites the files, say) would
+    // otherwise reach the broker only at the next restart.
+    checkTimer = setInterval(() => {
+      reloadTls();
+      if (applied) reportExpiry(applied, false);
+    }, limits.tlsCheckIntervalMs);
+    checkTimer.unref();
+  }
+
   let closed = false;
   const close = async (): Promise<void> => {
     if (closed) return;
     closed = true;
+    if (checkTimer) clearInterval(checkTimer);
     await shutdown();
     log.info('Embedded MQTT broker stopped');
   };
 
-  return { url, port: actualPort, tls: tlsMaterial !== null, close };
+  return { url, port: actualPort, tls: tlsMaterial !== null, close, reloadTls };
 }
 
 /**

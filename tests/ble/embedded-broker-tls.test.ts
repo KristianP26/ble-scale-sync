@@ -9,24 +9,27 @@ import {
   type MockInstance,
 } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, connect as netConnect, type Socket } from 'node:net';
+import { connect as tlsConnect, Server as TlsServer } from 'node:tls';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { X509Certificate } from 'node:crypto';
 import { connectAsync, type MqttClient } from 'mqtt';
 import { startEmbeddedBroker, type EmbeddedBrokerOptions } from '../../src/ble/embedded-broker.js';
 import { _resetPeerInput } from '../../src/ble/peer-input.js';
+import { describeCertExpiry } from '../../src/ble/embedded-broker-tls.js';
 import { hasOpenssl, makeBrokerCert, type BrokerCert } from '../helpers/broker-cert.js';
 
 let warnSpy: MockInstance<typeof console.warn>;
+let logSpy: MockInstance<typeof console.log>;
 let root: string;
 let certA: BrokerCert;
 let certB: BrokerCert;
 let encryptedKey: string;
 
 beforeAll(() => {
-  vi.spyOn(console, 'log').mockImplementation(() => {});
+  logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
   vi.spyOn(console, 'error').mockImplementation(() => {});
   warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
   if (!hasOpenssl()) return;
@@ -45,6 +48,7 @@ beforeAll(() => {
 
 beforeEach(() => {
   warnSpy.mockClear();
+  logSpy.mockClear();
   _resetPeerInput();
 });
 
@@ -415,5 +419,247 @@ describe.skipIf(!hasOpenssl())('embedded broker TLS files', () => {
       tls: { certFile: certA.cert, keyFile: certA.key },
     });
     await broker.close();
+  });
+});
+
+describe('describeCertExpiry', () => {
+  const now = new Date('2026-11-19T12:00:00Z');
+  const inDays = (days: number): Date => new Date(now.getTime() + days * 86_400_000);
+
+  it('is ok with 30 days or more left, soon below that, expired at the end date', () => {
+    expect(describeCertExpiry(inDays(365), now)).toBe('ok');
+    expect(describeCertExpiry(inDays(30), now)).toBe('ok');
+    expect(describeCertExpiry(inDays(29), now)).toBe('soon');
+    expect(describeCertExpiry(inDays(1), now)).toBe('soon');
+    expect(describeCertExpiry(inDays(0), now)).toBe('expired');
+    expect(describeCertExpiry(inDays(-1), now)).toBe('expired');
+  });
+});
+
+describe.skipIf(!hasOpenssl())('embedded broker certificate reload and expiry', () => {
+  let live: BrokerCert;
+  let seq = 0;
+
+  /** A directory the broker reads its pair from, filled from `from`. */
+  function liveFiles(from: BrokerCert): BrokerCert {
+    const dir = join(root, `live-${seq++}`);
+    mkdirSync(dir);
+    const files = { cert: join(dir, 'live.pem'), key: join(dir, 'live.key') };
+    copyFileSync(from.cert, files.cert);
+    copyFileSync(from.key, files.key);
+    return files;
+  }
+
+  const swap = (to: Partial<BrokerCert>): void => {
+    if (to.cert) copyFileSync(to.cert, live.cert);
+    if (to.key) copyFileSync(to.key, live.key);
+  };
+
+  /** Name in the certificate a new handshake on `port` is served. */
+  function servedCn(port: number, ca: BrokerCert, servername: string): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const socket = tlsConnect({
+        host: '127.0.0.1',
+        port,
+        servername,
+        ca: readFileSync(ca.cert),
+        rejectUnauthorized: false,
+      });
+      socket.once('secureConnect', () => {
+        const cn = String(socket.getPeerCertificate().subject.CN);
+        socket.destroy();
+        resolve(cn);
+      });
+      socket.once('error', reject);
+    });
+  }
+
+  const startLive = (extra: Partial<EmbeddedBrokerOptions> = {}) => {
+    live = liveFiles(certA);
+    return startEmbeddedBroker({
+      port: 0,
+      bindHost: '127.0.0.1',
+      ...LOGIN,
+      tls: { certFile: live.cert, keyFile: live.key },
+      ...extra,
+    });
+  };
+
+  it('serves the new certificate to new connections and leaves an open one alone', async () => {
+    const broker = await startLive();
+    try {
+      const open = await tlsClient(broker.port, certA, 'open-before');
+      expect(await servedCn(broker.port, certA, 'localhost')).toBe('localhost');
+
+      swap(certB);
+      expect(broker.reloadTls()).toBe('reloaded');
+
+      expect(await servedCn(broker.port, certB, 'other.example')).toBe('other.example');
+      expect(open.connected).toBe(true);
+      await open.publishAsync('still/open', 'x');
+      await open.endAsync(true);
+      expect(logSpy).toHaveBeenCalledWith(
+        expect.stringContaining(
+          'Embedded broker TLS certificate reloaded (valid until 2100-12-31)',
+        ),
+      );
+    } finally {
+      await broker.close();
+    }
+  });
+
+  it('keeps the old certificate and warns when the new files do not load', async () => {
+    const broker = await startLive();
+    try {
+      writeFileSync(live.cert, 'not a certificate');
+      expect(broker.reloadTls()).toBe('failed');
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringMatching(
+          /files changed but cannot be loaded .*keeping the previous certificate/,
+        ),
+      );
+      expect(await servedCn(broker.port, certA, 'localhost')).toBe('localhost');
+    } finally {
+      await broker.close();
+    }
+  });
+
+  it('keeps the old certificate and warns when the new context cannot be applied', async () => {
+    const broker = await startLive();
+    const apply = vi.spyOn(TlsServer.prototype, 'setSecureContext').mockImplementation(() => {
+      throw new Error('context refused');
+    });
+    try {
+      swap(certB);
+      expect(() => broker.reloadTls()).not.toThrow();
+      expect(broker.reloadTls()).toBe('failed');
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringMatching(/cannot be applied \(context refused\).*keeping the previous/),
+      );
+      expect(await servedCn(broker.port, certA, 'localhost')).toBe('localhost');
+
+      apply.mockRestore();
+      expect(broker.reloadTls()).toBe('reloaded');
+      expect(await servedCn(broker.port, certB, 'other.example')).toBe('other.example');
+    } finally {
+      apply.mockRestore();
+      await broker.close();
+    }
+  });
+
+  // A renewal job writes the certificate and the key one after the other. The
+  // check that lands in between fails once and must not remember the new
+  // certificate as seen: the next check applies the pair.
+  it('applies a half-renewed pair at the next check, once the key matches', async () => {
+    const broker = await startLive();
+    try {
+      swap({ cert: certB.cert });
+      expect(broker.reloadTls()).toBe('failed');
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('certificate and key do not match'),
+      );
+      expect(await servedCn(broker.port, certA, 'localhost')).toBe('localhost');
+
+      swap({ key: certB.key });
+      expect(broker.reloadTls()).toBe('reloaded');
+      expect(await servedCn(broker.port, certB, 'other.example')).toBe('other.example');
+    } finally {
+      await broker.close();
+    }
+  });
+
+  it('does nothing, and logs nothing, when the pair is unchanged', async () => {
+    const broker = await startLive();
+    try {
+      logSpy.mockClear();
+      warnSpy.mockClear();
+      expect(broker.reloadTls()).toBe('unchanged');
+      expect(logSpy).not.toHaveBeenCalled();
+      expect(warnSpy).not.toHaveBeenCalled();
+    } finally {
+      await broker.close();
+    }
+  });
+
+  it('picks up a renewed pair on its own timer', async () => {
+    const broker = await startLive({ limits: { tlsCheckIntervalMs: 100 } });
+    try {
+      swap(certB);
+      const deadline = Date.now() + 3000;
+      let cn = '';
+      while (Date.now() < deadline) {
+        cn = await servedCn(broker.port, certB, 'other.example');
+        if (cn === 'other.example') break;
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      expect(cn).toBe('other.example');
+    } finally {
+      await broker.close();
+    }
+  });
+
+  it('keeps its timer unref-ed and clears it on close', async () => {
+    const setSpy = vi.spyOn(globalThis, 'setInterval');
+    const clearSpy = vi.spyOn(globalThis, 'clearInterval');
+    try {
+      const broker = await startLive();
+      const index = setSpy.mock.calls.findIndex((call) => call[1] === 86_400_000);
+      expect(index).toBeGreaterThanOrEqual(0);
+      const timer = setSpy.mock.results[index].value as NodeJS.Timeout;
+      expect(timer.hasRef()).toBe(false);
+      await broker.close();
+      expect(clearSpy).toHaveBeenCalledWith(timer);
+    } finally {
+      setSpy.mockRestore();
+      clearSpy.mockRestore();
+    }
+  });
+
+  it('plain MQTT has nothing to reload', async () => {
+    const broker = await startEmbeddedBroker({ port: 0, bindHost: '127.0.0.1' });
+    try {
+      expect(broker.reloadTls()).toBe('unchanged');
+    } finally {
+      await broker.close();
+    }
+  });
+
+  it('logs the end date at start and does not warn for the documented certificate', async () => {
+    const broker = await startLive();
+    try {
+      expect(logSpy).toHaveBeenCalledWith(
+        expect.stringMatching(/Embedded broker TLS certificate expires in \d+ days \(2100-12-31\)/),
+      );
+      expect(warnSpy).not.toHaveBeenCalled();
+    } finally {
+      await broker.close();
+    }
+  });
+
+  it('warns at start about a certificate that is expired or about to expire', async () => {
+    mkdirSync(join(root, 'old'));
+    mkdirSync(join(root, 'soon'));
+    const old = makeBrokerCert(join(root, 'old'), { enddate: '20000101000000Z' });
+    const ends = new Date(Date.now() + 10 * 86_400_000)
+      .toISOString()
+      .replace(/[-:]/g, '')
+      .replace(/\.\d+Z$/, 'Z')
+      .replace('T', '');
+    const soon = makeBrokerCert(join(root, 'soon'), { enddate: ends });
+
+    const expired = await startTls(old);
+    await expired.close();
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'Embedded broker TLS certificate expired on 2000-01-01. Devices that check the date will refuse it.',
+      ),
+    );
+
+    warnSpy.mockClear();
+    const closing = await startTls(soon);
+    await closing.close();
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringMatching(/Embedded broker TLS certificate expires in (9|10) days/),
+    );
   });
 });
