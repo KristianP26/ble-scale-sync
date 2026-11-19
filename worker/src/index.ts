@@ -11,6 +11,7 @@
  */
 
 import { getLatestVersion } from './version';
+import { STATS_CACHE_CONTROL, cachedStats, statsCacheKey } from './stats-cache';
 import { mayRecordHit } from './rate-limit';
 import { addHit, aggregate, emptyStats, parseUserAgent } from './stats';
 import type { AggregatedStats, ClientInfo, DailyStats } from './stats';
@@ -324,27 +325,29 @@ export default {
 
     // GET /stats/json
     if (url.pathname === '/stats/json') {
-      const [stats24h, stats7d, stats30d] = await readStats(env.STATS);
-
-      return new Response(JSON.stringify({ stats24h, stats7d, stats30d }, null, 2), {
-        headers: {
-          'Content-Type': 'application/json',
-          'Cache-Control': 'public, max-age=300',
-          ...CORS_HEADERS,
-        },
+      return cachedStats(caches.default, statsCacheKey(url), (p) => ctx.waitUntil(p), async () => {
+        const [stats24h, stats7d, stats30d] = await readStats(env.STATS);
+        return new Response(JSON.stringify({ stats24h, stats7d, stats30d }, null, 2), {
+          headers: {
+            'Content-Type': 'application/json',
+            'Cache-Control': STATS_CACHE_CONTROL,
+            ...CORS_HEADERS,
+          },
+        });
       });
     }
 
     // GET /stats (or / on stats.blescalesync.dev)
     const isStatsDomain = url.hostname === 'stats.blescalesync.dev';
     if (url.pathname === '/stats' || (isStatsDomain && url.pathname === '/')) {
-      const [stats24h, stats7d, stats30d] = await readStats(env.STATS);
-
-      return new Response(renderDashboard(stats24h, stats7d, stats30d), {
-        headers: {
-          'Content-Type': 'text/html; charset=utf-8',
-          'Cache-Control': 'public, max-age=300',
-        },
+      return cachedStats(caches.default, statsCacheKey(url), (p) => ctx.waitUntil(p), async () => {
+        const [stats24h, stats7d, stats30d] = await readStats(env.STATS);
+        return new Response(renderDashboard(stats24h, stats7d, stats30d), {
+          headers: {
+            'Content-Type': 'text/html; charset=utf-8',
+            'Cache-Control': STATS_CACHE_CONTROL,
+          },
+        });
       });
     }
 

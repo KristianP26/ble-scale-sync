@@ -16,6 +16,8 @@ import {
 } from '../worker/src/stats.js';
 import { mayRecordHit } from '../worker/src/rate-limit.js';
 import type { StatsLimiter } from '../worker/src/rate-limit.js';
+import { cachedStats, statsCacheKey } from '../worker/src/stats-cache.js';
+import type { ResponseCache } from '../worker/src/stats-cache.js';
 
 /** In-memory KV with switchable failures; TTLs are recorded, not enforced. */
 class FakeKv implements VersionStore {
@@ -196,5 +198,115 @@ describe('worker stats rate limit', () => {
     expect(index).toMatch(/allowed \? recordHit\(env\.STATS, client\)/);
     expect(toml).toMatch(/\[\[ratelimits\]\]\nname = "STATS_LIMITER"\nnamespace_id = "\d+"/);
     expect(toml).toMatch(/\[ratelimits\.simple\]\nlimit = \d+\nperiod = (10|60)\n/);
+  });
+});
+
+class FakeCache implements ResponseCache {
+  store = new Map<string, Response>();
+  failMatch = false;
+  failPut = false;
+  puts = 0;
+  async match(key: string): Promise<Response | undefined> {
+    if (this.failMatch) throw new Error('cache down');
+    return this.store.get(key)?.clone();
+  }
+  async put(key: string, response: Response): Promise<void> {
+    if (this.failPut) throw new Error('cache full');
+    this.puts++;
+    this.store.set(key, response);
+  }
+}
+
+function statsHarness() {
+  const pending: Promise<unknown>[] = [];
+  let builds = 0;
+  const build = async (): Promise<Response> => {
+    builds++;
+    return new Response(JSON.stringify({ n: builds }), {
+      headers: { 'Content-Type': 'application/json' },
+    });
+  };
+  return {
+    waitUntil: (p: Promise<unknown>): void => {
+      pending.push(p);
+    },
+    build,
+    builds: (): number => builds,
+    settle: (): Promise<unknown[]> => Promise.all(pending),
+  };
+}
+
+describe('worker stats cache', () => {
+  it('builds once and serves the next requests from the cache', async () => {
+    const cache = new FakeCache();
+    const h = statsHarness();
+    const first = await cachedStats(cache, 'k', h.waitUntil, h.build);
+    await h.settle();
+    const second = await cachedStats(cache, 'k', h.waitUntil, h.build);
+    const third = await cachedStats(cache, 'k', h.waitUntil, h.build);
+    expect(h.builds()).toBe(1);
+    expect(first.headers.get('X-Stats-Cache')).toBe('miss');
+    expect(second.headers.get('X-Stats-Cache')).toBe('hit');
+    expect(await third.json()).toEqual({ n: 1 });
+  });
+
+  it('keys on origin and path, not on the query string or fragment', () => {
+    const key = (u: string): string => statsCacheKey(new URL(u));
+    expect(key('https://api.blescalesync.dev/stats?x=1')).toBe(
+      key('https://api.blescalesync.dev/stats?x=2#frag'),
+    );
+    expect(key('https://api.blescalesync.dev/stats')).not.toBe(
+      key('https://api.blescalesync.dev/stats/json'),
+    );
+    expect(key('https://api.blescalesync.dev/stats')).not.toBe(
+      key('https://stats.blescalesync.dev/stats'),
+    );
+  });
+
+  it('still answers when the cache fails', async () => {
+    const cache = new FakeCache();
+    cache.failMatch = true;
+    cache.failPut = true;
+    const h = statsHarness();
+    const res = await cachedStats(cache, 'k', h.waitUntil, h.build);
+    await h.settle();
+    expect(res.status).toBe(200);
+    expect(h.builds()).toBe(1);
+  });
+
+  it('does not keep a failed build', async () => {
+    const cache = new FakeCache();
+    const h = statsHarness();
+    const res = await cachedStats(
+      cache,
+      'k',
+      h.waitUntil,
+      async () => new Response('boom', { status: 500 }),
+    );
+    await h.settle();
+    expect(res.status).toBe(500);
+    expect(cache.puts).toBe(0);
+  });
+
+  it('works without a cache', async () => {
+    const h = statsHarness();
+    const res = await cachedStats(undefined, 'k', h.waitUntil, h.build);
+    expect(res.status).toBe(200);
+  });
+
+  it('wraps the two stats handlers and never GET /version, which counts its hits', () => {
+    const lf = (s: string): string => s.replace(/\r\n/g, '\n');
+    const index = lf(readFileSync('worker/src/index.ts', 'utf8'));
+    expect(index.match(/cachedStats\(caches\.default, statsCacheKey\(url\)/g)).toHaveLength(2);
+    expect(index.match(/caches\.default/g)).toHaveLength(2);
+    // Without waitUntil the runtime may cancel the cache write when the response is sent.
+    expect(index.match(/\(p\) => ctx\.waitUntil\(p\)/g)).toHaveLength(2);
+    // A cached /version answer would skip recordHit and undercount the stats.
+    const versionBranch = index.slice(
+      index.indexOf("url.pathname === '/version'"),
+      index.indexOf('// GET /stats/json'),
+    );
+    expect(versionBranch.length).toBeGreaterThan(100);
+    expect(versionBranch).not.toMatch(/caches\.|cachedStats/);
   });
 });
