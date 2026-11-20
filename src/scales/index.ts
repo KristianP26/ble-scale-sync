@@ -38,6 +38,7 @@ import { HutbitAdapter } from './hutbit.js';
 import { MgbAdapter } from './mgb.js';
 import { HoffenAdapter } from './hoffen.js';
 import { SenssunAdapter } from './senssun.js';
+import { SenssunIfB2Adapter } from './senssun-if-b2.js';
 import { EufyP2Adapter } from './eufy-p2.js';
 import { EufyC20P3Adapter } from './eufy-c20-p3.js';
 import { SalterAdapter } from './salter.js';
@@ -57,6 +58,8 @@ export const adapters: ScaleAdapter[] = [
   // only with an address starting 0xFF; the reverse cannot happen (#408).
   new EufyC20P3Adapter(),
   new SenssunAdapter(),
+  // Senssun IF_B2: exact name only, priority between Senssun Fat and QN.
+  new SenssunIfB2Adapter(),
   new QnScaleAdapter(),
   new RenphoScaleAdapter(),
   // Renpho R-MSC04 (#117/#265): 55AA-framed weight on service 0x1A10. Matched by

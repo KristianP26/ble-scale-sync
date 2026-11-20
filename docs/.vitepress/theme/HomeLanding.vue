@@ -63,7 +63,7 @@ const cards: { id: Card; name: string; icon: string; detail: string; status: str
 
 // Hero stats. check:counts guards the two derived numbers by these exact lines.
 const stats = [
-  { n: 42, label: 'scale protocols' },
+  { n: 43, label: 'scale protocols' },
   { n: 13, label: 'export targets' },
   { n: 4, label: 'ways to reach the scale' },
 ];

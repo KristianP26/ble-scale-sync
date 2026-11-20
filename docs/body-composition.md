@@ -121,8 +121,9 @@ On firmware that sends it, the scale's own body fat is used, and water, muscle, 
 - Arboleaf CS10E on the 20-byte QN dialect (Experimental, with `ble.qn_algorithm`)
 - Renpho R-MSC04
 - Huawei CH100 / AH100 (body fat only)
+- Senssun IF_B2 (body fat only)
 
-Their values are used only when that profile matches the user the weigh-in goes to. See [QN scales](/guide/scales/qn), [Renpho scales](/guide/scales/renpho) and [Huawei CH100 / AH100](/guide/supported-scales#huawei-ch100-ah100).
+Their values are used only when that profile matches the user the weigh-in goes to. See [QN scales](/guide/scales/qn), [Renpho scales](/guide/scales/renpho), [Huawei CH100 / AH100](/guide/supported-scales#huawei-ch100-ah100) and [Senssun IF_B2](/guide/supported-scales#senssun-if-b2).
 
 ## References
 
