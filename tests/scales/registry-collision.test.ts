@@ -953,3 +953,22 @@ describe('post-discovery collision guard', () => {
     expect(resolveAfterDiscovery(advertised, gatt, adapters)?.name).toBe(expected);
   });
 });
+
+// Senssun IF_B7, frame variant 01 03 28 (second Grifema GA2001 unit): the
+// registry fixture above is the 02 03 11 frame, so pin this one separately.
+describe('Senssun IF_B7 frame variant 01 03 28', () => {
+  const ADVERT: BleDeviceInfo = {
+    localName: 'IF_B7',
+    address: '64:FB:01:45:98:B6',
+    serviceUuids: [],
+    manufacturerData: {
+      id: 0x0100,
+      data: Buffer.from('01032864fb014598b621043b043b810545', 'hex'),
+    },
+  };
+
+  it('resolves to Senssun IF_B7, and only Senssun IF_B7 claims it', () => {
+    expect(resolveAdapter(ADVERT, adapters)?.name).toBe('Senssun IF_B7');
+    expect(adapters.filter((a) => a.matches(ADVERT)).map((a) => a.name)).toEqual(['Senssun IF_B7']);
+  });
+});

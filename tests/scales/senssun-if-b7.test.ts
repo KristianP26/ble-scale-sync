@@ -57,22 +57,24 @@ const FINISHED_67_25 = '020311187a93c1b333021a4500b4a1ab61';
 const MAC_BLE_MONITOR = '18:7A:93:C1:B3:33';
 
 /*
- * Variant 01 03 28: a second unit sold as Grifema GA2001, 64:FB:01:45:98:B6, via
- * Home Assistant's Bluetooth (ha-bluetooth). Weights matched the scale display
- * and the MovingLife vendor app on the same weigh-in.
+ * Variant 01 03 28: a second unit sold as Grifema GA2001, 64:FB:01:45:98:B6, from
+ * a DEBUG log of ble-scale-sync 1.42.0 over ha-bluetooth (timestamps UTC, as
+ * logged). Four weigh-ins, 132 frames, every one closing the checksum. Each
+ * weigh-in ends on exactly one finished frame, with [9] = 0x21 or 0x01. Weights
+ * matched the scale display and the MovingLife vendor app.
  */
-/** Finished (status 0x81), [9] = 0x21: 0x043B = 108.3 kg, [12..13] a copy of the weight. */
-const V0128_FINISHED_108_3 = '01032864fb014598b621043b043b810545';
-/** Finished, [9] = 0x21: 0x043D = 108.5 kg, the same frame on two separate weigh-ins. */
-const V0128_FINISHED_108_5 = '01032864fb014598b621043d043d810549';
-/** Sent right after V0128_FINISHED_108_3: [9] = 0x01, 108.3 kg, [12..13] = 552. */
-const V0128_RESULT_552 = '01032864fb014598b601043b022881010c';
-/**
- * Weighing (status 0x01), 108.3 kg. Reconstructed: only the tail
- * ...043b043b0105c5 was noted from the log, [0..9] are taken from the finished
- * frame of the same weigh-in. The checksum closes.
- */
+/** 2026-11-19 22:07:45.160: weighing (status 0x01), 108.3 kg, the frame before the finished one. */
 const V0128_WEIGHING_108_3 = '01032864fb014598b621043b043b0105c5';
+/** 22:07:49.045: finished (0x81), [9] = 0x21, 0x043B = 108.3 kg, [12..13] a copy of the weight. */
+const V0128_FINISHED_108_3 = '01032864fb014598b621043b043b810545';
+/** 22:08:39.803: the next weigh-in finished on a [9] = 0x01 frame, 108.3 kg, [12..13] = 552. */
+const V0128_RESULT_552 = '01032864fb014598b601043b022881010c';
+/** 22:31:23.956: finished on [9] = 0x01, 0x03D0 = 97.6 kg, [12..13] = 1163. */
+const V0128_RESULT_97_6 = '01032864fb014598b60103d0048b810105';
+/** 2026-11-20 02:24:46.997: finished on [9] = 0x21, 0x0430 = 107.2 kg. */
+const V0128_FINISHED_107_2 = '01032864fb014598b6210430043081052f';
+/** From the reporter's earlier log: finished, 0x043D = 108.5 kg, seen on two weigh-ins. */
+const V0128_FINISHED_108_5 = '01032864fb014598b621043d043d810549';
 const MAC_0128 = '64:FB:01:45:98:B6';
 
 function buf(hex: string): Buffer {
@@ -410,7 +412,14 @@ describe('SenssunIfB7Adapter (#423)', () => {
   describe('variant 01 03 28 (second Grifema GA2001 unit)', () => {
     it('claims all captured frames on its own address and wins the registry', () => {
       const adapter = new SenssunIfB7Adapter();
-      for (const f of [V0128_FINISHED_108_3, V0128_FINISHED_108_5, V0128_RESULT_552]) {
+      for (const f of [
+        V0128_WEIGHING_108_3,
+        V0128_FINISHED_108_3,
+        V0128_FINISHED_108_5,
+        V0128_RESULT_552,
+        V0128_RESULT_97_6,
+        V0128_FINISHED_107_2,
+      ]) {
         expect(adapter.matches(advert(f, MAC_0128))).toBe(true);
       }
       expect(resolveAdapter(advert(V0128_FINISHED_108_3, MAC_0128), adapters)?.name).toBe(
@@ -449,6 +458,10 @@ describe('SenssunIfB7Adapter (#423)', () => {
         weight: 108.5,
         impedance: 0,
       });
+      expect(adapter.parseBroadcast(buf(V0128_FINISHED_107_2))).toEqual({
+        weight: 107.2,
+        impedance: 0,
+      });
       expect(adapter.parseLiveBroadcast(buf(V0128_FINISHED_108_3))).toBeNull();
     });
 
@@ -460,9 +473,14 @@ describe('SenssunIfB7Adapter (#423)', () => {
         impedance: 0,
       });
       expect(debug.mock.calls.some(([m]) => String(m).includes('[12..13]=552'))).toBe(true);
+      expect(adapter.parseBroadcast(buf(V0128_RESULT_97_6))).toEqual({
+        weight: 97.6,
+        impedance: 0,
+      });
+      expect(debug.mock.calls.some(([m]) => String(m).includes('[12..13]=1163'))).toBe(true);
     });
 
-    it('reports the weighing frame as a live weight, not a reading (reconstructed frame)', () => {
+    it('reports the weighing frame as a live weight, not a reading', () => {
       const adapter = new SenssunIfB7Adapter();
       expect(adapter.parseBroadcast(buf(V0128_WEIGHING_108_3))).toBeNull();
       expect(adapter.parseLiveBroadcast(buf(V0128_WEIGHING_108_3))).toEqual({ weight: 108.3 });

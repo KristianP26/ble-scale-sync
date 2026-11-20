@@ -53,6 +53,22 @@ export const adverts: AdvertFixture = {
       device: IF_B7,
       adverts: [{ atMs: 0, mfr: [ID, '020311020000000001021a4500b4a1ab61'] }],
     },
+    'ifb7-0128-kg': {
+      provenance: 'captured',
+      source:
+        'DEBUG log, 1.42.0 over ha-bluetooth, second GA2001 unit (01 03 28), ' +
+        '2026-11-20 02:24:25.309Z to 02:24:46.997Z: first three and last three frames ' +
+        '(display kg, finished 107.2 kg)',
+      device: IF_B7,
+      adverts: [
+        { atMs: 0, mfr: [ID, '01032802000000000121043804380105bf'] },
+        { atMs: 176, mfr: [ID, '01032802000000000121043b043b0105c5'] },
+        { atMs: 245, mfr: [ID, '01032802000000000121043004300105af'] },
+        { atMs: 16746, mfr: [ID, '01032802000000000121043104310105b1'] },
+        { atMs: 17527, mfr: [ID, '01032802000000000121043004300105af'] },
+        { atMs: 21688, mfr: [ID, '010328020000000001210430043081052f'] },
+      ],
+    },
     'ifb7-macos-by-name': {
       provenance: 'derived',
       source: '#423 export 16:37:23.875Z without an address (noble on macOS): claimed by name',
