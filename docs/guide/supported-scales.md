@@ -160,7 +160,7 @@ The reading goes out about two seconds after the display settles, and at most 12
 
 The weight is read in kg whether the display shows kg or lb. Other display units are ignored with a warning in the log.
 
-Units come in two frame variants, both handled. On the one whose frames start with `01 03 28`, only the kg display has been captured so far: keep the scale on kg, or report a weigh-in in lb on [#423](https://github.com/KristianP26/ble-scale-sync/issues/423).
+This holds for both frame variants the scale is sold with, `02 03 11` and `01 03 28`.
 
 ### OKOK app scales (Chipsea broadcast)
 

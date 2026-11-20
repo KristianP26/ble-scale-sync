@@ -59,7 +59,7 @@ const MAC_BLE_MONITOR = '18:7A:93:C1:B3:33';
 /*
  * Variant 01 03 28: a second unit sold as Grifema GA2001, 64:FB:01:45:98:B6, from
  * a DEBUG log of ble-scale-sync 1.42.0 over ha-bluetooth (timestamps UTC, as
- * logged). Four weigh-ins, 132 frames, every one closing the checksum. Each
+ * logged). Two logs, 216 frames, every one closing the checksum. Each
  * weigh-in ends on exactly one finished frame, with [9] = 0x21 or 0x01. Weights
  * matched the scale display and the MovingLife vendor app.
  */
@@ -73,6 +73,10 @@ const V0128_RESULT_552 = '01032864fb014598b601043b022881010c';
 const V0128_RESULT_97_6 = '01032864fb014598b60103d0048b810105';
 /** 2026-11-20 02:24:46.997: finished on [9] = 0x21, 0x0430 = 107.2 kg. */
 const V0128_FINISHED_107_2 = '01032864fb014598b6210430043081052f';
+/** 09:54:49.807: weighing with the display in lb (status 0x02): 0x0433 = 107.5 kg, [12..13] 0x0942 = 237.0 lb. */
+const V0128_WEIGHING_LB = '01032864fb014598b621043309420205ca';
+/** 09:54:51.618: finished in lb (0x82) on [9] = 0x01, 0x0433 = 107.5 kg, [12..13] = 217. */
+const V0128_RESULT_LB = '01032864fb014598b601043300d98201b4';
 /** From the reporter's earlier log: finished, 0x043D = 108.5 kg, seen on two weigh-ins. */
 const V0128_FINISHED_108_5 = '01032864fb014598b621043d043d810549';
 const MAC_0128 = '64:FB:01:45:98:B6';
@@ -414,6 +418,8 @@ describe('SenssunIfB7Adapter (#423)', () => {
       const adapter = new SenssunIfB7Adapter();
       for (const f of [
         V0128_WEIGHING_108_3,
+        V0128_WEIGHING_LB,
+        V0128_RESULT_LB,
         V0128_FINISHED_108_3,
         V0128_FINISHED_108_5,
         V0128_RESULT_552,
@@ -500,17 +506,27 @@ describe('SenssunIfB7Adapter (#423)', () => {
       expect(adapter.parseLiveBroadcast(b)).toBeNull();
     });
 
-    it('refuses the lb display, not captured on this variant, and warns once (derived: [14] 0x81 -> 0x82)', () => {
+    it('reads kg from [10..11] with the display in lb', () => {
+      const adapter = new SenssunIfB7Adapter();
+      expect(adapter.parseLiveBroadcast(buf(V0128_WEIGHING_LB))).toEqual({ weight: 107.5 });
+      expect(adapter.parseBroadcast(buf(V0128_WEIGHING_LB))).toBeNull();
+      expect(adapter.parseBroadcast(buf(V0128_RESULT_LB))).toEqual({
+        weight: 107.5,
+        impedance: 0,
+      });
+    });
+
+    it('refuses an unknown unit and warns once (derived: [14] 0x81 -> 0x83)', () => {
       const adapter = new SenssunIfB7Adapter();
       const warn = vi.spyOn(bleLog, 'warn').mockImplementation(() => {});
-      const b = withByte(V0128_FINISHED_108_3, 14, 0x82);
-      b[16] = (b[16] + 1) & 0xff;
+      const b = withByte(V0128_FINISHED_108_3, 14, 0x83);
+      b[16] = (b[16] + 2) & 0xff;
       expect(adapter.parseBroadcast(b)).toBeNull();
       expect(adapter.parseBroadcast(b)).toBeNull();
       expect(warn).toHaveBeenCalledTimes(1);
       const message = String(warn.mock.calls[0][0]);
       expect(message).toContain('010328');
-      expect(message).toContain('Only kg is decoded');
+      expect(message).toContain('Only kg and lb are decoded');
     });
   });
 });

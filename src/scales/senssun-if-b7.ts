@@ -66,10 +66,11 @@ const ADVERTISED_NAME = 'if_b7';
  *   [10..11]  weight, uint16 big-endian, kg * 10 (0x043B = 108.3 kg, matched
  *             the display and the vendor app on the same weigh-in; 0x043D =
  *             108.5 kg on two more weigh-ins)
- *   [12..13]  a copy of [10..11] on the 0x21 frames; 552 on the 0x01 frame,
- *             possibly impedance, not published
+ *   [12..13]  on the 0x21 frames a copy of [10..11] in kg, or the weight in
+ *             lb * 10 with the display in lb; on the 0x01 frame a number
+ *             (217 to 1163 so far), possibly impedance, not published
  *   [14]      high nibble 0x0 while weighing, 0x8 once finished; low nibble 1
- *             with the display in kg (no other unit captured yet)
+ *             with the display in kg, 2 in lb ([10..11] stays kg * 10)
  *   [16]      checksum: sum of [9..15] plus 0x20, low 8 bits (4 of 4 frames)
  */
 const PAYLOAD_LEN = 17;
@@ -100,14 +101,18 @@ const VARIANT_0211: Variant = {
   unitNames: 'kg and lb',
 };
 
-/** 01 03 28: the second Grifema GA2001 unit. Only the kg display is captured. */
+/**
+ * 01 03 28: the second Grifema GA2001 unit. As on 02 03 11, [10..11] stays in
+ * kg * 10 with the display in lb (low nibble 2); [12..13] then carries lb * 10
+ * on the [9] = 0x21 frames, within 0.1 lb of the kg field on 19 of 19 frames.
+ */
 const VARIANT_0128: Variant = {
   header: [0x01, 0x03, 0x28],
   checksumOffset: 0x20,
   weightDivisor: 10,
   finishedState: 0x80,
-  units: new Set([0x01]),
-  unitNames: 'kg',
+  units: new Set([0x01, 0x02]),
+  unitNames: 'kg and lb',
 };
 
 const VARIANTS: readonly Variant[] = [VARIANT_0211, VARIANT_0128];
