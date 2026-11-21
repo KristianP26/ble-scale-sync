@@ -92,6 +92,24 @@ def cleanup_legacy_tokens(token_dir):
                 print(f"[Setup] Warning: failed to remove {f.name}: {e}")
 
 
+def _is_cn_domain(token_dir=None):
+    """CN-domain switch for Garmin China accounts (garmin.cn).
+
+    GARMIN_IS_CN env wins; otherwise read the garmin_domain.txt marker
+    written next to garmin_tokens.json at setup time; default is COM.
+    """
+    env = os.environ.get("GARMIN_IS_CN", "").strip().lower()
+    if env in ("1", "true", "yes", "cn"):
+        return True
+    if env in ("0", "false", "no", "com"):
+        return False
+    if token_dir:
+        marker = Path(token_dir) / "garmin_domain.txt"
+        if marker.is_file():
+            return marker.read_text().strip().lower() == "cn"
+    return False
+
+
 def login_fresh(garmin):
     """Log in with credentials, ignoring any cached token.
 
@@ -168,7 +186,8 @@ def authenticate(email, password, token_dir):
         os.makedirs(token_dir, mode=0o700, exist_ok=True)
         cleanup_legacy_tokens(token_dir)
 
-        garmin = Garmin(email, password, return_on_mfa=True)
+        is_cn = _is_cn_domain()
+        garmin = Garmin(email, password, return_on_mfa=True, is_cn=is_cn)
 
         print("[Setup] Logging in...")
         # Deliberately not login(token_dir): that would reuse a cached token
@@ -187,6 +206,8 @@ def authenticate(email, password, token_dir):
         # surfaces write errors that login()'s auto-dump would have swallowed.
         garmin.client.dump(token_dir)
         restrict_token_dir(token_dir)
+        marker = Path(token_dir) / "garmin_domain.txt"
+        marker.write_text("cn" if is_cn else "com")
 
         print(f"[Setup] Tokens saved to: {token_dir}")
         return True
