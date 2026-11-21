@@ -97,6 +97,24 @@ def is_rejected_token(exc):
     return any(_http_status(link) == 401 for link in error_chain(exc))
 
 
+def _is_cn_domain(token_dir=None):
+    """CN-domain switch for Garmin China accounts (garmin.cn).
+
+    GARMIN_IS_CN env wins; otherwise read the garmin_domain.txt marker
+    written next to garmin_tokens.json at setup time; default is COM.
+    """
+    env = os.environ.get("GARMIN_IS_CN", "").strip().lower()
+    if env in ("1", "true", "yes", "cn"):
+        return True
+    if env in ("0", "false", "no", "com"):
+        return False
+    if token_dir:
+        marker = Path(token_dir) / "garmin_domain.txt"
+        if marker.is_file():
+            return marker.read_text().strip().lower() == "cn"
+    return False
+
+
 def get_garmin_client(token_dir=None):
     token_dir = get_token_dir(token_dir)
     log(f"[Garmin] Loading tokens from {token_dir}")
@@ -127,7 +145,7 @@ def get_garmin_client(token_dir=None):
             "add-on, check the Garmin lines in the add-on's startup log."
         )
 
-    garmin = Garmin()
+    garmin = Garmin(is_cn=_is_cn_domain(token_dir))
     garmin.login(token_dir)
     log("[Garmin] Authenticated.")
     return garmin
