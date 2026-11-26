@@ -293,6 +293,76 @@ class RegionTest(unittest.TestCase):
         os.environ["GARMIN_IS_CN"] = "false"
         self.assertIs(self.client_kwargs(marker="cn")["is_cn"], False)
 
+    def test_env_accepts_on_and_off(self):
+        os.environ["GARMIN_IS_CN"] = "on"
+        self.assertIs(self.client_kwargs()["is_cn"], True)
+        os.environ["GARMIN_IS_CN"] = "off"
+        self.assertIs(self.client_kwargs(marker="cn")["is_cn"], False)
+
+    def run_with_token(self, marker=None):
+        """Run the real get_garmin_client() with Garmin patched; capture both streams."""
+        import contextlib
+        import tempfile
+
+        out, err = io.StringIO(), io.StringIO()
+        self.err_at_login = None
+        with tempfile.TemporaryDirectory() as token_dir:
+            open(os.path.join(token_dir, "garmin_tokens.json"), "w").close()
+            if marker is not None:
+                with open(os.path.join(token_dir, "garmin_domain.txt"), "w") as f:
+                    f.write(marker)
+            with mock.patch.object(garmin_upload, "Garmin") as garmin_cls:
+                # What stderr held when the login started, to pin the order.
+                garmin_cls.return_value.login.side_effect = lambda *a, **kw: setattr(
+                    self, "err_at_login", err.getvalue()
+                )
+                with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                    garmin_upload.get_garmin_client(token_dir)
+        return out.getvalue(), err.getvalue(), garmin_cls
+
+    def test_logs_the_region_before_logging_in(self):
+        self.run_with_token()
+        self.assertIn("[Garmin] Region: garmin.com (default)", self.err_at_login)
+        os.environ["GARMIN_IS_CN"] = "true"
+        self.run_with_token()
+        self.assertIn("[Garmin] Region: garmin.cn (from GARMIN_IS_CN)", self.err_at_login)
+        del os.environ["GARMIN_IS_CN"]
+        self.run_with_token(marker="cn")
+        self.assertIn("[Garmin] Region: garmin.cn (from garmin_domain.txt)", self.err_at_login)
+
+    def test_warnings_go_to_stderr_and_stdout_stays_empty(self):
+        # stdout is the one JSON result line the app parses, so a warning
+        # there would break every upload on a misspelt variable.
+        os.environ["GARMIN_IS_CN"] = "nope-xyz"
+        out, err, garmin_cls = self.run_with_token(marker="hunter2")
+        self.assertEqual(out, "")
+        self.assertIn("[Garmin] Warning: GARMIN_IS_CN is not true or false", err)
+        self.assertIn("garmin_domain.txt does not say cn or com", err)
+        self.assertNotIn("hunter2", err)
+        self.assertNotIn("nope-xyz", err)
+        self.assertIs(garmin_cls.call_args.kwargs["is_cn"], False)
+
+    def test_the_result_line_is_the_only_thing_on_stdout(self):
+        import tempfile
+
+        os.environ["GARMIN_IS_CN"] = "nope-xyz"
+        out = io.StringIO()
+        with tempfile.TemporaryDirectory() as token_dir:
+            open(os.path.join(token_dir, "garmin_tokens.json"), "w").close()
+            with open(os.path.join(token_dir, "garmin_domain.txt"), "w") as f:
+                f.write("hunter2")
+            with mock.patch.object(garmin_upload, "Garmin"):
+                with mock.patch.object(sys, "argv", ["garmin_upload.py", "--token-dir", token_dir]):
+                    with mock.patch.object(sys, "stdin", io.StringIO(json.dumps(FULL_PAYLOAD))):
+                        with mock.patch.object(sys, "stdout", out):
+                            with mock.patch.object(sys, "stderr", io.StringIO()):
+                                with self.assertRaises(SystemExit) as raised:
+                                    garmin_upload.main()
+        self.assertEqual(raised.exception.code, 0)
+        lines = out.getvalue().splitlines()
+        self.assertEqual(len(lines), 1)
+        self.assertTrue(json.loads(lines[0])["success"])
+
 
 def chained(outer, cause):
     outer.__cause__ = cause

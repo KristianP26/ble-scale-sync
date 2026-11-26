@@ -7,7 +7,13 @@ from pathlib import Path
 from dotenv import load_dotenv
 from garminconnect import Garmin
 
-from garmin_domain import MARKER_NAME, is_cn_domain, marker_region, write_domain_marker
+from garmin_domain import (
+    MARKER_NAME,
+    describe_region,
+    marker_region,
+    resolve_region,
+    write_domain_marker,
+)
 from garmin_errors import format_error_chain
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -171,7 +177,11 @@ def authenticate(email, password, token_dir):
 
         # The marker of a token directory set up before keeps its region on a
         # rerun, so renewing a CN token does not need GARMIN_IS_CN again.
-        is_cn = is_cn_domain(token_dir)
+        region = resolve_region(token_dir)
+        for warning in region.warnings:
+            print(f"[Setup] Warning: {warning}")
+        print(f"[Setup] {describe_region(region)}")
+        is_cn = region.is_cn
         garmin = Garmin(email, password, return_on_mfa=True, is_cn=is_cn)
 
         print("[Setup] Logging in...")

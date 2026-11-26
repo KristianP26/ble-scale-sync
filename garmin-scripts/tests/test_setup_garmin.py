@@ -178,6 +178,40 @@ class RegionTest(unittest.TestCase):
         self.assertIs(self.authenticate().call_args.kwargs["is_cn"], True)
         self.assertEqual(self.marker(), "cn")
 
+    def authenticate_output(self):
+        with mock.patch.object(setup_garmin, "Garmin", return_value=make_garmin()) as cls:
+            with mock.patch("builtins.print") as printed:
+                self.assertTrue(setup_garmin.authenticate("a@b.c", "pw", self.token_dir))
+        lines = [str(call.args[0]) for call in printed.call_args_list]
+        return lines, cls
+
+    def test_prints_the_region_before_logging_in_on_every_run(self):
+        lines, _ = self.authenticate_output()
+        self.assertIn("[Setup] Region: garmin.com (default)", lines)
+        self.assertLess(
+            lines.index("[Setup] Region: garmin.com (default)"),
+            lines.index("[Setup] Logging in..."),
+        )
+        os.environ["GARMIN_IS_CN"] = "true"
+        lines, _ = self.authenticate_output()
+        self.assertIn("[Setup] Region: garmin.cn (from GARMIN_IS_CN)", lines)
+
+    def test_an_unrecognised_env_warns_without_its_value_and_falls_back(self):
+        write(os.path.join(self.token_dir, "garmin_domain.txt"), "cn")
+        os.environ["GARMIN_IS_CN"] = "nope-xyz"
+        lines, cls = self.authenticate_output()
+        self.assertIn("[Setup] Warning: GARMIN_IS_CN is not true or false, so it is ignored", lines)
+        self.assertNotIn("nope-xyz", "\n".join(lines))
+        self.assertIs(cls.call_args.kwargs["is_cn"], True)
+
+    def test_an_unrecognised_marker_warns_without_its_content(self):
+        write(os.path.join(self.token_dir, "garmin_domain.txt"), "hunter2")
+        lines, cls = self.authenticate_output()
+        self.assertTrue(any("does not say cn or com" in line for line in lines))
+        self.assertNotIn("hunter2", "\n".join(lines))
+        self.assertIs(cls.call_args.kwargs["is_cn"], False)
+        self.assertEqual(self.marker(), "com")
+
     def authenticate_with_failing_marker(self):
         garmin = make_garmin()
         with mock.patch.object(setup_garmin, "Garmin", return_value=garmin):

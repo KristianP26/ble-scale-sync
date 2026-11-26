@@ -7,7 +7,7 @@ from pathlib import Path
 
 from garminconnect import Garmin
 
-from garmin_domain import is_cn_domain
+from garmin_domain import describe_region, resolve_region
 from garmin_errors import error_chain, format_error_chain
 
 # No .env is loaded here. The app spawns this script with its own environment,
@@ -128,7 +128,11 @@ def get_garmin_client(token_dir=None):
             "add-on, check the Garmin lines in the add-on's startup log."
         )
 
-    garmin = Garmin(is_cn=is_cn_domain(token_dir))
+    region = resolve_region(token_dir)
+    for warning in region.warnings:
+        log(f"[Garmin] Warning: {warning}")
+    log(f"[Garmin] {describe_region(region)}")
+    garmin = Garmin(is_cn=region.is_cn)
     garmin.login(token_dir)
     log("[Garmin] Authenticated.")
     return garmin
