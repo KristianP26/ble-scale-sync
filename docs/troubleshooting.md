@@ -241,6 +241,7 @@ A frozen event loop also stops the [watchdog](#the-app-exits-after-repeated-scan
 
 - `Garmin rejected the saved login token (HTTP 401)`: Garmin refused the stored token, and the upload is not retried. Run `ble-scale-sync setup-garmin` (`npm run setup-garmin` from a clone) to log in again.
 - `Garmin upload needs Python 3.12 or newer`: install Python 3.12 or newer on the host.
+- Login fails for a garmin.cn account: set `GARMIN_IS_CN=true` and run the setup again, see [Garmin China accounts](/exporters#garmin-china).
 - Login fails from a server: Garmin can block cloud and VPN addresses. Log in from another network and copy the token directory, see [Garmin Connect](/exporters#garmin). In the Home Assistant add-on, see [the MFA workaround](/guide/home-assistant-addon#mfa-workaround).
 
 ### An export fails with `redirected to ..., which is not followed` {#export-redirected}

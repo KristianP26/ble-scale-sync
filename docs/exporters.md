@@ -76,6 +76,22 @@ The Home Assistant add-on signs in on its first start.
 
 For an account with MFA see [Sign in to Garmin with MFA](/guide/home-assistant-addon#mfa-workaround).
 
+### Garmin China accounts {#garmin-china}
+
+Garmin China support is experimental: if the sign-in or an upload fails, open an issue. An account on Garmin Connect China signs in to other hosts than garmin.com, so the setup has to know the region. Set `GARMIN_IS_CN=true` before you run it. In a clone or a standalone install, put it in `.env`:
+
+```ini
+GARMIN_IS_CN=true
+```
+
+In Docker, add `-e GARMIN_IS_CN=true` to the `setup-garmin` command above.
+
+The setup writes the region to `garmin_domain.txt` next to `garmin_tokens.json`, and uploads read it from there, so the app needs no variable. Running the setup again in the same token directory keeps the region; `GARMIN_IS_CN=false` switches it back to garmin.com.
+
+With accounts in both regions, give each user their own `token_dir` and sign in the China user alone with `--user <name>`: the variable applies to every user that one `--all-users` run signs in. Set it for that command only, for example `GARMIN_IS_CN=true ble-scale-sync setup-garmin --user Alice`, and leave it out of `.env`: there it also overrides every user's `garmin_domain.txt` at upload time, so all uploads would go to one region.
+
+Setup and uploads log the region they use, for example `[Garmin] Region: garmin.cn (from garmin_domain.txt)`. `GARMIN_IS_CN` takes `true`, `false`, `1`, `0`, `yes`, `no`, `on` or `off`; any other value is ignored with a warning.
+
 ### Weight only
 
 `weight_only: true` uploads the weight and leaves BMI, body fat, water, bone mass, muscle mass, visceral fat, physique rating, metabolic age and BMR unset. Use it when you trust the scale's weight but not its impedance estimates. Garmin Connect still shows a BMI it computes from your profile height. Other exporters are not affected.

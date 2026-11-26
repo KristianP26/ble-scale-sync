@@ -330,6 +330,16 @@ class RegionTest(unittest.TestCase):
         self.assertEqual(read(os.path.join(com_dir, "garmin_domain.txt")), "com")
 
 
+class HelpTextTest(unittest.TestCase):
+    def test_help_names_the_china_switch(self):
+        out = io.StringIO()
+        with mock.patch.object(sys, "argv", ["setup_garmin.py", "--help"]):
+            with mock.patch.object(sys, "stdout", out):
+                with self.assertRaises(SystemExit):
+                    setup_garmin.parse_args()
+        self.assertIn("GARMIN_IS_CN=true", out.getvalue())
+
+
 class ResolveEnvRefTest(unittest.TestCase):
     def test_resolves_a_reference(self):
         with mock.patch.dict(os.environ, {"BSS_TEST_PW": "secret"}):

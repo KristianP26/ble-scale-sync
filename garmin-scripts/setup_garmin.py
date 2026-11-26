@@ -408,7 +408,11 @@ def run_legacy(cli_token_dir=None, base_dir=None):
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Setup Garmin Connect authentication"
+        description="Setup Garmin Connect authentication",
+        epilog=(
+            "Garmin China (garmin.cn) accounts: set GARMIN_IS_CN=true in the "
+            "environment or .env before running."
+        ),
     )
     parser.add_argument(
         "--from-config",
