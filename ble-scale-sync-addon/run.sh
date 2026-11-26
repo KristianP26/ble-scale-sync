@@ -1091,6 +1091,25 @@ if [ "$GARMIN_BOOTSTRAP" = "true" ] \
     if cp "$SHARE_DIR/garmin_tokens.json" "$TOKEN_DIR/" 2>/dev/null; then
       SHARE_TOKEN_IMPORTED=true
       sha256sum < "$SHARE_DIR/garmin_tokens.json" | cut -d' ' -f1 > "$SHARE_MARKER" 2>/dev/null || true
+      # The region of a Garmin China token is not in the token file. It is
+      # taken only together with the token, in this same import decision: on
+      # its own, a file in /share would let any writer of /share send the
+      # account's password to garmin.cn at the next login. Only an exact cn or
+      # com is kept; anything else, or no file, removes a marker left behind
+      # by an earlier token so it cannot describe this one.
+      SHARE_REGION=$(head -c 8 "$SHARE_DIR/garmin_domain.txt" 2>/dev/null | tr -d '\r\n' || true)
+      if [ "$SHARE_REGION" = "cn" ] || [ "$SHARE_REGION" = "com" ]; then
+        if printf '%s' "$SHARE_REGION" > "$TOKEN_DIR/garmin_domain.txt" 2>/dev/null; then
+          log "Garmin region imported with the token: $SHARE_REGION"
+        else
+          log "WARNING: could not write $TOKEN_DIR/garmin_domain.txt"
+        fi
+      else
+        rm -f "$TOKEN_DIR/garmin_domain.txt"
+        if [ -f "$SHARE_DIR/garmin_domain.txt" ]; then
+          log "WARNING: $SHARE_DIR/garmin_domain.txt does not say cn or com, so it is ignored and uploads use garmin.com"
+        fi
+      fi
     fi
   fi
 
@@ -1108,6 +1127,8 @@ if [ "$GARMIN_BOOTSTRAP" = "true" ] \
       log "  python3 garmin-scripts/setup_garmin.py --from-config --config-path config.yaml"
       log "on another machine and copy garmin_tokens.json into"
       log "/share/ble-scale-sync/garmin-tokens/ on this HA host."
+      log "A Garmin China (garmin.cn) account cannot sign in from the add-on: set"
+      log "GARMIN_IS_CN=true for that command and copy garmin_domain.txt along with the token."
       log "Other exporters (MQTT, etc.) will continue to work."
     fi
   else

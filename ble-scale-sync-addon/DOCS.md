@@ -44,6 +44,8 @@ This app has no terminal to type an MFA code into. The same steps work when Garm
 2. Copy the `garmin_tokens.json` it wrote into `/share/ble-scale-sync/garmin-tokens/` on this host, with the Samba share or File editor app.
 3. Restart the app. The log shows `IMPORTING a Garmin token`.
 
+A Garmin China (garmin.cn) account also needs this route: run the setup with `GARMIN_IS_CN=true` and copy `garmin_domain.txt` along with the token, see [Garmin China accounts](https://blescalesync.dev/exporters#garmin-china).
+
 The token is imported only while `/data/garmin-tokens` holds none. To switch to another account, reinstall the app (this also clears the remembered weights and the retry queue) and import again.
 
 ## Custom config

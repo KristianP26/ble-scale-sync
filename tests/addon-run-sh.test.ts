@@ -962,7 +962,7 @@ describe.skipIf(!SHELL)(
 describe.skipIf(!SHELL)('run.sh Garmin token import', () => {
   function block(dir: string): string {
     const start = RUN_SH.indexOf('# ── Garmin token bootstrap');
-    const end = RUN_SH.indexOf('# ── Reset Bluetooth adapter');
+    const end = RUN_SH.indexOf('# ── Strava token directory');
     expect(start, 'Garmin block not found').toBeGreaterThan(-1);
     expect(end).toBeGreaterThan(start);
     return RUN_SH.slice(start, end)
@@ -970,9 +970,28 @@ describe.skipIf(!SHELL)('run.sh Garmin token import', () => {
       .replaceAll('/share/ble-scale-sync/garmin-tokens', `${dir}/share`);
   }
 
-  function runBlock(vars: Record<string, string>, shareToken: boolean, dataToken = false) {
+  /** Region markers to put in /share and /data before the block runs. */
+  interface Markers {
+    share?: string;
+    data?: string;
+  }
+
+  function runBlock(
+    vars: Record<string, string>,
+    shareToken: boolean,
+    dataToken = false,
+    markers: Markers = {},
+  ) {
     return withTempDir((raw) => {
       const dir = raw.replace(/\\/g, '/');
+      if (markers.data !== undefined) {
+        mkdirSync(`${dir}/data`, { recursive: true });
+        writeFileSync(`${dir}/data/garmin_domain.txt`, markers.data);
+      }
+      if (markers.share !== undefined) {
+        mkdirSync(`${dir}/share`, { recursive: true });
+        writeFileSync(`${dir}/share/garmin_domain.txt`, markers.share);
+      }
       if (dataToken) {
         // An older token already in use, so the /share copy is the newer one:
         // the case the old newer-wins rule imported.
@@ -985,7 +1004,9 @@ describe.skipIf(!SHELL)('run.sh Garmin token import', () => {
         mkdirSync(`${dir}/share`, { recursive: true });
         writeFileSync(`${dir}/share/garmin_tokens.json`, '{"token":"share"}');
       }
+      // run.sh starts with set -e, so the block must hold up under it.
       const preamble = [
+        'set -e',
         'log() { echo "[ble-scale-sync] $*"; }',
         ...Object.entries(vars).map(([k, v]) => `${k}='${v}'`),
       ].join('\n');
@@ -995,10 +1016,12 @@ describe.skipIf(!SHELL)('run.sh Garmin token import', () => {
         { encoding: 'utf8' },
       );
       const imported = `${dir}/data/garmin_tokens.json`;
+      const region = `${dir}/data/garmin_domain.txt`;
       return {
         status: res.status,
         stdout: res.stdout.replaceAll(dir, '<tmp>'),
         token: existsSync(imported) ? readFileSync(imported, 'utf8') : null,
+        region: existsSync(region) ? readFileSync(region, 'utf8') : null,
       };
     });
   }
@@ -1060,6 +1083,69 @@ describe.skipIf(!SHELL)('run.sh Garmin token import', () => {
       expect(r.token).toBe('{"token":"share"}');
       expect(r.stdout).toMatch(/IMPORTING a Garmin token/);
     }
+  });
+
+  describe('region marker', () => {
+    it('is imported together with the token', () => {
+      for (const vars of [CUSTOM, GENERATED]) {
+        for (const [share, kept] of [
+          ['cn', 'cn'],
+          ['com', 'com'],
+          ['cn\n', 'cn'],
+          ['cn\r\n', 'cn'],
+        ]) {
+          const r = runBlock(vars, true, false, { share });
+          expect(r.status).toBe(0);
+          expect(r.region, JSON.stringify(share)).toBe(kept);
+          expect(r.stdout).toContain(`Garmin region imported with the token: ${kept}`);
+        }
+      }
+    });
+
+    it('replaces a marker left behind by an earlier token', () => {
+      const r = runBlock(CUSTOM, true, false, { share: 'com', data: 'cn' });
+      expect(r.region).toBe('com');
+    });
+
+    it('is removed when the imported token comes without one', () => {
+      const r = runBlock(CUSTOM, true, false, { data: 'cn' });
+      expect(r.status).toBe(0);
+      expect(r.token).toBe('{"token":"share"}');
+      expect(r.region).toBeNull();
+      expect(r.stdout).not.toContain('does not say cn or com');
+    });
+
+    it('is ignored, and a stale one removed, when its content is not exactly cn or com', () => {
+      for (const share of ['hunter2', 'cn ', 'CN', 'cn\n\n\nxxxxxxxxxxxx', '']) {
+        const r = runBlock(CUSTOM, true, false, { share, data: 'cn' });
+        expect(r.status, JSON.stringify(share)).toBe(0);
+        expect(r.region, JSON.stringify(share)).toBeNull();
+        expect(r.stdout).not.toContain('hunter2');
+        expect(r.stdout, JSON.stringify(share)).toContain(
+          'WARNING: <tmp>/share/garmin_domain.txt does not say cn or com, so it is ignored and uploads use garmin.com',
+        );
+      }
+    });
+
+    it('is never imported without the token (generated mode)', () => {
+      const r = runBlock(GENERATED, false, false, { share: 'cn' });
+      expect(r.token).toBeNull();
+      expect(r.region).toBeNull();
+    });
+
+    it('does not replace the marker of the token already in use', () => {
+      const r = runBlock(GENERATED, true, true, { share: 'cn', data: 'com' });
+      expect(r.token).toBe('{"token":"data"}');
+      expect(r.region).toBe('com');
+      expect(r.stdout).toMatch(/was NOT imported/);
+    });
+
+    it('is named in the hint when the sign-in from the add-on fails', () => {
+      const r = runBlock(GENERATED, false);
+      expect(r.status).toBe(0);
+      expect(r.stdout).toContain('garmin.cn');
+      expect(r.stdout).toContain('garmin_domain.txt');
+    });
   });
 });
 

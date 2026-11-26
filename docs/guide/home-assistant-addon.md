@@ -126,6 +126,8 @@ The add-on has no terminal for an MFA code. If your Garmin account uses MFA, or 
 2. Copy `garmin_tokens.json` from the token directory it wrote to into `/share/ble-scale-sync/garmin-tokens/` on the Home Assistant host, for example with the Samba share or File editor add-on.
 3. Restart the add-on. The log shows `IMPORTING a Garmin token from /share/ble-scale-sync/garmin-tokens/garmin_tokens.json`.
 
+The add-on cannot sign in to a Garmin China (garmin.cn) account itself, so that account takes this route too. Run `setup-garmin` with `GARMIN_IS_CN=true` as in [Garmin China accounts](/exporters#garmin-china) and copy `garmin_domain.txt` into the same folder in step 2. It is imported only together with the token, so a `garmin_domain.txt` added to `/share` later is not picked up.
+
 The import runs only while `/data/garmin-tokens/` holds no token. Otherwise anything that can write to `/share` could redirect your measurements to another Garmin account. A different token waiting in `/share` is not imported, and the log says so. To switch accounts, reinstall the add-on and import again. Reinstalling also clears the remembered weights and the retry queue in `/data`.
 
 ## Custom config mode
