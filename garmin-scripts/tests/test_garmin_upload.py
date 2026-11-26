@@ -261,6 +261,39 @@ class MissingTokenTest(unittest.TestCase):
         garmin_cls.return_value.login.assert_called_once_with(token_dir)
 
 
+class RegionTest(unittest.TestCase):
+    """Garmin China accounts need Garmin(is_cn=True) before the token is resumed."""
+
+    def setUp(self):
+        patcher = mock.patch.dict(os.environ)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        os.environ.pop("GARMIN_IS_CN", None)
+
+    def client_kwargs(self, marker=None):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as token_dir:
+            open(os.path.join(token_dir, "garmin_tokens.json"), "w").close()
+            if marker is not None:
+                with open(os.path.join(token_dir, "garmin_domain.txt"), "w") as f:
+                    f.write(marker)
+            with mock.patch.object(garmin_upload, "Garmin") as garmin_cls:
+                garmin_upload.get_garmin_client(token_dir)
+        garmin_cls.assert_called_once()
+        return garmin_cls.call_args.kwargs
+
+    def test_uses_garmin_com_without_a_marker_or_env(self):
+        self.assertIs(self.client_kwargs()["is_cn"], False)
+
+    def test_a_cn_marker_selects_garmin_cn(self):
+        self.assertIs(self.client_kwargs(marker="cn")["is_cn"], True)
+
+    def test_env_wins_over_the_marker(self):
+        os.environ["GARMIN_IS_CN"] = "false"
+        self.assertIs(self.client_kwargs(marker="cn")["is_cn"], False)
+
+
 def chained(outer, cause):
     outer.__cause__ = cause
     return outer

@@ -148,6 +148,38 @@ class AuthenticateTest(unittest.TestCase):
         self.assertIn("API Error 401", output)
 
 
+class RegionTest(unittest.TestCase):
+    """Garmin China accounts: setup logs in on garmin.cn and leaves a marker for the uploader."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.token_dir = self._tmp.name
+        self.addCleanup(self._tmp.cleanup)
+        patcher = mock.patch.dict(os.environ)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        os.environ.pop("GARMIN_IS_CN", None)
+
+    def authenticate(self):
+        with mock.patch.object(setup_garmin, "Garmin", return_value=make_garmin()) as cls:
+            with mock.patch("builtins.input", return_value="123456"):
+                self.assertTrue(setup_garmin.authenticate("a@b.c", "pw", self.token_dir))
+        return cls
+
+    def marker(self):
+        with open(os.path.join(self.token_dir, "garmin_domain.txt")) as f:
+            return f.read()
+
+    def test_logs_in_on_garmin_com_by_default(self):
+        self.assertIs(self.authenticate().call_args.kwargs["is_cn"], False)
+        self.assertEqual(self.marker(), "com")
+
+    def test_env_selects_garmin_cn_and_the_marker_records_it(self):
+        os.environ["GARMIN_IS_CN"] = "true"
+        self.assertIs(self.authenticate().call_args.kwargs["is_cn"], True)
+        self.assertEqual(self.marker(), "cn")
+
+
 class ResolveEnvRefTest(unittest.TestCase):
     def test_resolves_a_reference(self):
         with mock.patch.dict(os.environ, {"BSS_TEST_PW": "secret"}):
