@@ -1,0 +1,67 @@
+{
+  "adverts": [
+    {
+      "atMs": 0,
+      "data": "0x0100 01032802000000000121043804380105bf",
+      "decision": "wait",
+      "live": 108
+    },
+    {
+      "atMs": 176,
+      "data": "0x0100 01032802000000000121043b043b0105c5",
+      "decision": "wait",
+      "live": 108.3
+    },
+    {
+      "atMs": 245,
+      "data": "0x0100 01032802000000000121043004300105af",
+      "decision": "wait",
+      "live": 107.2
+    },
+    {
+      "atMs": 16746,
+      "data": "0x0100 01032802000000000121043104310105b1",
+      "decision": "wait",
+      "live": 107.3
+    },
+    {
+      "atMs": 17527,
+      "data": "0x0100 01032802000000000121043004300105af",
+      "decision": "wait",
+      "live": 107.2
+    },
+    {
+      "atMs": 21688,
+      "data": "0x0100 010328020000000001210430043081052f",
+      "decision": "complete",
+      "reading": {
+        "weight": 107.2,
+        "impedance": 0
+      },
+      "sink": "queued"
+    }
+  ],
+  "exports": [
+    {
+      "atMs": 21688,
+      "by": "advert",
+      "reading": {
+        "weight": 107.2,
+        "impedance": 0
+      },
+      "payload": {
+        "weight": 107.2,
+        "impedance": 0,
+        "bmi": 32.01,
+        "bodyFatPercent": 29.11,
+        "waterPercent": 51.75,
+        "boneMass": 3.19,
+        "muscleMass": 72.8,
+        "visceralFat": 14,
+        "physiqueRating": 1,
+        "bmr": 2070,
+        "metabolicAge": 31
+      }
+    }
+  ]
+}

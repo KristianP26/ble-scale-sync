@@ -160,6 +160,8 @@ The reading goes out about two seconds after the display settles, and at most 12
 
 The weight is read in kg whether the display shows kg or lb. Other display units are ignored with a warning in the log.
 
+This holds for both frame variants the scale is sold with, `02 03 11` and `01 03 28`.
+
 ### OKOK app scales (Chipsea broadcast)
 
 Sold under many names with the OKOK app. Keep the scale on kg. Nameless units need `ble.scale_mac` on Linux. On macOS only units named `Yoda0`, `Yoda1` or `ADV` work. Scales advertising as `Chipsea-BLE` are not supported; report them on [#408](https://github.com/KristianP26/ble-scale-sync/issues/408).
