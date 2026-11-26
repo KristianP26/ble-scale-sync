@@ -607,7 +607,11 @@ export class HaBluetoothClient {
         this.scheduleReconnect();
       });
     }, delay);
-    this.reconnectTimer.unref?.();
+    // Not unref'd: between the close and the next attempt this timer is the
+    // only handle left (the socket is gone and a pending reading promise does
+    // not count), so an unref'd timer let continuous mode drain the event loop
+    // and exit 0 on the first websocket drop instead of reconnecting. stop()
+    // clears it, so it never holds a shutdown open.
     bleLog.debug(`Home Assistant reconnect in ${delay / 1000}s`);
   }
 }

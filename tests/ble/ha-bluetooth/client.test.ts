@@ -559,6 +559,24 @@ describe('HaBluetoothClient', () => {
     expect(cb).toHaveBeenCalledTimes(1);
   });
 
+  // Between the close and the next attempt the reconnect timer is the only
+  // handle left. Unref'd, it let continuous mode drain the event loop and exit
+  // 0 on the first websocket drop (seen live as "reconnect in 2s" followed by
+  // "finished (exit code 0)").
+  it('keeps the process alive while it waits to reconnect', async () => {
+    const started = client.start();
+    handshake(sockets[0]);
+    await started;
+
+    sockets[0].serverCloses(1006, 'gone');
+    const timer = (client as unknown as { reconnectTimer: NodeJS.Timeout | null }).reconnectTimer;
+    expect(timer).not.toBeNull();
+    expect(timer!.hasRef()).toBe(true);
+
+    await client.stop();
+    expect((client as unknown as { reconnectTimer: unknown }).reconnectTimer).toBeNull();
+  });
+
   it('does not reconnect after stop()', async () => {
     const started = client.start();
     handshake(sockets[0]);
