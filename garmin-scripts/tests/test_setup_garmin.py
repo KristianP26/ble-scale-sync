@@ -178,6 +178,81 @@ class RegionTest(unittest.TestCase):
         self.assertIs(self.authenticate().call_args.kwargs["is_cn"], True)
         self.assertEqual(self.marker(), "cn")
 
+    def authenticate_with_failing_marker(self):
+        garmin = make_garmin()
+        with mock.patch.object(setup_garmin, "Garmin", return_value=garmin):
+            with mock.patch.object(
+                setup_garmin, "write_domain_marker", side_effect=OSError("read-only")
+            ):
+                with mock.patch("builtins.print") as printed:
+                    ok = setup_garmin.authenticate("a@b.c", "pw", self.token_dir)
+        output = "\n".join(str(call.args[0]) for call in printed.call_args_list)
+        return ok, garmin, output
+
+    def test_a_marker_that_cannot_be_written_does_not_fail_the_setup(self):
+        ok, garmin, output = self.authenticate_with_failing_marker()
+        self.assertTrue(ok)
+        garmin.client.dump.assert_called_once_with(self.token_dir)
+        self.assertIn("could not write garmin_domain.txt", output)
+
+    def test_a_cn_marker_that_cannot_be_written_names_the_region_and_the_fix(self):
+        os.environ["GARMIN_IS_CN"] = "true"
+        ok, _, output = self.authenticate_with_failing_marker()
+        self.assertTrue(ok)
+        self.assertIn("uploads use garmin.com", output)
+        self.assertIn("make %s writable" % self.token_dir, output)
+        self.assertIn("GARMIN_IS_CN=true", output)
+
+    def test_a_com_marker_that_cannot_be_written_names_the_old_cn_marker_that_stays(self):
+        # The old marker is left in place, so uploads keep going to garmin.cn.
+        write(os.path.join(self.token_dir, "garmin_domain.txt"), "cn")
+        os.environ["GARMIN_IS_CN"] = "false"
+        ok, _, output = self.authenticate_with_failing_marker()
+        self.assertTrue(ok)
+        self.assertIn("uploads use garmin.cn", output)
+        self.assertIn("GARMIN_IS_CN=false", output)
+        self.assertEqual(self.marker(), "cn")
+
+    def test_a_com_marker_that_cannot_be_written_without_an_old_one_names_garmin_com(self):
+        ok, _, output = self.authenticate_with_failing_marker()
+        self.assertTrue(ok)
+        self.assertIn("uploads use garmin.com", output)
+        self.assertIn("GARMIN_IS_CN=false", output)
+
+    @unittest.skipIf(os.name == "nt", "POSIX permission bits")
+    def test_the_token_dir_is_still_restricted_when_the_marker_cannot_be_written(self):
+        garmin = make_garmin()
+
+        def dump(path):
+            target = os.path.join(path, "garmin_tokens.json")
+            with open(target, "w") as f:
+                f.write("{}")
+            os.chmod(target, 0o644)
+
+        garmin.client.dump.side_effect = dump
+        os.chmod(self.token_dir, 0o755)
+        with mock.patch.object(setup_garmin, "Garmin", return_value=garmin):
+            with mock.patch.object(
+                setup_garmin, "write_domain_marker", side_effect=OSError("read-only")
+            ):
+                with mock.patch("builtins.print"):
+                    self.assertTrue(setup_garmin.authenticate("a@b.c", "pw", self.token_dir))
+        self.assertEqual(os.stat(self.token_dir).st_mode & 0o777, 0o700)
+        token_file = os.path.join(self.token_dir, "garmin_tokens.json")
+        self.assertEqual(os.stat(token_file).st_mode & 0o777, 0o600)
+
+    def test_a_failed_dump_leaves_the_old_marker_untouched(self):
+        # The marker follows the token: it must not claim a region for a
+        # token that was never saved.
+        write(os.path.join(self.token_dir, "garmin_domain.txt"), "cn")
+        os.environ["GARMIN_IS_CN"] = "false"
+        garmin = make_garmin()
+        garmin.client.dump.side_effect = OSError("read-only filesystem")
+        with mock.patch.object(setup_garmin, "Garmin", return_value=garmin):
+            with mock.patch("builtins.print"):
+                self.assertFalse(setup_garmin.authenticate("a@b.c", "pw", self.token_dir))
+        self.assertEqual(self.marker(), "cn")
+
     def test_a_rerun_keeps_the_region_of_the_token_directory(self):
         write(os.path.join(self.token_dir, "garmin_domain.txt"), "cn")
         self.assertIs(self.authenticate().call_args.kwargs["is_cn"], True)

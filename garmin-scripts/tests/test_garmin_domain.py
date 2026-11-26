@@ -83,6 +83,41 @@ class WriteDomainMarkerTest(DomainTestCase):
         garmin_domain.write_domain_marker(self.token_dir, False)
         self.assertEqual(self.read(), "com")
 
+    @unittest.skipIf(os.name == "nt", "POSIX permission bits")
+    def test_the_marker_is_owner_only(self):
+        old_umask = os.umask(0o022)
+        try:
+            garmin_domain.write_domain_marker(self.token_dir, True)
+        finally:
+            os.umask(old_umask)
+        mode = os.stat(os.path.join(self.token_dir, garmin_domain.MARKER_NAME)).st_mode
+        self.assertEqual(mode & 0o777, 0o600)
+
+    @unittest.skipIf(os.name == "nt", "POSIX permission bits")
+    def test_an_older_world_readable_marker_becomes_owner_only(self):
+        self.marker("com")
+        os.chmod(os.path.join(self.token_dir, garmin_domain.MARKER_NAME), 0o644)
+        garmin_domain.write_domain_marker(self.token_dir, True)
+        mode = os.stat(os.path.join(self.token_dir, garmin_domain.MARKER_NAME)).st_mode
+        self.assertEqual(mode & 0o777, 0o600)
+
+    def test_leaves_only_the_marker_behind(self):
+        garmin_domain.write_domain_marker(self.token_dir, True)
+        self.assertEqual(os.listdir(self.token_dir), [garmin_domain.MARKER_NAME])
+
+    def test_a_failed_write_keeps_the_old_marker_and_cleans_up(self):
+        self.marker("cn")
+        with mock.patch.object(garmin_domain.os, "replace", side_effect=OSError("disk full")):
+            with self.assertRaises(OSError):
+                garmin_domain.write_domain_marker(self.token_dir, False)
+        self.assertEqual(os.listdir(self.token_dir), [garmin_domain.MARKER_NAME])
+        self.assertTrue(garmin_domain.is_cn_domain(self.token_dir))
+
+    def test_an_unwritable_directory_raises_oserror(self):
+        missing = os.path.join(self.token_dir, "absent")
+        with self.assertRaises(OSError):
+            garmin_domain.write_domain_marker(missing, True)
+
     def test_what_is_written_is_what_is_read(self):
         for is_cn in (True, False):
             with self.subTest(is_cn=is_cn):

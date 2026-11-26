@@ -7,7 +7,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 from garminconnect import Garmin
 
-from garmin_domain import is_cn_domain, write_domain_marker
+from garmin_domain import MARKER_NAME, is_cn_domain, marker_region, write_domain_marker
 from garmin_errors import format_error_chain
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -190,8 +190,26 @@ def authenticate(email, password, token_dir):
         # either path; both branches rely on this explicit dump, which also
         # surfaces write errors that login()'s auto-dump would have swallowed.
         garmin.client.dump(token_dir)
+        # The token is saved by now, so a marker that cannot be written must
+        # not report the whole setup as failed; only the uploader's region
+        # guess is at stake.
+        try:
+            write_domain_marker(token_dir, is_cn)
+        except OSError as e:
+            print(f"[Setup] Warning: could not write {MARKER_NAME} in {token_dir}: {e}")
+            # A marker that is already there stays as it was, and the uploader
+            # reads it; without one the uploader starts on garmin.com.
+            kept = "garmin.cn" if marker_region(token_dir) else "garmin.com"
+            print(
+                f"[Setup] Until that is fixed, uploads use {kept} unless "
+                "GARMIN_IS_CN is set for the app."
+            )
+            print(
+                f"[Setup] To fix it, make {token_dir} writable and run setup "
+                f"again, or set GARMIN_IS_CN={'true' if is_cn else 'false'} "
+                "for the app."
+            )
         restrict_token_dir(token_dir)
-        write_domain_marker(token_dir, is_cn)
 
         print(f"[Setup] Tokens saved to: {token_dir}")
         return True
