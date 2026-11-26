@@ -169,7 +169,9 @@ def authenticate(email, password, token_dir):
         os.makedirs(token_dir, mode=0o700, exist_ok=True)
         cleanup_legacy_tokens(token_dir)
 
-        is_cn = is_cn_domain()
+        # The marker of a token directory set up before keeps its region on a
+        # rerun, so renewing a CN token does not need GARMIN_IS_CN again.
+        is_cn = is_cn_domain(token_dir)
         garmin = Garmin(email, password, return_on_mfa=True, is_cn=is_cn)
 
         print("[Setup] Logging in...")

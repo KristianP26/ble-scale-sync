@@ -167,8 +167,7 @@ class RegionTest(unittest.TestCase):
         return cls
 
     def marker(self):
-        with open(os.path.join(self.token_dir, "garmin_domain.txt")) as f:
-            return f.read()
+        return read(os.path.join(self.token_dir, "garmin_domain.txt"))
 
     def test_logs_in_on_garmin_com_by_default(self):
         self.assertIs(self.authenticate().call_args.kwargs["is_cn"], False)
@@ -178,6 +177,48 @@ class RegionTest(unittest.TestCase):
         os.environ["GARMIN_IS_CN"] = "true"
         self.assertIs(self.authenticate().call_args.kwargs["is_cn"], True)
         self.assertEqual(self.marker(), "cn")
+
+    def test_a_rerun_keeps_the_region_of_the_token_directory(self):
+        write(os.path.join(self.token_dir, "garmin_domain.txt"), "cn")
+        self.assertIs(self.authenticate().call_args.kwargs["is_cn"], True)
+        self.assertEqual(self.marker(), "cn")
+
+    def test_env_switches_a_cn_token_directory_back(self):
+        write(os.path.join(self.token_dir, "garmin_domain.txt"), "cn")
+        os.environ["GARMIN_IS_CN"] = "false"
+        self.assertIs(self.authenticate().call_args.kwargs["is_cn"], False)
+        self.assertEqual(self.marker(), "com")
+
+    def test_each_token_directory_from_config_keeps_its_own_region(self):
+        cn_dir = os.path.join(self.token_dir, "cn")
+        com_dir = os.path.join(self.token_dir, "com")
+        write(os.path.join(cn_dir, "garmin_domain.txt"), "cn")
+        os.makedirs(com_dir)
+        config = {
+            "users": [
+                {
+                    "name": "Alice",
+                    "exporters": [
+                        {"type": "garmin", "email": "a@x", "password": "pw", "token_dir": cn_dir}
+                    ],
+                },
+                {
+                    "name": "Bob",
+                    "exporters": [
+                        {"type": "garmin", "email": "b@x", "password": "pw", "token_dir": com_dir}
+                    ],
+                },
+            ]
+        }
+        with mock.patch.object(setup_garmin, "load_config", return_value=config):
+            with mock.patch.object(
+                setup_garmin, "Garmin", side_effect=lambda *a, **kw: make_garmin()
+            ) as cls:
+                with mock.patch("builtins.print"):
+                    setup_garmin.run_from_config(os.path.join(self.token_dir, "config.yaml"))
+        self.assertEqual([c.kwargs["is_cn"] for c in cls.call_args_list], [True, False])
+        self.assertEqual(read(os.path.join(cn_dir, "garmin_domain.txt")), "cn")
+        self.assertEqual(read(os.path.join(com_dir, "garmin_domain.txt")), "com")
 
 
 class ResolveEnvRefTest(unittest.TestCase):
@@ -301,7 +342,13 @@ def run_main(argv, cwd, env=None):
     code under test loads from a .env is dropped again afterwards.
     """
     with mock.patch.dict(os.environ):
-        for key in ("GARMIN_EMAIL", "GARMIN_PASSWORD", "TOKEN_DIR", "BSS_TEST_GARMIN_PW"):
+        for key in (
+            "GARMIN_EMAIL",
+            "GARMIN_PASSWORD",
+            "GARMIN_IS_CN",
+            "TOKEN_DIR",
+            "BSS_TEST_GARMIN_PW",
+        ):
             os.environ.pop(key, None)
         os.environ.update(env or {})
         with _Cwd(cwd):
@@ -321,6 +368,11 @@ def write(path, text):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w") as f:
         f.write(text)
+
+
+def read(path):
+    with open(path) as f:
+        return f.read()
 
 
 class DotenvBesideConfigTest(unittest.TestCase):
