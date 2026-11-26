@@ -57,6 +57,7 @@ If your scale is not found or its values look wrong, follow [Troubleshooting](ht
 - Scale protocols: many adapters are ported from [openScale](https://github.com/oliexdev/openScale) by oliexdev and contributors.
 - Eufy P2, P2 Pro, C20 and P3: [bdr99/eufylife-ble-client](https://github.com/bdr99/eufylife-ble-client).
 - Etekcity Fit 8S: [etekcity_esf551_ble](https://github.com/ronnnnnnnnnnnnn/etekcity_esf551_ble), support contributed by Flautz.
+- Senssun IF_B2: support contributed by chrisjenkinson.
 - OKOK and Chipsea broadcast: public captures, checked against openScale and [ble_monitor](https://github.com/custom-components/ble_monitor).
 - PICOOC Mini Lite: openScale (dnsfdv) and the advertisement log in oliexdev/openScale#1512.
 - A&D UC-352BLE: the capture in oliexdev/openScale#1505 (mrblowntobits) and the GATT dump in [HEADS-project/ThingML-BLE](https://github.com/HEADS-project/ThingML-BLE).

@@ -82,6 +82,27 @@
     ]
   },
   {
+    "name": "Senssun IF_B2",
+    "match": {
+      "priority": 255,
+      "names": {
+        "exact": [
+          "if_b2"
+        ]
+      }
+    },
+    "charNotifyUuid": "0000fff100001000800000805f9b34fb",
+    "charWriteUuid": "0000fff200001000800000805f9b34fb",
+    "completionHoldMs": 9000,
+    "hooks": [
+      "configure",
+      "onConnected",
+      "onSessionStart",
+      "onSessionEnd",
+      "isFinal"
+    ]
+  },
+  {
     "name": "QN Scale",
     "match": {
       "priority": 250,
