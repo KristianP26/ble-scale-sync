@@ -60,14 +60,11 @@ export function discoverPeripheral(
     const onDiscover = (peripheral: Peripheral): void => {
       const name = peripheral.advertisement?.localName ?? '';
       const addr = peripheralAddress(peripheral);
-      const svcUuids = (peripheral.advertisement?.serviceUuids ?? []).map(normalizeUuid);
 
       if (!seen.has(addr)) {
         seen.add(addr);
         bleLog.debug(`Discovered: ${safeName(name) || '(no name)'} [${addr}]`);
       }
-
-      const mfgData = parseMfgData(peripheral.advertisement?.manufacturerData);
 
       if (targetMac) {
         // Target mode: match by MAC or CoreBluetooth UUID
@@ -83,8 +80,8 @@ export function discoverPeripheral(
         const info: BleDeviceInfo = {
           localName: name,
           address: peripheral.address ? formatMac(peripheral.address) : undefined,
-          serviceUuids: svcUuids,
-          manufacturerData: mfgData,
+          serviceUuids: (peripheral.advertisement?.serviceUuids ?? []).map(normalizeUuid),
+          manufacturerData: parseMfgData(peripheral.advertisement?.manufacturerData),
           serviceData: parseServiceData(peripheral),
         };
         const matched = resolveAdapter(info, adapters);

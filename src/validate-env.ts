@@ -1,12 +1,13 @@
 import { config } from 'dotenv';
 import { createLogger } from './logger.js';
-import { isValidScaleId } from './ble/scale-id.js';
+import { isValidScaleId, SCALE_ID_HINT } from './ble/scale-id.js';
 import type { Gender, UserProfile } from './interfaces/scale-adapter.js';
 
 const log = createLogger('Config');
 
 import type { WeightUnit } from './config/schema.js';
 import { defaultEnvPath } from './config/paths.js';
+import { parseBoolWord } from './config/env-refs.js';
 export type { WeightUnit } from './config/schema.js';
 
 export interface Config {
@@ -51,9 +52,8 @@ function parseGender(raw: string): Gender {
 // The same words the config.yaml overrides (boolEnv) accept, so DRY_RUN=on
 // does not start in one mode and fail in the other (G-22).
 function parseBoolean(key: string, raw: string): boolean {
-  const lower = raw.trim().toLowerCase();
-  if (['true', 'yes', 'on', '1'].includes(lower)) return true;
-  if (['false', 'no', 'off', '0'].includes(lower)) return false;
+  const value = parseBoolWord(raw);
+  if (value !== undefined) return value;
   fail(`${key} must be true/false/yes/no/on/off/1/0, got '${raw}'`);
 }
 
@@ -87,10 +87,7 @@ export function loadConfig(): Config {
   const rawMac = process.env.SCALE_MAC;
   if (rawMac) {
     if (!isValidScaleId(rawMac)) {
-      fail(
-        `SCALE_MAC must be a MAC address (XX:XX:XX:XX:XX:XX) ` +
-          `or CoreBluetooth UUID (macOS), got '${rawMac}'`,
-      );
+      fail(`SCALE_MAC must be ${SCALE_ID_HINT}, got '${rawMac}'`);
     }
     scaleMac = rawMac;
   }

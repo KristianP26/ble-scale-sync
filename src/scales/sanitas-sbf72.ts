@@ -10,7 +10,7 @@ import type {
   UserProfile,
   BodyComposition,
 } from '../interfaces/scale-adapter.js';
-import { buildPayload } from './body-comp-helpers.js';
+import { buildPayload, uuid16 } from './body-comp-helpers.js';
 import { SigMeasurementPairing } from './sig-bcs.js';
 import { matchesDescriptor, type MatchDescriptor } from './match-descriptor.js';
 import { normalizeUuid } from '../ble/types.js';
@@ -18,7 +18,7 @@ import { normalizeUuid } from '../ble/types.js';
 // Standard SIG characteristics (inherited from openScale's
 // StandardWeightProfileHandler, which subscribes both measurements).
 const CHR_WEIGHT_MEAS = '00002a9d00001000800000805f9b34fb';
-const CHR_BODY_COMP_MEAS = '00002a9c00001000800000805f9b34fb';
+const CHR_BODY_COMP_MEAS = uuid16(0x2a9c);
 const CHR_USER_CONTROL_POINT = '00002a9f00001000800000805f9b34fb';
 
 /** How long a 0x2A9D weight waits for the 0x2A9C that follows it. */

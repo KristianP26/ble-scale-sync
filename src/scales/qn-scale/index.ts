@@ -13,7 +13,7 @@ import type {
   UserWeightHint,
   HoldForComposition,
 } from '../../interfaces/scale-adapter.js';
-import { bleLog, errMsg, normalizeUuid } from '../../ble/types.js';
+import { bleLog, errMsg, normalizeUuid, sleep } from '../../ble/types.js';
 import type { MatchDescriptor } from '../match-descriptor.js';
 import {
   jieliAuthResponseFrame,
@@ -93,8 +93,6 @@ import { scaleCompositionPayload, type ScaleCompositionPin } from './own-composi
 import { QnLedger } from './stored-ledger.js';
 import { QnSession } from './session.js';
 import { UnitMap } from '../device-state.js';
-
-const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 /** Each dialect's handler (see QnDialectHandler). */
 const DIALECTS: Record<QnDialectKind, QnDialectHandler> = {
@@ -554,14 +552,14 @@ export class QnScaleAdapter
       );
       // handleScaleInfo sends AE01 init + 0x13 config
       await this.handleScaleInfo();
-      await wait(500);
+      await sleep(500);
       if (gen !== this.sessionGeneration) return;
     }
 
     if (!this.s.timeSyncSent) {
       bleLog.debug('QN: fallback: sending time sync + profile');
       await this.handleReady();
-      await wait(500);
+      await sleep(500);
       if (gen !== this.sessionGeneration) return;
     }
 
@@ -1340,7 +1338,7 @@ export class QnScaleAdapter
 
     // Step 2: AE01 init. Fails silently on firmware without AE00.
     await this.writeAe01([0xfe, 0xdc, 0xba, 0xc0, 0x06, 0x00, 0x02, 0x01, 0x01, 0xef]);
-    await wait(200);
+    await sleep(200);
     if (gen !== this.sessionGeneration) return;
 
     // Step 3: 0x13 config. See buildConfig for the 9 vs 10 byte forms and why
@@ -1462,7 +1460,7 @@ export class QnScaleAdapter
       bleLog.debug('QN: A00D user-delete frame not sent (ble.qn_report_byte unset, #461)');
     }
 
-    await wait(200);
+    await sleep(200);
     if (!live()) return;
 
     // A00D response 2, the user profile ("visit"). openScale's constant (key 8,
@@ -1534,7 +1532,7 @@ export class QnScaleAdapter
     if (appProfile && this.s.kind === 'ext20') {
       const answered = await Promise.race([
         this.s.visitAnswered.then(() => true),
-        wait(VISIT_ANSWER_TIMEOUT_MS).then(() => false),
+        sleep(VISIT_ANSWER_TIMEOUT_MS).then(() => false),
       ]);
       if (!live()) return;
       if (!answered) {
@@ -1544,7 +1542,7 @@ export class QnScaleAdapter
         );
       }
     } else {
-      await wait(200);
+      await sleep(200);
       if (!live()) return;
     }
 
@@ -1573,7 +1571,7 @@ export class QnScaleAdapter
       const anchorKg = this.resolveAnchorKg();
       const anchor = buildMeasurementTrigger(anchorKg, this.writeSlot());
       for (let i = 0; i < TRIGGER_REPEATS; i++) {
-        await wait(i === 0 ? POST_START_ANCHOR_DELAY_MS : TRIGGER_GAP_MS);
+        await sleep(i === 0 ? POST_START_ANCHOR_DELAY_MS : TRIGGER_GAP_MS);
         if (!live()) return;
         await this.writeCmd([...anchor]);
       }
@@ -1597,7 +1595,7 @@ export class QnScaleAdapter
     } else if (this.opts.a4Prelude) {
       this.s.a4PreludeSent = true;
       for (let i = 0; i < A4_PRELUDE.length; i++) {
-        if (i > 0) await wait(A4_PRELUDE_GAP_MS);
+        if (i > 0) await sleep(A4_PRELUDE_GAP_MS);
         if (!live()) return;
         await this.writeCmd([...A4_PRELUDE[i]]);
       }
@@ -1620,7 +1618,7 @@ export class QnScaleAdapter
     const anchorKg = this.resolveAnchorKg();
     const trigger = buildMeasurementTrigger(anchorKg, this.writeSlot());
     for (let i = 0; i < TRIGGER_REPEATS; i++) {
-      if (i > 0) await wait(TRIGGER_GAP_MS);
+      if (i > 0) await sleep(TRIGGER_GAP_MS);
       if (!live()) return;
       await this.writeCmd([...trigger]);
     }

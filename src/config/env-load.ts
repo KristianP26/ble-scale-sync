@@ -6,6 +6,7 @@ import { parseBleAdapterEnv } from './env-overrides.js';
 import { loadConfig as loadEnvVarConfig } from '../validate-env.js';
 import { loadExporterConfig } from '../exporters/config.js';
 import { resolveTokenDir } from './token-dirs.js';
+import { parseBoolWord } from './env-refs.js';
 
 /**
  * Load config from .env, wrapping existing loadConfig() + loadExporterConfig()
@@ -195,7 +196,7 @@ export function loadEnvConfig(): AppConfig {
       dry_run: envConfig.dryRun,
       // Same TRUE words as the logger and the yaml override, so DEBUG=1 does
       // not mean debug logs on but runtime.debug off.
-      debug: ['true', 'yes', 'on', '1'].includes((process.env.DEBUG ?? '').trim().toLowerCase()),
+      debug: parseBoolWord(process.env.DEBUG ?? '') === true,
     },
     update_check: true,
   };

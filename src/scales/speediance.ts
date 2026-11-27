@@ -16,7 +16,7 @@ import {
   IMPEDANCE_MIN_OHM,
   IMPEDANCE_MAX_OHM,
 } from './body-comp-helpers.js';
-import { bleLog } from '../ble/types.js';
+import { bleLog, sleep } from '../ble/types.js';
 import type { MatchDescriptor } from './match-descriptor.js';
 
 // ─── Speediance FG2211WBF (SPEED_S_*, Lefu/Icomon OEM, FFB0 protocol) ────────
@@ -123,7 +123,7 @@ export class SpeedianceAdapter implements ScaleAdapterCore, GattWiring, MultiCha
   async onConnected(ctx: ConnectionContext): Promise<void> {
     for (const hex of HANDSHAKE) {
       await ctx.write(CHR_FFB1, Buffer.from(hex, 'hex'), true);
-      await new Promise((r) => setTimeout(r, 150));
+      await sleep(150);
     }
     bleLog.debug('Speediance: handshake sent');
   }

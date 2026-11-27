@@ -11,6 +11,7 @@ import type {
 } from '../interfaces/scale-adapter.js';
 import { uuid16, buildPayload, type ScaleBodyComp } from './body-comp-helpers.js';
 import { bleLog, LBS_TO_KG, normalizeUuid } from '../ble/types.js';
+import { toHex as hex } from '../ble/session/capture.js';
 import { parseSigDateTime, parseSigWeightMeasurement, trustedScaleTime } from './sig-wss.js';
 import type { MatchDescriptor } from './match-descriptor.js';
 
@@ -29,12 +30,6 @@ const CHR_HEIGHT = uuid16(0x2a8e); // User Data Service 0x181C
 // Beurer vendor characteristics on service 0xFFF0, proven from the #229 capture.
 const CHR_VENDOR_USER_LIST = uuid16(0xfff2); // notify: one frame per user slot
 const CHR_VENDOR_ACTIVITY = uuid16(0xfff3); // read/write: activity level
-
-/** Render bytes as spaced lowercase hex for the diagnostic log lines. */
-const hex = (b: Buffer | number[]): string =>
-  Array.from(b)
-    .map((v) => v.toString(16).padStart(2, '0'))
-    .join(' ');
 
 interface ProfileField {
   uuid: string;

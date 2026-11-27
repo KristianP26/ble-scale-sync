@@ -7,7 +7,7 @@ import type {
   ScaleReading,
   UserProfile,
 } from '../interfaces/scale-adapter.js';
-import { buildPayload } from './body-comp-helpers.js';
+import { buildPayload, xorChecksum } from './body-comp-helpers.js';
 import { bleLog } from '../ble/types.js';
 import { LogKey } from './device-state.js';
 import { ownAddressBytes, type MatchDescriptor } from './match-descriptor.js';
@@ -125,9 +125,7 @@ function c0Shaped(d: Buffer): boolean {
 
 function v20ChecksumOk(d: Buffer): boolean {
   if (d.length !== V20_LEN) return false;
-  let x = V20_CHECKSUM_SEED;
-  for (let i = 0; i < V20_CHECKSUM_OFFSET; i++) x ^= d[i];
-  return x === d[V20_CHECKSUM_OFFSET];
+  return (xorChecksum(d, 0, V20_CHECKSUM_OFFSET) ^ V20_CHECKSUM_SEED) === d[V20_CHECKSUM_OFFSET];
 }
 
 /** Frame grammar by length; the parse path never sees the company id. */

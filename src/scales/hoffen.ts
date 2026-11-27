@@ -7,7 +7,13 @@ import type {
   UserProfile,
   BodyComposition,
 } from '../interfaces/scale-adapter.js';
-import { uuid16, buildPayload, xorChecksum, type ScaleBodyComp } from './body-comp-helpers.js';
+import {
+  uuid16,
+  buildPayload,
+  xorChecksum,
+  positive,
+  type ScaleBodyComp,
+} from './body-comp-helpers.js';
 import { matchesDescriptor, type MatchDescriptor } from './match-descriptor.js';
 import { bleLog } from '../ble/types.js';
 
@@ -111,11 +117,11 @@ export class HoffenAdapter implements ScaleAdapterCore, GattWiring {
 
   private snapshot(): ScaleBodyComp {
     return {
-      fat: this.s.cachedFat > 0 ? this.s.cachedFat : undefined,
-      water: this.s.cachedWater > 0 ? this.s.cachedWater : undefined,
-      muscle: this.s.cachedMuscle > 0 ? this.s.cachedMuscle : undefined,
-      bone: this.s.cachedBone > 0 ? this.s.cachedBone : undefined,
-      visceralFat: this.s.cachedVisceral > 0 ? this.s.cachedVisceral : undefined,
+      fat: positive(this.s.cachedFat),
+      water: positive(this.s.cachedWater),
+      muscle: positive(this.s.cachedMuscle),
+      bone: positive(this.s.cachedBone),
+      visceralFat: positive(this.s.cachedVisceral),
     };
   }
 

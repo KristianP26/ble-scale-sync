@@ -12,7 +12,7 @@ import type {
   UserProfile,
   BodyComposition,
 } from '../interfaces/scale-adapter.js';
-import { bleLog, normalizeUuid } from '../ble/types.js';
+import { bleLog, normalizeUuid, sleep } from '../ble/types.js';
 import type { MatchDescriptor } from './match-descriptor.js';
 
 /**
@@ -176,7 +176,6 @@ export function buildSubContract(dataHex: string, prefix: number): Buffer[] {
 class SegmentReassembler {
   private readonly prefix: number;
   private buffer: Buffer = Buffer.alloc(0);
-  private expectedSegments = 0;
   private expectedTotalBytes = 0;
   private nextSegment = 0;
 
@@ -186,7 +185,6 @@ class SegmentReassembler {
 
   private reset(): void {
     this.buffer = Buffer.alloc(0);
-    this.expectedSegments = 0;
     this.expectedTotalBytes = 0;
     this.nextSegment = 0;
   }
@@ -211,7 +209,6 @@ class SegmentReassembler {
 
     if (segIdx === 0) {
       this.reset();
-      this.expectedSegments = numSegments;
       this.expectedTotalBytes = totalBytes;
     }
 
@@ -463,7 +460,7 @@ export class EufyP2Adapter
     bleLog.debug('Eufy: sending C0 handshake');
     for (const frame of this.s.auth.buildC0()) {
       await ctx.write(CHR_WRITE, frame, true);
-      await new Promise<void>((r) => setTimeout(r, EUFY_WRITE_DELAY_MS));
+      await sleep(EUFY_WRITE_DELAY_MS);
     }
   }
 
@@ -637,7 +634,7 @@ export class EufyP2Adapter
     if (!auth || !ctx) return;
     for (const frame of auth.buildC2()) {
       await ctx.write(CHR_WRITE, frame, true);
-      await new Promise<void>((r) => setTimeout(r, EUFY_WRITE_DELAY_MS));
+      await sleep(EUFY_WRITE_DELAY_MS);
     }
   }
 }

@@ -13,6 +13,7 @@ import {
   buildPayload,
   WEIGHT_ONLY_HOLD_MS,
   type ScaleBodyComp,
+  positive,
 } from './body-comp-helpers.js';
 import { matchesDescriptor, type MatchDescriptor } from './match-descriptor.js';
 
@@ -108,11 +109,11 @@ export class DigooScaleAdapter implements ScaleAdapterCore, GattWiring, HoldForC
       const bone = data[18] / 10;
 
       this.s.cachedComp = {
-        fat: fat > 0 ? fat : undefined,
-        visceralFat: visceral > 0 ? visceral : undefined,
-        water: water > 0 ? water : undefined,
-        muscle: muscle > 0 ? muscle : undefined,
-        bone: bone > 0 ? bone : undefined,
+        fat: positive(fat),
+        visceralFat: positive(visceral),
+        water: positive(water),
+        muscle: positive(muscle),
+        bone: positive(bone),
       };
     } else {
       this.s.cachedComp = {};

@@ -7,7 +7,13 @@ import type {
   UserProfile,
   BodyComposition,
 } from '../interfaces/scale-adapter.js';
-import { uuid16, buildPayload, type ScaleBodyComp } from './body-comp-helpers.js';
+import {
+  uuid16,
+  buildPayload,
+  xorChecksum,
+  positive,
+  type ScaleBodyComp,
+} from './body-comp-helpers.js';
 import { matchesDescriptor, type MatchDescriptor } from './match-descriptor.js';
 
 /** Bitmask flags for tracking which frame types have been received. */
@@ -49,9 +55,7 @@ export class SenssunAdapter implements ScaleAdapterCore, GattWiring, Unlockable 
   /** User sync command: [0xA5, 0x10, 0x11, 0x1E, 0xA0, 0x00, 0x00, xor, 0x00]. */
   readonly unlockCommand = (() => {
     const bytes = [0xa5, 0x10, 0x11, 0x1e, 0xa0, 0x00, 0x00];
-    let xor = 0;
-    for (let i = 1; i <= 6; i++) xor ^= bytes[i];
-    return [...bytes, xor & 0xff, 0x00];
+    return [...bytes, xorChecksum(bytes, 1, 7), 0x00];
   })();
   readonly unlockIntervalMs = 5000;
 
@@ -101,10 +105,10 @@ export class SenssunAdapter implements ScaleAdapterCore, GattWiring, Unlockable 
 
   private snapshot(): ScaleBodyComp {
     return {
-      fat: this.s.cachedFat > 0 ? this.s.cachedFat : undefined,
-      water: this.s.cachedWater > 0 ? this.s.cachedWater : undefined,
-      muscle: this.s.cachedMuscle > 0 ? this.s.cachedMuscle : undefined,
-      bone: this.s.cachedBone > 0 ? this.s.cachedBone : undefined,
+      fat: positive(this.s.cachedFat),
+      water: positive(this.s.cachedWater),
+      muscle: positive(this.s.cachedMuscle),
+      bone: positive(this.s.cachedBone),
     };
   }
 

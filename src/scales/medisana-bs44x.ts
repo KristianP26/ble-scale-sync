@@ -10,7 +10,7 @@ import type {
   UserProfile,
   BodyComposition,
 } from '../interfaces/scale-adapter.js';
-import { uuid16, buildPayload, type ScaleBodyComp } from './body-comp-helpers.js';
+import { uuid16, buildPayload, positive, type ScaleBodyComp } from './body-comp-helpers.js';
 import { matchesDescriptor, type MatchDescriptor } from './match-descriptor.js';
 import { trustedScaleTime } from './sig-wss.js';
 import { bleLog, normalizeUuid } from '../ble/types.js';
@@ -218,7 +218,6 @@ export class MedisanaBs44xAdapter
   }
 
   private parseComposition(data: Buffer): ScaleBodyComp {
-    const positive = (v: number) => (v > 0 ? v : undefined);
     return {
       bmr: positive(data.readUInt16LE(6) & 0x0fff),
       fat: positive(tenths(data, 8)),

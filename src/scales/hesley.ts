@@ -7,7 +7,7 @@ import type {
   UserProfile,
   BodyComposition,
 } from '../interfaces/scale-adapter.js';
-import { uuid16, buildPayload, type ScaleBodyComp } from './body-comp-helpers.js';
+import { uuid16, buildPayload, positive, type ScaleBodyComp } from './body-comp-helpers.js';
 import { matchesDescriptor, type MatchDescriptor } from './match-descriptor.js';
 
 const CHR_NOTIFY = uuid16(0xfff4);
@@ -69,10 +69,10 @@ export class HesleyScaleAdapter implements ScaleAdapterCore, GattWiring, Unlocka
     const bone = data.readUInt16BE(12) / 10;
 
     this.s.cachedComp = {
-      fat: fat > 0 ? fat : undefined,
-      water: water > 0 ? water : undefined,
-      muscle: muscle > 0 ? muscle : undefined,
-      bone: bone > 0 ? bone : undefined,
+      fat: positive(fat),
+      water: positive(water),
+      muscle: positive(muscle),
+      bone: positive(bone),
     };
 
     return { weight, impedance: 0, scaleComposition: this.s.cachedComp };

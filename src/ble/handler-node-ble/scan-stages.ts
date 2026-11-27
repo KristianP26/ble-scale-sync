@@ -423,7 +423,7 @@ export async function buildCharMapWithRetry(
     bleLog.debug(
       `GATT enumeration missing [${missing.join(', ')}], retry ${attempt}/${CHAR_DISCOVERY_MAX_RETRIES - 1} in ${CHAR_DISCOVERY_RETRY_DELAY_MS}ms...`,
     );
-    await new Promise<void>((r) => setTimeout(r, CHAR_DISCOVERY_RETRY_DELAY_MS));
+    await sleep(CHAR_DISCOVERY_RETRY_DELAY_MS);
     charMap = await enumerateCharMap(gatt, true);
   }
   return charMap;

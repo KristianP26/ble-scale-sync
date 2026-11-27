@@ -3,6 +3,7 @@ import { describeInvalidHeader, normaliseHeaders } from './headers.js';
 import type { ExporterSchema } from '../interfaces/exporter-schema.js';
 import type { Exporter } from '../interfaces/exporter.js';
 import type { ExporterEntry } from '../config/schema.js';
+import { parseBoolWord } from '../config/env-refs.js';
 import type {
   MqttConfig,
   WebhookConfig,
@@ -44,9 +45,6 @@ interface ExporterRegistryEntry {
   factory: (config: Record<string, unknown>) => Exporter;
 }
 
-const TRUE_STRINGS = new Set(['true', 'yes', '1', 'on']);
-const FALSE_STRINGS = new Set(['false', 'no', '0', 'off', '']);
-
 /**
  * Read an optional boolean field that must not be guessed at.
  *
@@ -66,9 +64,10 @@ function optionalBool(
   if (value === undefined || value === null) return undefined;
   if (typeof value === 'boolean') return value;
   if (typeof value === 'string') {
-    const lower = value.trim().toLowerCase();
-    if (TRUE_STRINGS.has(lower)) return true;
-    if (FALSE_STRINGS.has(lower)) return false;
+    // An empty `${VAR}` reads as false, unlike in the env overrides.
+    if (value.trim() === '') return false;
+    const parsed = parseBoolWord(value);
+    if (parsed !== undefined) return parsed;
   }
   throw new Error(
     `Exporter "${type}" field "${key}" must be true or false, got '${String(value)}'. Check your config.yaml.`,

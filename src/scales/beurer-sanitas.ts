@@ -9,7 +9,7 @@ import type {
   UserProfile,
   BodyComposition,
 } from '../interfaces/scale-adapter.js';
-import { uuid16, buildPayload, biaFatIfPlausible } from './body-comp-helpers.js';
+import { uuid16, buildPayload, biaFatIfPlausible, positive } from './body-comp-helpers.js';
 import { bleLog } from '../ble/types.js';
 import type { MatchDescriptor } from './match-descriptor.js';
 
@@ -47,11 +47,6 @@ interface CachedComp {
   water?: number;
   muscle?: number;
   bone?: number;
-}
-
-/** A scale-reported value, or undefined when the scale reported nothing. */
-function measured(v: number): number | undefined {
-  return v > 0 ? v : undefined;
 }
 
 /**
@@ -223,10 +218,10 @@ export class BeurerSanitasScaleAdapter
       impedance = data.readUInt16BE(6);
 
       this.cachedComp = {
-        fat: measured(data.readUInt16BE(8) / 10),
-        water: measured(data.readUInt16BE(10) / 10),
-        muscle: measured(data.readUInt16BE(12) / 10),
-        bone: measured((data.readUInt16BE(14) * 50) / 1000),
+        fat: positive(data.readUInt16BE(8) / 10),
+        water: positive(data.readUInt16BE(10) / 10),
+        muscle: positive(data.readUInt16BE(12) / 10),
+        bone: positive((data.readUInt16BE(14) * 50) / 1000),
       };
     }
 
@@ -311,10 +306,10 @@ export class BeurerSanitasScaleAdapter
     if (weight <= 0 || weight > 300 || !Number.isFinite(weight)) return null;
 
     this.cachedComp = {
-      fat: measured(fat),
-      water: measured(water),
-      muscle: measured(muscle),
-      bone: measured(bone),
+      fat: positive(fat),
+      water: positive(water),
+      muscle: positive(muscle),
+      bone: positive(bone),
     };
     return this.emit(weight, impedance);
   }

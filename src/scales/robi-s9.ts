@@ -10,7 +10,7 @@ import type {
   BodyComposition,
 } from '../interfaces/scale-adapter.js';
 import { uuid16, buildPayload } from './body-comp-helpers.js';
-import { bleLog } from '../ble/types.js';
+import { bleLog, sleep } from '../ble/types.js';
 import { isHutbitOemAdvert } from './lefu-signature.js';
 import type { MatchDescriptor } from './match-descriptor.js';
 
@@ -179,7 +179,7 @@ export class RobiS9Adapter implements ScaleAdapterCore, GattWiring, MultiCharNot
   async onConnected(ctx: ConnectionContext): Promise<void> {
     for (const hex of HANDSHAKE) {
       await ctx.write(CHR_FFB1, Buffer.from(hex, 'hex'), true);
-      await new Promise((r) => setTimeout(r, 150));
+      await sleep(150);
     }
     bleLog.debug('Robi S9: handshake sent');
   }

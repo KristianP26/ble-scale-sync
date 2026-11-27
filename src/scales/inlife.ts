@@ -7,7 +7,13 @@ import type {
   UserProfile,
   BodyComposition,
 } from '../interfaces/scale-adapter.js';
-import { uuid16, buildPayload, xorChecksum, type ScaleBodyComp } from './body-comp-helpers.js';
+import {
+  uuid16,
+  buildPayload,
+  xorChecksum,
+  positive,
+  type ScaleBodyComp,
+} from './body-comp-helpers.js';
 import type { MatchDescriptor } from './match-descriptor.js';
 import { bleLog } from '../ble/types.js';
 
@@ -176,12 +182,11 @@ export class InlifeScaleAdapter implements ScaleAdapterCore, GattWiring {
     } else {
       // Legacy mode — body comp values embedded
       this.s.lastFrameWasImpedanceMode = false;
-      const _lbm = ((data[4] << 16) | (data[5] << 8) | data[6]) / 1000;
+      // Bytes [4..6] carry LBM (u24 BE / 1000) and [9..10] BMR (u16 BE / 10); both unused.
       const visceral = data.readUInt16BE(7) / 10;
-      const _bmr = data.readUInt16BE(9) / 10;
 
       this.s.cachedComp = {
-        visceralFat: visceral > 0 ? visceral : undefined,
+        visceralFat: positive(visceral),
       };
       this.s.cachedImpedance = 0;
     }

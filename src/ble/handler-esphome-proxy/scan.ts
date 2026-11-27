@@ -14,7 +14,7 @@ import {
   ManufacturerDataCache,
   safeName,
 } from '../advertisement.js';
-import { bleLog, errMsg, IMPEDANCE_GRACE_MS } from '../types.js';
+import { bleLog, errMsg, IMPEDANCE_GRACE_MS, sleep } from '../types.js';
 import { EsphomeProxyPool } from './pool.js';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -293,7 +293,7 @@ export async function scanDevices(
         matchedAdapter: adapter?.name,
       });
     });
-    await new Promise<void>((resolve) => setTimeout(resolve, duration));
+    await sleep(duration);
     unsub();
     return [...results.values()];
   } finally {

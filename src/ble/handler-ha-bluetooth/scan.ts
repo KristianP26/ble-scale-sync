@@ -10,7 +10,7 @@ import {
   logAdvert,
   safeName,
 } from '../advertisement.js';
-import { bleLog, IMPEDANCE_GRACE_MS } from '../types.js';
+import { bleLog, IMPEDANCE_GRACE_MS, sleep } from '../types.js';
 import { HaBluetoothClient } from './client.js';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -206,7 +206,7 @@ export async function scanDevices(
         matchedAdapter: adapter?.name ?? prev?.matchedAdapter,
       });
     });
-    await new Promise<void>((resolve) => setTimeout(resolve, duration));
+    await sleep(duration);
     unsub();
     return [...results.values()];
   } finally {

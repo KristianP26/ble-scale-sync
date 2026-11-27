@@ -16,7 +16,7 @@ import {
   IMPEDANCE_MIN_OHM,
   IMPEDANCE_MAX_OHM,
 } from './body-comp-helpers.js';
-import { bleLog } from '../ble/types.js';
+import { bleLog, sleep } from '../ble/types.js';
 import { isHutbitOemAdvert, LEFU_COMPANY_ID } from './lefu-signature.js';
 import type { MatchDescriptor } from './match-descriptor.js';
 
@@ -212,7 +212,7 @@ export class HutbitAdapter implements ScaleAdapterCore, GattWiring, HoldForCompo
       // WRITE_NO_RESPONSE rejects a with-response write, so this is the safe mode
       // and matches the documented protocol above (#268 review).
       await ctx.write(CHR_FFB1, Buffer.from(hex, 'hex'), false);
-      await new Promise((r) => setTimeout(r, 150));
+      await sleep(150);
     }
     bleLog.debug('Hutbit: handshake sent');
   }

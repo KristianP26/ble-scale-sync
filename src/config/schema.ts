@@ -54,8 +54,6 @@ export const EsphomeProxySchema = z
     path: ['encryption_key'],
   });
 
-export type EsphomeEndpointConfig = z.infer<typeof EsphomeEndpointSchema>;
-
 /**
  * Home Assistant as the BLE radio: the app subscribes to HA's
  * `bluetooth/subscribe_advertisements` websocket stream, which carries every
@@ -603,10 +601,8 @@ export type ScaleConfig = z.infer<typeof ScaleSchema>;
 export type ExporterEntry = z.infer<typeof ExporterEntrySchema>;
 export type UserConfig = z.infer<typeof UserSchema>;
 export type RuntimeConfig = z.infer<typeof RuntimeSchema>;
-export type DockerConfig = z.infer<typeof DockerSchema>;
 export type AppConfig = z.infer<typeof AppConfigSchema>;
 export type UnknownUserStrategy = AppConfig['unknown_user'];
-export type OutOfRangeStrategy = AppConfig['out_of_range'];
 
 // --- Error formatting ---
 

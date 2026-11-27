@@ -66,8 +66,7 @@ export interface QnDialectHandler {
 }
 
 /** Format bytes as hex string for debug logging. */
-export const hex = (data: number[] | Buffer): string =>
-  [...data].map((b) => b.toString(16).padStart(2, '0')).join(' ');
+export { toHex as hex } from '../../ble/session/capture.js';
 
 /** A 0x23 record's slot [5] for the log; 0xf0 is no slot at all (#463). */
 export const storedSlotLabel = (slot: number): string =>

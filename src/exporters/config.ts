@@ -1,5 +1,6 @@
 import { createLogger } from '../logger.js';
 import { describeInvalidHeader, parseHeaderString } from './headers.js';
+import { parseBoolWord } from '../config/env-refs.js';
 
 const log = createLogger('ExporterConfig');
 
@@ -208,9 +209,8 @@ function parseWebhookTimeout(raw: string | undefined): number {
 // value that works in config.yaml or as an override works here too.
 function parseBoolean(key: string, raw: string | undefined, defaultValue: boolean): boolean {
   if (!raw) return defaultValue;
-  const lower = raw.toLowerCase();
-  if (['true', 'yes', '1', 'on'].includes(lower)) return true;
-  if (['false', 'no', '0', 'off'].includes(lower)) return false;
+  const value = parseBoolWord(raw);
+  if (value !== undefined) return value;
   fail(`${key} must be true/false/yes/no/on/off/1/0, got '${raw}'`);
 }
 

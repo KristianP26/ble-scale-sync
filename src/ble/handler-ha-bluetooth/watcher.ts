@@ -35,7 +35,6 @@ export class ReadingWatcher implements Watcher {
   private started = false;
   private adapters: ScaleAdapter[];
   private targetMac?: string;
-  private profile?: ProfileSource;
   private config: HaBluetoothConfig;
   private readonly dedup = new DedupWindow(DEDUP_WINDOW_MS);
   private client: HaBluetoothClient | null = null;
@@ -59,12 +58,12 @@ export class ReadingWatcher implements Watcher {
     config: HaBluetoothConfig,
     adapters: ScaleAdapter[],
     targetMac?: string,
-    profile?: ProfileSource,
+    // Accepted for parity with the other watchers; HA has no GATT path, so no profile is read.
+    _profile?: ProfileSource,
   ) {
     this.config = config;
     this.adapters = adapters;
     this.targetMac = targetMac?.toLowerCase();
-    this.profile = profile;
   }
 
   async start(): Promise<void> {
@@ -110,7 +109,6 @@ export class ReadingWatcher implements Watcher {
   updateConfig(config: WatcherConfig): void {
     this.adapters = config.adapters;
     this.targetMac = config.targetMac?.toLowerCase();
-    if (config.profile) this.profile = config.profile;
   }
 
   private handleAd(info: BleDeviceInfo, address: string): void {

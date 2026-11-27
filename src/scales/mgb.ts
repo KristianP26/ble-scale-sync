@@ -13,6 +13,7 @@ import {
   buildPayload,
   type ScaleBodyComp,
   WEIGHT_ONLY_HOLD_MS,
+  positive,
 } from './body-comp-helpers.js';
 import { matchesDescriptor, type MatchDescriptor } from './match-descriptor.js';
 import { isAc27Frame } from './active-era.js';
@@ -131,10 +132,10 @@ export class MgbAdapter implements ScaleAdapterCore, GattWiring, HoldForComposit
 
   private snapshot(): ScaleBodyComp {
     return {
-      fat: this.s.cachedFat > 0 ? this.s.cachedFat : undefined,
-      water: this.s.cachedWater > 0 ? this.s.cachedWater : undefined,
-      muscle: this.s.cachedMuscle > 0 ? this.s.cachedMuscle : undefined,
-      bone: this.s.cachedBone > 0 ? this.s.cachedBone : undefined,
+      fat: positive(this.s.cachedFat),
+      water: positive(this.s.cachedWater),
+      muscle: positive(this.s.cachedMuscle),
+      bone: positive(this.s.cachedBone),
     };
   }
 

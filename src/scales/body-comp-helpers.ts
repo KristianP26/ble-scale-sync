@@ -580,6 +580,14 @@ export function r2(v: number): number {
   return Math.round(v * 100) / 100;
 }
 
+/**
+ * A scale-reported value, or undefined when the scale sent 0 (nothing measured).
+ * compositionRejection treats a 0 as a rejection of the whole set, undefined as absent.
+ */
+export function positive(v: number): number | undefined {
+  return v > 0 ? v : undefined;
+}
+
 /** XOR checksum over a range of buffer bytes. */
 export function xorChecksum(buf: Buffer | number[], start: number, end: number): number {
   let xor = 0;
