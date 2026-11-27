@@ -179,6 +179,72 @@ describe('EsphomeProxyPool', () => {
       vi.useRealTimers();
     }
   });
+
+  it('addressTypeFor ignores a stale sighting while the eviction throttle skips the sweep', async () => {
+    vi.useFakeTimers();
+    try {
+      const pool = new EsphomeProxyPool({
+        host: 'p1',
+        port: 6053,
+        client_info: 'x',
+        additional_proxies: [],
+      } as never);
+      await pool.start();
+
+      fakeClients.get('p1')!._emit('ble', adv(0x112233445566, -50, 1));
+      // A sweep runs here and sees the first MAC as still fresh.
+      vi.advanceTimersByTime(40_000);
+      fakeClients.get('p1')!._emit('ble', adv(0xaabbccddeeff, -55, 0));
+      // 65 s after the first sighting but only 25 s after the last sweep: the
+      // throttle skips the sweep, so the map still holds the stale entry.
+      vi.advanceTimersByTime(25_000);
+      fakeClients.get('p1')!._emit('ble', adv(0xaabbccddeeff, -55, 0));
+
+      const internal = pool as unknown as { sightings: Map<string, unknown> };
+      expect(internal.sightings.has('11:22:33:44:55:66')).toBe(true);
+      expect(pool.addressTypeFor('11:22:33:44:55:66')).toBeUndefined();
+      await pool.connectGatt('11:22:33:44:55:66');
+      expect(openGattSession).toHaveBeenLastCalledWith(
+        expect.anything(),
+        '11:22:33:44:55:66',
+        undefined,
+      );
+
+      await pool.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('still evicts after the wall clock steps backwards', async () => {
+    vi.useFakeTimers();
+    try {
+      const pool = new EsphomeProxyPool({
+        host: 'p1',
+        port: 6053,
+        client_info: 'x',
+        additional_proxies: [],
+      } as never);
+      await pool.start();
+
+      fakeClients.get('p1')!._emit('ble', adv(0x112233445566, -50, 1));
+      vi.advanceTimersByTime(50_000);
+      fakeClients.get('p1')!._emit('ble', adv(0x112233445566, -50, 1));
+
+      // NTP correction or a Pi without RTC: the clock jumps back an hour.
+      vi.setSystemTime(Date.now() - 3_600_000);
+      fakeClients.get('p1')!._emit('ble', adv(0xaabbccddeeff, -55));
+      vi.advanceTimersByTime(61_000);
+      fakeClients.get('p1')!._emit('ble', adv(0x001122334455, -60));
+
+      const internal = pool as unknown as { sightings: Map<string, unknown> };
+      expect(internal.sightings.has('aa:bb:cc:dd:ee:ff')).toBe(false);
+
+      await pool.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 /**

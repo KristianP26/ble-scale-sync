@@ -78,7 +78,8 @@ export class EsphomeProxyPool {
   private sightings = new Map<string, Map<string, Sighting>>();
   // macLc -> BLE address type (public/random) last reported in an advertisement.
   // ESPHome's V3 connect request requires this; a device's type is stable, so any
-  // proxy that saw it teaches the whole pool. Kept in lockstep with `sightings`.
+  // proxy that saw it teaches the whole pool. Evicted together with `sightings`, but
+  // reads go through addressTypeOf() because eviction is throttled.
   private addressTypes = new Map<string, number>();
   private subscribers = new Set<AdvertCb>();
   private started = false;
@@ -94,6 +95,7 @@ export class EsphomeProxyPool {
   private rebuildAttempts = new Map<string, number>();
   private ineffectiveRebuilds = new Map<string, number>();
   private livenessTimer: ReturnType<typeof setInterval> | null = null;
+  private lastEvictAt = 0;
   private readonly advertisementTimeoutMs: number;
   private readonly livenessEnabled: boolean;
 
@@ -351,7 +353,7 @@ export class EsphomeProxyPool {
    */
   async connectGatt(mac: string): Promise<GattSession> {
     const order = this.proxyOrderFor(mac);
-    const addressType = this.addressTypes.get(mac.toLowerCase());
+    const addressType = this.addressTypeOf(mac);
     const errors: string[] = [];
     for (const id of order) {
       const client = this.clients.get(id);
@@ -382,9 +384,31 @@ export class EsphomeProxyPool {
     );
   }
 
-  /** BLE address type last seen for `mac`, or undefined if no advert reported one. */
+  /**
+   * BLE address type last seen for `mac`, or undefined if no advert reported one
+   * or its last sighting is older than the TTL.
+   */
   addressTypeFor(mac: string): number | undefined {
-    return this.addressTypes.get(mac.toLowerCase());
+    return this.addressTypeOf(mac);
+  }
+
+  /**
+   * Address type for `mac`, only while a sighting within the TTL backs it. The
+   * eviction sweep is throttled, so the raw map can briefly outlive the
+   * sightings; reading it directly would hand out a type for a device the pool
+   * no longer considers seen.
+   */
+  private addressTypeOf(mac: string): number | undefined {
+    const macLc = mac.toLowerCase();
+    const type = this.addressTypes.get(macLc);
+    if (type === undefined) return undefined;
+    const perProxy = this.sightings.get(macLc);
+    if (!perProxy) return undefined;
+    const now = Date.now();
+    for (const s of perProxy.values()) {
+      if (now - s.ts <= SIGHTING_TTL_MS) return type;
+    }
+    return undefined;
   }
 
   /** Proxy that most recently saw `mac` (RSSI tiebreak) within the TTL, or null. */
@@ -420,15 +444,24 @@ export class EsphomeProxyPool {
     return fresh;
   }
 
-  /** Drop sightings past the TTL so the map cannot grow without bound. */
+  /**
+   * Drop sightings past the TTL so the map cannot grow without bound. Runs at
+   * most every half TTL: it walks every device on every proxy, and onAd calls it
+   * per advertisement. Sighting reads (freshSightings, addressTypeOf) filter by
+   * TTL themselves, so the sweep only bounds memory and reads stay exact.
+   */
   private evictStale(now: number): void {
+    // `now < lastEvictAt` means the wall clock stepped back (NTP, Pi without
+    // RTC); without it the gate would stay shut until the clock caught up.
+    if (now >= this.lastEvictAt && now - this.lastEvictAt < SIGHTING_TTL_MS / 2) return;
+    this.lastEvictAt = now;
     for (const [mac, perProxy] of this.sightings) {
       for (const [id, s] of perProxy) {
         if (now - s.ts > SIGHTING_TTL_MS) perProxy.delete(id);
       }
       if (perProxy.size === 0) {
         this.sightings.delete(mac);
-        // Keep the address-type cache from outliving the sightings it belongs to.
+        // Drop the address type with its last sighting so the map cannot grow unbounded.
         this.addressTypes.delete(mac);
       }
     }
